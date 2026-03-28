@@ -146,7 +146,7 @@ namespace WPFStandardFramework
             services.AddScoped<DatabaseInitializer>();
 
             // === 业务服务 ===
-            services.AddScoped<IUserService, UserService>();
+         
 
             // === 基础设施服务 ===
             services.AddSingleton<INotificationService, NotificationService>();
@@ -166,22 +166,16 @@ namespace WPFStandardFramework
 
             // === ViewModels ===
             services.AddTransient<MainViewModel>();
-            services.AddTransient<DataExtractWindowViewModel>();
-            services.AddTransient<UserManagementViewModel>();
-            services.AddTransient<StartTestViewModel>();
+        
             services.AddTransient<MainMenuViewModel>();
-            services.AddTransient<RunScreenViewModel>();
-            services.AddTransient<DataExtractViewModel>();
-            services.AddTransient<SystemSettingsViewModel>();
+    
             services.AddTransient<ExitConfirmViewModel>();
 
             // === Views ===
             services.AddTransient<MainWindow>();
-            services.AddTransient<DataExtractionWindow>();
+           
             services.AddTransient<MainMenuView>();
-            services.AddTransient<RunScreenView>();
-            services.AddTransient<DataExtractionView>();
-            services.AddTransient<SystemSettingsView>();
+        
             services.AddTransient<ExitConfirmDialog>();
 
             // === 其他服务 ===
