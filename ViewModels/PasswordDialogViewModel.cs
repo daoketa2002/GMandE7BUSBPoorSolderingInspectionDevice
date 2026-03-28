@@ -31,7 +31,7 @@ namespace WPFStandardFramework.ViewModels
         // 允许的密码列表（不区分大小写）
         private static readonly HashSet<string> _validPasswords = new(StringComparer.OrdinalIgnoreCase)
         {
-            "GB2GB3",
+            "33445566",
             "ROOT"
         };
 

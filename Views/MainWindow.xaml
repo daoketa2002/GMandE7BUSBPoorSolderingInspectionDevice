@@ -17,7 +17,7 @@
 
         <!-- 标题栏 -->
         <Border Grid.Row="0" Background="#2C3E50" Padding="10">
-            <TextBlock Text="GB2和GB3 共线追溯系统" 
+            <TextBlock Text="UnnamedSoftware" 
                        Foreground="White" 
                        FontSize="18" 
                        FontWeight="Bold"
