@@ -5,7 +5,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Data;
 
-namespace WPFStandardFramework.Common.Converters
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters
 {
     /// <summary>
     /// 数据源到可见性的转换器

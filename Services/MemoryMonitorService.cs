@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace WPFStandardFramework.Services
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 内存监控服务（帮助发现内存泄漏）

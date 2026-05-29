@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace WPFStandardFramework.ViewModels
+namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     internal class MainWindowViewModel
     {

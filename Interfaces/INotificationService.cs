@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace WPFStandardFramework.Interfaces
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
     public interface INotificationService
     {

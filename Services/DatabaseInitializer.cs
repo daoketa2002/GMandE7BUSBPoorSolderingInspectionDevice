@@ -5,9 +5,9 @@ using Serilog;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
-using WPFStandardFramework.Data;
+using GMandE7BUSBPoorSolderingInspectionDevice.Data;
 
-namespace WPFStandardFramework.Services
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 数据库初始化服务

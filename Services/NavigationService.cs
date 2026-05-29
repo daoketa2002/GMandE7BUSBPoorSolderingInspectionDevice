@@ -10,10 +10,10 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using WPFStandardFramework.Common.Navigation;
-using WPFStandardFramework.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Navigation;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 
-namespace WPFStandardFramework.Services
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 区域化导航服务实现 - 内存安全优化版

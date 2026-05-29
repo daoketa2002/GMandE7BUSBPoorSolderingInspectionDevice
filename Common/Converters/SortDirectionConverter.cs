@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Windows.Data;
 
-namespace WPFStandardFramework.Common.Converters
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters
 {
     /// <summary>
     /// 排序方向转换器

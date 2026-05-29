@@ -3,9 +3,9 @@ using Microsoft.Extensions.Configuration;
 using Serilog;
 using System;
 using System.Diagnostics;
-using WPFStandardFramework.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 
-namespace WPFStandardFramework.Data
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Data
 {
     public class AppDbContext : DbContext
     {

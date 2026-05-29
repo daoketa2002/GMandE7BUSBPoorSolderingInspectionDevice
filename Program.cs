@@ -7,14 +7,14 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Windows;
-using WPFStandardFramework.AppConfig;
-using WPFStandardFramework.Data;
-using WPFStandardFramework.Interfaces;
-using WPFStandardFramework.Services;
-using WPFStandardFramework.ViewModels;
-using WPFStandardFramework.Views;
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.Data;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
+using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 
-namespace WPFStandardFramework
+namespace GMandE7BUSBPoorSolderingInspectionDevice
 {
     /// <summary>
     /// 应用程序的主入口类，负责配置依赖注入容器、初始化数据库并启动 WPF 主窗口。

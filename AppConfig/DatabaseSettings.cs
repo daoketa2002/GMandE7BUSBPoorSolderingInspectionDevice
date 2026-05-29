@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace WPFStandardFramework.AppConfig
+namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig
 {
  
     /// <summary>

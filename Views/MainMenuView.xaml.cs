@@ -16,10 +16,10 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
-using WPFStandardFramework.Common.Navigation;
-using WPFStandardFramework.ViewModels;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Navigation;
+using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
-namespace WPFStandardFramework.Views
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 {
     [NavigationViewModel(typeof(MainMenuViewModel))]
     public partial class MainMenuView : UserControl

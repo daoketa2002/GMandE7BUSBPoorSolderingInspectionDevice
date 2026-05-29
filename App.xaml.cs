@@ -2,7 +2,7 @@
 using System.Data;
 using System.Windows;
 
-namespace WPFStandardFramework
+namespace GMandE7BUSBPoorSolderingInspectionDevice
 {
     /// <summary>
     /// Interaction logic for App.xaml

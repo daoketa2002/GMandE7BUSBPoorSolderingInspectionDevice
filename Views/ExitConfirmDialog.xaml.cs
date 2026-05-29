@@ -10,9 +10,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using WPFStandardFramework.ViewModels;
+using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
-namespace WPFStandardFramework.Views
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 {
     public partial class ExitConfirmDialog : Window
     {

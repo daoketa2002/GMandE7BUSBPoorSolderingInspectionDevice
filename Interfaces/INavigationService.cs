@@ -6,9 +6,9 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using WPFStandardFramework.Common.Navigation;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Navigation;
 
-namespace WPFStandardFramework.Interfaces
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
     /// <summary>
     /// 导航服务接口，提供视图导航功能

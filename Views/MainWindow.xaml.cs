@@ -12,11 +12,11 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using WPFStandardFramework.Common.Navigation;
-using WPFStandardFramework.Interfaces;
-using WPFStandardFramework.Views;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Navigation;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 
-namespace WPFStandardFramework.Views
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 {
     /// <summary>
     /// MainWindow.xaml 的交互逻辑

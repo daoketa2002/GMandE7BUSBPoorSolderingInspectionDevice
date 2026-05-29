@@ -4,10 +4,10 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
-using WPFStandardFramework.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 
 
-namespace WPFStandardFramework.Services
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
  public class NotificationService : INotificationService
     {

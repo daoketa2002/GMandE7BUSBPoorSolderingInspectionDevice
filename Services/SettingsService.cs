@@ -8,10 +8,10 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using WPFStandardFramework.AppConfig;
-using WPFStandardFramework.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 
-namespace WPFStandardFramework.Services
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 应用程序设置服务 - 负责设置文件的读写操作

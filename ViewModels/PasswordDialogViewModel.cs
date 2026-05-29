@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Windows;
 
-namespace WPFStandardFramework.ViewModels
+namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     /// <summary>
     /// 密码输入弹窗的 ViewModel

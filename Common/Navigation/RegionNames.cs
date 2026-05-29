@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace WPFStandardFramework.Common.Navigation
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Navigation
 {
     /// <summary>
     /// 应用中所有逻辑导航区域的标准名称。

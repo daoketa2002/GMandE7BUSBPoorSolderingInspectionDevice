@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace WPFStandardFramework.Interfaces
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
     /// <summary>
     /// 导航感知接口（合并了IParameterizedView的功能）

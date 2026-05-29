@@ -9,10 +9,10 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
-using WPFStandardFramework.Interfaces;
-using WPFStandardFramework.Views;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 
-namespace WPFStandardFramework.ViewModels
+namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
 
     public partial class MainMenuViewModel : ObservableObject, INavigationAware

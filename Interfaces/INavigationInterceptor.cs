@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace WPFStandardFramework.Interfaces
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
     /// <summary>
     /// 导航拦截器接口

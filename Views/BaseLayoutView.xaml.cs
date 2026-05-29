@@ -13,7 +13,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 
-namespace WPFStandardFramework.Views
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 {
     /// <summary>
     /// BaseLayoutView.xaml 的交互逻辑

@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace WPFStandardFramework.Common.Navigation
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Navigation
 {
     /// <summary>
     /// 指定视图对应的ViewModel类型

@@ -8,7 +8,7 @@
 		<UseWPF>true</UseWPF>
 
 		<!-- 指定自定义入口点 -->
-		<StartupObject>WPFStandardFramework.Program</StartupObject>
+		<StartupObject>GMandE7BUSBPoorSolderingInspectionDevice.Program</StartupObject>
 		<UseWindowsForms>False</UseWindowsForms>
 	</PropertyGroup>
 
@@ -22,6 +22,10 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.5" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.5" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.8">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.5" />
     <PackageReference Include="Serilog" Version="4.3.0" />
