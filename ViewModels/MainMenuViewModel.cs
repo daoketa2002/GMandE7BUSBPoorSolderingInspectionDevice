@@ -35,8 +35,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
+                _logger.Information("用户点击运行界面按钮");
+
+                // 1. 先弹出作业员选择窗口
+                var mainWindow = Application.Current.MainWindow;
+                if (mainWindow == null)
+                {
+                    _logger.Error("无法获取主窗口引用");
+                    return;
+                }
+
+                var selectedOperator = OperatorSelectionDialog.ShowDialog(mainWindow);
+
+                // 2. 用户取消 → 返回主菜单
+                if (selectedOperator == null)
+                {
+                    _logger.Information("用户取消了作业员选择，返回主菜单");
+                    return;
+                }
+
+                _logger.Information("用户选择了作业员: {Operator}", selectedOperator.Name);
+
+                // 3. 导航到测试页，传入选中的作业员
                 _logger.Information("导航到运行界面");
-               // await _navigationService.NavigateToAsync<RunScreenView>();
+                await _navigationService.NavigateToAsync<TestPageView>(selectedOperator);
             }
             catch (Exception ex)
             {

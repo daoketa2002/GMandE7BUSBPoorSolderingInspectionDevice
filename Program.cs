@@ -171,12 +171,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
     
             services.AddTransient<ExitConfirmViewModel>();
 
+            services.AddTransient<TestPageViewModel>();
+
             // === Views ===
             services.AddTransient<MainWindow>();
            
             services.AddTransient<MainMenuView>();
         
             services.AddTransient<ExitConfirmDialog>();
+
+            services.AddTransient<TestPageView>();
 
             // === 其他服务 ===
             services.AddLogging();

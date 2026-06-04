@@ -45,7 +45,7 @@
                 CornerRadius="8"
                 Margin="20"
                 Padding="20">
-            <TextBlock Text="欢迎使用 UnnamedSoftware" 
+            <TextBlock Text="欢迎使用 GM和E78_USB焊接不良检查装置系统" 
                        FontSize="28" 
                        FontWeight="Bold"
                        Foreground="White"

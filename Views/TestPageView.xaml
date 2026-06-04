@@ -1,0 +1,637 @@
+﻿<UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.TestPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
+             xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
+             xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:TestPageViewModel}"
+             d:DesignWidth="1200" d:DesignHeight="800"
+             FontFamily="Microsoft YaHei">
+
+    <UserControl.Resources>
+        <!-- ===== 判定结果转背景色 ===== -->
+        <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
+        <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
+
+        <!-- 连接状态转颜色 -->
+        <converters:BoolToConnectionColorConverter x:Key="BoolToConnectionColorConverter"/>
+
+        <!-- 测试状态转颜色 -->
+        <converters:TestStatusToColorConverter x:Key="TestStatusToColorConverter"/>
+
+        <!--  作业员输入框 -->
+        <converters:BoolInverterConverter x:Key="BoolInverterConverter"/>
+
+        <!-- ===== 顶部面板样式 ===== -->
+        <Style x:Key="TopPanelBorder" TargetType="Border">
+            <Setter Property="Background" Value="#F8F9FA"/>
+            <Setter Property="BorderBrush" Value="#DEE2E6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="12"/>
+            <Setter Property="Margin" Value="4"/>
+        </Style>
+
+        <!-- 统计数字样式 -->
+        <Style x:Key="StatNumberStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="36"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- 统计标签样式 -->
+        <Style x:Key="StatLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Foreground" Value="#6C757D"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- 设备状态按钮样式 -->
+        <Style x:Key="ConnectionButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="110"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                Padding="8,4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            TextBlock.FontWeight="Bold"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- DataGrid 样式 -->
+        <Style x:Key="TestDataGridStyle" TargetType="DataGrid">
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="RowHeight" Value="40"/>
+            <Setter Property="ColumnHeaderHeight" Value="40"/>
+            <Setter Property="GridLinesVisibility" Value="All"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#DEE2E6"/>
+            <Setter Property="VerticalGridLinesBrush" Value="#DEE2E6"/>
+            <Setter Property="BorderBrush" Value="#CED4DA"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CanUserAddRows" Value="False"/>
+            <Setter Property="CanUserDeleteRows" Value="False"/>
+            <Setter Property="CanUserReorderColumns" Value="False"/>
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="SelectionMode" Value="Single"/>
+            <Setter Property="RowBackground" Value="White"/>
+            <Setter Property="AlternatingRowBackground" Value="#F8F9FA"/>
+        </Style>
+
+        <!-- DataGrid 列标题样式 -->
+        <Style x:Key="DataGridColumnHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#2C3E50"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="BorderBrush" Value="#1A252F"/>
+            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        </Style>
+
+        <!-- DataGrid 单元格居中样式 -->
+        <Style x:Key="DataGridCellCenterStyle" TargetType="DataGridCell">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="BorderBrush" Value="#DEE2E6"/>
+            <Setter Property="BorderThickness" Value="0.5"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- ===== 主布局：Grid 4行 ===== -->
+    <Grid Background="#FFFFFF">
+        <Grid.RowDefinitions>
+            <!-- 顶部状态与统计区 -->
+            <RowDefinition Height="160"/>
+            <!-- 中部信息录入区 -->
+            <RowDefinition Height="70"/>
+            <!-- 下部测试列表区 -->
+            <RowDefinition Height="*"/>
+            <!-- 底部日志与操作区 -->
+            <RowDefinition Height="180"/>
+        </Grid.RowDefinitions>
+
+        <!-- ================================================================ -->
+        <!-- 1. 顶部状态与统计区 -->
+        <!-- ================================================================ -->
+        <Grid Grid.Row="0" Margin="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="360"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="260"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ===== 1-1 左侧：生产统计面板 ===== -->
+            <Border Grid.Column="0" Style="{StaticResource TopPanelBorder}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 方案名称 -->
+                    <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                        <TextBlock Text="方案名称：" 
+                                   FontSize="14" 
+                                   Foreground="#495057"
+                                   VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding SchemeName, UpdateSourceTrigger=PropertyChanged}"
+                                 IsReadOnly="True"
+                                 Background="#E9ECEF"
+                                 FontSize="14"
+                                 FontWeight="Bold"
+                                 BorderBrush="#CED4DA"
+                                 Height="32"
+                                 VerticalContentAlignment="Center"/>
+                    </DockPanel>
+
+                    <!-- 计数器群组 -->
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="60"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- 检查数量 -->
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding TotalCount}" 
+                                       Style="{StaticResource StatNumberStyle}"
+                                       Foreground="#3498DB"/>
+                            <TextBlock Text="检查数量" Style="{StaticResource StatLabelStyle}"/>
+                        </StackPanel>
+
+                        <!-- 良品数量 -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding PassCount}" 
+                                       Style="{StaticResource StatNumberStyle}"
+                                       Foreground="#27AE60"/>
+                            <TextBlock Text="良品数量" Style="{StaticResource StatLabelStyle}"/>
+                        </StackPanel>
+
+                        <!-- 不良数量 -->
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding FailCount}" 
+                                       Style="{StaticResource StatNumberStyle}"
+                                       Foreground="#E74C3C"/>
+                            <TextBlock Text="不良数量" Style="{StaticResource StatLabelStyle}"/>
+                        </StackPanel>
+
+                        <!-- 清零按钮 -->
+                        <Button Grid.Column="3"
+                                Command="{Binding ClearCountersCommand}"
+                                Width="50" Height="50"
+                                VerticalAlignment="Center"
+                                ToolTip="清零计数器"
+                                Cursor="Hand">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="#E74C3C"
+                                            CornerRadius="25"
+                                            BorderThickness="0">
+                                        <TextBlock Text="清零"
+                                                   Foreground="White"
+                                                   FontSize="13"
+                                                   FontWeight="Bold"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- ===== 1-2 中间：设备连接状态看板 ===== -->
+            <Border Grid.Column="1" Style="{StaticResource TopPanelBorder}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 实时时钟 -->
+                    <Border Grid.Row="0" 
+                            Background="#2C3E50" 
+                            CornerRadius="4"
+                            Padding="10,6"
+                            Margin="0,0,0,8">
+                        <TextBlock Text="{Binding CurrentTime}" 
+                                   FontSize="22" 
+                                   FontWeight="Bold"
+                                   Foreground="#ECF0F1"
+                                   HorizontalAlignment="Center"
+                                   FontFamily="Consolas"/>
+                    </Border>
+
+                    <!-- 硬件状态指示灯 -->
+                    <UniformGrid Grid.Row="1" Rows="1" Columns="4" HorizontalAlignment="Center">
+                        <!-- PLC -->
+                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                                Command="{Binding ReconnectPlcCommand}"
+                                Margin="6">
+                            <Button.Background>
+                                <SolidColorBrush Color="{Binding IsPlcConnected, 
+                                    Converter={StaticResource BoolToConnectionColorConverter}}"/>
+                            </Button.Background>
+                            <StackPanel>
+                                <TextBlock Text="PLC" FontSize="14" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding PlcStatusText}" 
+                                           FontSize="11" 
+                                           HorizontalAlignment="Center"
+                                           Opacity="0.9"/>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- 扫描仪 -->
+                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                                Command="{Binding ReconnectScannerCommand}"
+                                Margin="6">
+                            <Button.Background>
+                                <SolidColorBrush Color="{Binding IsScannerConnected, 
+                                    Converter={StaticResource BoolToConnectionColorConverter}}"/>
+                            </Button.Background>
+                            <StackPanel>
+                                <TextBlock Text="扫描仪" FontSize="14" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding ScannerStatusText}" 
+                                           FontSize="11" 
+                                           HorizontalAlignment="Center"
+                                           Opacity="0.9"/>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- 万用表 -->
+                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                                Command="{Binding ReconnectDmmCommand}"
+                                Margin="6">
+                            <Button.Background>
+                                <SolidColorBrush Color="{Binding IsDmmConnected, 
+                                    Converter={StaticResource BoolToConnectionColorConverter}}"/>
+                            </Button.Background>
+                            <StackPanel>
+                                <TextBlock Text="万用表" FontSize="14" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding DmmStatusText}" 
+                                           FontSize="11" 
+                                           HorizontalAlignment="Center"
+                                           Opacity="0.9"/>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- PC -->
+                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                                Margin="6"
+                                IsHitTestVisible="False">
+                            <Button.Background>
+                                <SolidColorBrush Color="#27AE60"/>
+                            </Button.Background>
+                            <StackPanel>
+                                <TextBlock Text="PC" FontSize="14" HorizontalAlignment="Center"/>
+                                <TextBlock Text="就绪" 
+                                           FontSize="11" 
+                                           HorizontalAlignment="Center"
+                                           Opacity="0.9"/>
+                            </StackPanel>
+                        </Button>
+                    </UniformGrid>
+                </Grid>
+            </Border>
+
+            <!-- ===== 1-3 右侧：测试状态显示 ===== -->
+            <Border Grid.Column="2" Style="{StaticResource TopPanelBorder}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" 
+                               Text="测试状态" 
+                               FontSize="16" 
+                               FontWeight="Bold"
+                               Foreground="#495057"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,8"/>
+
+                    <!-- 状态显示大面板 -->
+                    <Border Grid.Row="1" 
+                            CornerRadius="8"
+                            Margin="4">
+                        <Border.Background>
+                            <SolidColorBrush Color="{Binding TestStatus, 
+                                Converter={StaticResource TestStatusToColorConverter}}"/>
+                        </Border.Background>
+                        <TextBlock Text="{Binding TestStatus}" 
+                                   FontSize="32" 
+                                   FontWeight="Bold"
+                                   Foreground="White"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+
+                    <!-- 开始测试按钮 -->
+                    <Button Grid.Row="2"
+                            Content="▶ 开始测试"
+                            Command="{Binding StartTestCommand}"
+                            Height="40"
+                            FontSize="16"
+                            FontWeight="Bold"
+                            Foreground="White"
+                            Margin="4,8,4,0"
+                            Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="#3498DB"
+                                        CornerRadius="6"
+                                        BorderThickness="0">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ================================================================ -->
+        <!-- 2. 中部信息录入区 -->
+        <!-- ================================================================ -->
+        <Border Grid.Row="1" 
+                Background="#F8F9FA" 
+                BorderBrush="#DEE2E6" 
+                BorderThickness="1"
+                CornerRadius="6"
+                Margin="8,4"
+                Padding="12,8">
+            <UniformGrid Rows="1" Columns="3" HorizontalAlignment="Stretch">
+                <!-- 机种名称 -->
+                <StackPanel Orientation="Horizontal" 
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center">
+                    <TextBlock Text="机种名称：" 
+                               FontSize="16" 
+                               FontWeight="Bold"
+                               Foreground="#495057"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>
+                    <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}"
+                             FontSize="16"
+                             Width="200"
+                             Height="36"
+                             VerticalContentAlignment="Center"
+                             BorderBrush="#CED4DA"
+                             x:Name="ModelNameTextBox"
+                             KeyDown="InputTextBox_KeyDown"/>
+                </StackPanel>
+
+                <!-- 序列号 -->
+                <StackPanel Orientation="Horizontal" 
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center">
+                    <TextBlock Text="★ 序列号：" 
+                               FontSize="16" 
+                               FontWeight="Bold"
+                               Foreground="#E74C3C"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>
+                    <TextBox Text="{Binding SerialNumber, UpdateSourceTrigger=PropertyChanged}"
+                             FontSize="16"
+                             Width="220"
+                             Height="36"
+                             VerticalContentAlignment="Center"
+                             BorderBrush="#E74C3C"
+                             BorderThickness="2"
+                             x:Name="SerialNumberTextBox"
+                             KeyDown="InputTextBox_KeyDown"/>
+                </StackPanel>
+
+                <!-- 作业员 -->
+                <StackPanel Orientation="Horizontal" 
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center">
+                    <TextBlock Text="作业员：" 
+                               FontSize="16" 
+                               FontWeight="Bold"
+                               Foreground="#495057"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>   
+                    <TextBox Text="{Binding OperatorName, UpdateSourceTrigger=PropertyChanged}"
+                             IsReadOnly="{Binding IsOperatorEditable, Converter={StaticResource BoolInverterConverter}}"
+                             FontSize="16"
+                             Width="180"
+                             Height="36"
+                             VerticalContentAlignment="Center"
+                             BorderBrush="#CED4DA"
+                             x:Name="OperatorTextBox"
+                             KeyDown="InputTextBox_KeyDown">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox">
+                                <Setter Property="Background" Value="White"/>
+                                <Setter Property="BorderBrush" Value="#CED4DA"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsOperatorEditable}" Value="False">
+                                        <Setter Property="Background" Value="#E8F8F5"/>
+                                        <Setter Property="BorderBrush" Value="#27AE60"/>
+                                        <Setter Property="BorderThickness" Value="2"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="Foreground" Value="#1E8449"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                </StackPanel>
+            </UniformGrid>
+        </Border>
+
+        <!-- ================================================================ -->
+        <!-- 3. 下部测试列表区 (DataGrid) -->
+        <!-- ================================================================ -->
+        <DataGrid Grid.Row="2"
+                  ItemsSource="{Binding TestItems}"
+                  Style="{StaticResource TestDataGridStyle}"
+                  ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
+                  Margin="8,4"
+                  x:Name="TestDataGrid">
+            <DataGrid.Columns>
+                <!-- 序号 -->
+                <DataGridTextColumn Header="序号" 
+                                    Binding="{Binding Index}" 
+                                    Width="80">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="FontSize" Value="18"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- 项目名称 -->
+                <DataGridTextColumn Header="项目名称" 
+                                    Binding="{Binding ItemName}" 
+                                    Width="200">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="FontSize" Value="18"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- 检查条件 -->
+                <DataGridTextColumn Header="检查条件" 
+                                    Binding="{Binding CheckCondition}" 
+                                    Width="250">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="FontSize" Value="16"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- 检查结果 -->
+                <DataGridTextColumn Header="检查结果" 
+                                    Binding="{Binding CheckResult}" 
+                                    Width="250">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="FontSize" Value="18"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- 判定（动态着色） -->
+                <DataGridTemplateColumn Header="判  定" Width="180">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="4"
+                                    Padding="12,4"
+                                    Margin="4">
+                                <Border.Background>
+                                    <SolidColorBrush Color="{Binding Judgment, 
+                                        Converter={StaticResource JudgmentToBackgroundConverter}}"/>
+                                </Border.Background>
+                                <TextBlock Text="{Binding Judgment}" 
+                                           FontSize="22" 
+                                           FontWeight="ExtraBold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center">
+                                    <TextBlock.Foreground>
+                                        <SolidColorBrush Color="{Binding Judgment, 
+                                            Converter={StaticResource JudgmentToForegroundConverter}}"/>
+                                    </TextBlock.Foreground>
+                                </TextBlock>
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- ================================================================ -->
+        <!-- 4. 底部日志与操作区 -->
+        <!-- ================================================================ -->
+        <Grid Grid.Row="3" Margin="8,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="140"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 日志显示区 -->
+            <Border Grid.Column="0" 
+                    Background="#1A1A2E" 
+                    CornerRadius="6"
+                    BorderBrush="#16213E"
+                    BorderThickness="1"
+                    Padding="8">
+                <ListBox ItemsSource="{Binding LogMessages}"
+                         Background="Transparent"
+                         Foreground="#00FF88"
+                         FontFamily="Consolas"
+                         FontSize="13"
+                         BorderThickness="0"
+                         x:Name="LogListBox"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.ScrollUnit="Pixel">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Foreground" Value="#00FF88"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Padding" Value="2,1"/>
+                            <Setter Property="FontSize" Value="13"/>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+            </Border>
+
+            <!-- 终了按钮 -->
+            <Button Grid.Column="1"
+                    Content="终  了"
+                    Command="{Binding FinishAndReturnCommand}"
+                    Margin="12,0,0,0"
+                    FontSize="24"
+                    FontWeight="ExtraBold"
+                    Foreground="White"
+                    Cursor="Hand">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="#E74C3C"
+                                CornerRadius="8"
+                                BorderThickness="0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0"
+                                           Text="⏻"
+                                           FontSize="36"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Margin="0,8,0,0"/>
+                                <TextBlock Grid.Row="1"
+                                           Text="终  了"
+                                           FontSize="18"
+                                           FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           Margin="0,0,0,12"/>
+                            </Grid>
+                        </Border>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </Grid>
+    </Grid>
+</UserControl>
