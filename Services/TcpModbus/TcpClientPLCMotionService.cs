@@ -1,5 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
-using System;
+using System.IO;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -7,7 +7,7 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
-using GMandE7BUSBPoorSolderingInspectionDevice.InterFaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
 using static GMandE7BUSBPoorSolderingInspectionDevice.设置相关类.ApplicationSettings;
