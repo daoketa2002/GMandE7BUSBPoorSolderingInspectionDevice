@@ -1,15 +1,20 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+﻿// 📁 ViewModels/TestPageViewModel.cs（完整修正版）
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using System;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Threading;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
@@ -22,6 +27,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly ILogger<TestPageViewModel> _logger;
         private readonly Serilog.ILogger _serilogLogger;
 
+        // ⭐ 硬件服务
+        private readonly ITcpClientPLCMotionService _plcService;
+        private readonly GwInstekGDM9060Driver _dmmDriver;
+        private readonly HoneywellH1900Scanner? _scanner;
+        private readonly InspectionEngine? _inspectionEngine;
+
+        // ⭐ 新增：设置服务（避免手动new）
+        private readonly ISettingsService _settingsService;
+
         #endregion
 
         #region 构造函数
@@ -29,57 +43,177 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public TestPageViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
-            ILogger<TestPageViewModel> logger)
+            ILogger<TestPageViewModel> logger,
+            ITcpClientPLCMotionService plcService,
+            GwInstekGDM9060Driver dmmDriver,
+            ISettingsService settingsService,
+            HoneywellH1900Scanner? scanner = null,
+            InspectionEngine? inspectionEngine = null)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _logger = logger;
             _serilogLogger = Log.ForContext<TestPageViewModel>();
 
-            // 初始化实时时钟
-            InitializeClock();
+            _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
+            _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
+            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _scanner = scanner;
+            _inspectionEngine = inspectionEngine;
 
-            // 初始化测试项目（示例数据）
+            InitializeClock();
             InitializeTestItems();
+            SubscribeToHardwareEvents();
+        }
+
+        #endregion
+
+        #region 硬件事件订阅
+
+        private void SubscribeToHardwareEvents()
+        {
+            // PLC 通知事件
+            _plcService.OnNotification += (s, e) =>
+            {
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    if (e.Type == NotificationType.Success || e.Type == NotificationType.ConnectionRestored)
+                    {
+                        IsPlcConnected = true;
+                        PlcStatusText = "已连接";
+                    }
+                    else if (e.Type == NotificationType.Error || e.Type == NotificationType.Critical)
+                    {
+                        IsPlcConnected = false;
+                        PlcStatusText = "断开";
+                    }
+                });
+            };
+
+            // 万用表连接状态
+            _dmmDriver.ConnectionStateChanged += (s, connected) =>
+            {
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    IsDmmConnected = connected;
+                    DmmStatusText = connected ? "已连接" : "断开";
+                });
+            };
+
+            // 万用表测量数据
+            _dmmDriver.MeasurementReceived += (s, e) =>
+            {
+                AddLog($"📏 万用表读数: {e.Result}");
+            };
+
+            // 扫描枪事件
+            if (_scanner != null)
+            {
+                _scanner.BarcodeReceived += OnScannerBarcodeReceived;
+                _scanner.ConnectionStateChanged += (s, connected) =>
+                {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        IsScannerConnected = connected;
+                        ScannerStatusText = connected ? "已连接" : "断开";
+                    });
+                };
+            }
+
+            // 检测引擎事件
+            if (_inspectionEngine != null)
+            {
+                _inspectionEngine.StateChanged += OnInspectionStateChanged;
+                _inspectionEngine.StepCompleted += OnStepCompleted;
+                _inspectionEngine.InspectionCompleted += OnInspectionCompleted;
+                _inspectionEngine.LogMessage += (s, msg) => AddLog(msg);
+            }
+        }
+
+        private void OnScannerBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                SerialNumber = e.Barcode;
+                AddLog($"📷 扫描到条码: {e.Barcode}");
+            });
+        }
+
+        private void OnInspectionStateChanged(object? sender, InspectionStateChangedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                TestStatus = e.NewState switch
+                {
+                    InspectionState.Idle => "待机",
+                    InspectionState.Initializing => "初始化中",
+                    InspectionState.Testing => "测试中",
+                    InspectionState.CompletedPass => "测试完成 - 良品",
+                    InspectionState.CompletedFail => "测试完成 - 不良",
+                    InspectionState.Aborted => "已中止",
+                    InspectionState.Error => "报错",
+                    _ => "未知"
+                };
+            });
+        }
+
+        private void OnStepCompleted(object? sender, StepCompletedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                var item = TestItems.ElementAtOrDefault(e.StepIndex);
+                if (item != null)
+                {
+                    item.CheckResult = e.Measurement.IsValid
+                        ? $"{e.Measurement.Value:F4} Ω"
+                        : "测量失败";
+                    item.Judgment = e.TestPoint.Judgment;
+                }
+            });
+        }
+
+        private void OnInspectionCompleted(object? sender, InspectionCompletedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                TotalCount++;
+                if (e.Result.IsAllPassed)
+                {
+                    PassCount++;
+                }
+                else
+                {
+                    FailCount++;
+                }
+
+                var msg = e.Result.IsAllPassed
+                    ? $"✅ 检测完成: 良品 (耗时{e.Result.Duration.TotalSeconds:F1}s)"
+                    : $"❌ 检测完成: 不良 (耗时{e.Result.Duration.TotalSeconds:F1}s)";
+                AddLog(msg);
+            });
         }
 
         #endregion
 
         #region 顶部左侧 - 生产统计面板
 
-        /// <summary>
-        /// 方案名称
-        /// </summary>
         [ObservableProperty]
         private string _schemeName = "默认测试方案";
 
-        /// <summary>
-        /// 检查数量
-        /// </summary>
         [ObservableProperty]
         private int _totalCount = 0;
 
-        /// <summary>
-        /// 良品数量
-        /// </summary>
         [ObservableProperty]
         private int _passCount = 0;
 
-        /// <summary>
-        /// 不良数量
-        /// </summary>
         [ObservableProperty]
         private int _failCount = 0;
 
-        /// <summary>
-        /// 清零计数器（需二次确认）
-        /// </summary>
         [RelayCommand]
         private async Task ClearCountersAsync()
         {
             var confirmed = await _notificationService.ConfirmAsync(
-                "确定要清零当前批次的统计数据吗？此操作不可恢复！",
-                "清零确认");
+                "确定要清零当前批次的统计数据吗？此操作不可恢复！", "清零确认");
 
             if (confirmed)
             {
@@ -95,52 +229,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 顶部中间 - 设备连接状态看板
 
-        /// <summary>
-        /// 实时时钟
-        /// </summary>
         [ObservableProperty]
         private string _currentTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
         private DispatcherTimer? _clockTimer;
 
-        /// <summary>
-        /// PLC 连接状态 (true=已连接)
-        /// </summary>
         [ObservableProperty]
         private bool _isPlcConnected = false;
 
-        /// <summary>
-        /// PLC 连接状态文本
-        /// </summary>
         [ObservableProperty]
         private string _plcStatusText = "断开";
 
-        /// <summary>
-        /// 扫描仪连接状态
-        /// </summary>
         [ObservableProperty]
         private bool _isScannerConnected = false;
 
         [ObservableProperty]
         private string _scannerStatusText = "断开";
 
-        /// <summary>
-        /// 万用表连接状态
-        /// </summary>
         [ObservableProperty]
         private bool _isDmmConnected = false;
 
         [ObservableProperty]
         private string _dmmStatusText = "断开";
-
-        /// <summary>
-        /// PC 状态
-        /// </summary>
-        [ObservableProperty]
-        private bool _isPcReady = true;
-
-        [ObservableProperty]
-        private string _pcStatusText = "就绪";
 
         /// <summary>
         /// PLC 连接/重连命令
@@ -151,41 +261,111 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             PlcStatusText = "连接中...";
             _serilogLogger.Information("正在尝试连接PLC...");
 
-            // TODO: 调用实际的 PLC 连接服务
-            await Task.Delay(500);
+            try
+            {
+                if (_plcService.IsConnected)
+                {
+                    await _plcService.StopAsync();
+                }
 
-            IsPlcConnected = !IsPlcConnected;
-            PlcStatusText = IsPlcConnected ? "已连接" : "断开";
-            _serilogLogger.Information("PLC 连接状态: {Status}", PlcStatusText);
+                await _plcService.StartAsync();
+
+                IsPlcConnected = _plcService.IsConnected;
+                PlcStatusText = _plcService.IsConnected ? "已连接" : "断开";
+
+                if (_plcService.IsConnected)
+                {
+                    AddLog("✅ PLC 连接成功");
+                }
+            }
+            catch (Exception ex)
+            {
+                _serilogLogger.Error(ex, "PLC连接失败");
+                IsPlcConnected = false;
+                PlcStatusText = "连接失败";
+                AddLog($"❌ PLC连接失败: {ex.Message}");
+            }
         }
 
         /// <summary>
-        /// 扫描仪重连
+        /// 扫描仪重连（✅ 修正：使用注入的 _settingsService）
         /// </summary>
         [RelayCommand]
         private async Task ReconnectScannerAsync()
         {
             ScannerStatusText = "连接中...";
-            await Task.Delay(500);
-            IsScannerConnected = !IsScannerConnected;
-            ScannerStatusText = IsScannerConnected ? "已连接" : "断开";
+
+            try
+            {
+                if (_scanner != null)
+                {
+                    _scanner.Disconnect();
+
+                    // ✅ 修正：直接使用注入的 _settingsService
+                    var settings = _settingsService.LoadSettings();
+                    var portName = settings.ScannerSerialCommunication?.SerialNumber ?? "COM9";
+                    var result = _scanner.Connect(portName);
+
+                    IsScannerConnected = result;
+                    ScannerStatusText = result ? "已连接" : "断开";
+
+                    AddLog(result
+                        ? $"✅ 扫描枪已连接 ({portName})"
+                        : $"❌ 扫描枪连接失败 ({portName})");
+                }
+                else
+                {
+                    ScannerStatusText = "未配置";
+                    AddLog("⚠️ 扫描枪服务未注册");
+                }
+            }
+            catch (Exception ex)
+            {
+                IsScannerConnected = false;
+                ScannerStatusText = "连接失败";
+                AddLog($"❌ 扫描枪连接失败: {ex.Message}");
+            }
+
+            await Task.CompletedTask;
         }
 
         /// <summary>
-        /// 万用表重连
+        /// 万用表重连（✅ 修正：使用注入的 _settingsService）
         /// </summary>
         [RelayCommand]
         private async Task ReconnectDmmAsync()
         {
             DmmStatusText = "连接中...";
-            await Task.Delay(500);
-            IsDmmConnected = !IsDmmConnected;
-            DmmStatusText = IsDmmConnected ? "已连接" : "断开";
+
+            try
+            {
+                // ✅ 修正：直接使用注入的 _settingsService
+                var settings = _settingsService.LoadSettings();
+                var host = settings.TcpClientGWInstek?.Host ?? "192.168.1.4";
+                var port = settings.TcpClientGWInstek?.Port ?? 5025;
+
+                if (_dmmDriver.IsConnected)
+                {
+                    await _dmmDriver.DisconnectAsync();
+                }
+
+                var result = await _dmmDriver.ConnectAsync(host, port);
+
+                IsDmmConnected = result;
+                DmmStatusText = result ? "已连接" : "断开";
+
+                AddLog(result
+                    ? $"✅ 万用表已连接 ({host}:{port})"
+                    : $"❌ 万用表连接失败 ({host}:{port})");
+            }
+            catch (Exception ex)
+            {
+                IsDmmConnected = false;
+                DmmStatusText = "连接失败";
+                AddLog($"❌ 万用表连接失败: {ex.Message}");
+            }
         }
 
-        /// <summary>
-        /// 初始化实时时钟
-        /// </summary>
         private void InitializeClock()
         {
             _clockTimer = new DispatcherTimer(DispatcherPriority.Render)
@@ -203,17 +383,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 顶部右侧 - 测试状态显示
 
-        /// <summary>
-        /// 测试状态：待机/测试中/报错
-        /// </summary>
         [ObservableProperty]
         private string _testStatus = "待机";
-
-        /// <summary>
-        /// 测试状态背景色
-        /// </summary>
-        [ObservableProperty]
-        private string _testStatusColor = "#3498DB";
 
         /// <summary>
         /// 开始测试命令
@@ -221,106 +392,110 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [RelayCommand]
         private async Task StartTestAsync()
         {
-            // 序列号非空校验
             if (string.IsNullOrWhiteSpace(SerialNumber))
             {
                 await _notificationService.ShowWarningAsync("请输入产品序列号！", "校验失败");
                 return;
             }
 
-            // 作业员非空校验
             if (string.IsNullOrWhiteSpace(OperatorName))
             {
                 await _notificationService.ShowWarningAsync("请选择作业员！", "校验失败");
                 return;
             }
 
-            TestStatus = "测试中";
-            TestStatusColor = "#F39C12";
-            _serilogLogger.Information("开始测试 - 机种: {Model}, 序列号: {SN}, 作业员: {Operator}",
-                ModelName, SerialNumber, OperatorName);
+            if (!_plcService.IsConnected)
+            {
+                await _notificationService.ShowWarningAsync("PLC未连接，请先连接PLC！", "硬件未就绪");
+                return;
+            }
 
-            // 模拟测试流程
+            if (!_dmmDriver.IsConnected)
+            {
+                await _notificationService.ShowWarningAsync("万用表未连接，请先连接万用表！", "硬件未就绪");
+                return;
+            }
+
             try
             {
-                foreach (var item in TestItems)
+                AddLog($"🚀 开始检测 - 机种:{ModelName}, SN:{SerialNumber}, 作业员:{OperatorName}");
+
+                if (_inspectionEngine != null)
                 {
-                    item.Judgment = string.Empty;
-                    item.CheckResult = string.Empty;
-                }
-
-                for (int i = 0; i < TestItems.Count; i++)
-                {
-                    var item = TestItems[i];
-
-                    // 模拟测试延迟
-                    await Task.Delay(300);
-
-                    // 模拟测试结果
-                    var isPass = new Random().Next(0, 10) > 1; // 80% 通过率
-                    item.Judgment = isPass ? "OK" : "NG";
-                    item.CheckResult = isPass ? $"{new Random().Next(100, 500) / 100.0:F2} Ω" : "开路";
-                }
-
-                // 更新计数器
-                TotalCount++;
-                var ngCount = 0;
-                foreach (var item in TestItems)
-                {
-                    if (item.Judgment == "NG")
-                        ngCount++;
-                }
-
-                if (ngCount == 0)
-                {
-                    PassCount++;
-                    TestStatus = "测试完成 - 良品";
-                    TestStatusColor = "#27AE60";
+                    await _inspectionEngine.RunInspectionAsync(
+                        SerialNumber, ModelName, OperatorName);
                 }
                 else
                 {
-                    FailCount++;
-                    TestStatus = "测试完成 - 不良";
-                    TestStatusColor = "#E74C3C";
+                    AddLog("⚠️ 检测引擎未注册，使用模拟模式");
+                    await RunSimulatedTestAsync();
                 }
-
-                _serilogLogger.Information("测试完成 - 总数: {Total}, 良品: {Pass}, 不良: {Fail}",
-                    TotalCount, PassCount, FailCount);
             }
             catch (Exception ex)
             {
                 TestStatus = "报错";
-                TestStatusColor = "#E74C3C";
                 _serilogLogger.Error(ex, "测试过程发生错误");
+                AddLog($"❌ 测试失败: {ex.Message}");
                 await _notificationService.ShowErrorAsync($"测试失败：{ex.Message}", "错误");
             }
+        }
+
+        /// <summary>
+        /// 模拟测试（无真实硬件时的回退方案）
+        /// </summary>
+        private async Task RunSimulatedTestAsync()
+        {
+            TestStatus = "测试中";
+
+            foreach (var item in TestItems)
+            {
+                item.Judgment = string.Empty;
+                item.CheckResult = string.Empty;
+            }
+
+            var random = new Random();
+            int ngCount = 0;
+
+            for (int i = 0; i < TestItems.Count; i++)
+            {
+                var item = TestItems[i];
+                await Task.Delay(200);
+
+                var isPass = random.Next(0, 10) > 1;
+                item.Judgment = isPass ? "OK" : "NG";
+                item.CheckResult = isPass ? $"{random.Next(100, 500) / 100.0:F2} Ω" : "开路";
+
+                if (!isPass) ngCount++;
+            }
+
+            TotalCount++;
+            if (ngCount == 0)
+            {
+                PassCount++;
+                TestStatus = "测试完成 - 良品";
+            }
+            else
+            {
+                FailCount++;
+                TestStatus = "测试完成 - 不良";
+            }
+
+            AddLog($"✅ 模拟测试完成 (良品:{PassCount}, 不良:{FailCount})");
         }
 
         #endregion
 
         #region 中部 - 信息录入区
 
-        /// <summary>
-        /// 机种名称
-        /// </summary>
         [ObservableProperty]
         private string _modelName = string.Empty;
 
-        /// <summary>
-        /// 序列号
-        /// </summary>
         [ObservableProperty]
         private string _serialNumber = string.Empty;
 
-        /// <summary>
-        /// 作业员名称
-        /// </summary>
         [ObservableProperty]
         private string _operatorName = string.Empty;
 
-        /// <summary>
-        /// 作业员是否可编辑（选择后锁定）
-        /// </summary>
         [ObservableProperty]
         private bool _isOperatorEditable = true;
 
@@ -328,14 +503,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 下部 - 测试项目列表
 
-        /// <summary>
-        /// 测试项目集合
-        /// </summary>
         public ObservableCollection<TestItemModel> TestItems { get; } = new();
 
-        /// <summary>
-        /// 初始化测试项目（示例数据）
-        /// </summary>
         private void InitializeTestItems()
         {
             var items = new[]
@@ -369,14 +538,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 底部 - 日志与操作区
 
-        /// <summary>
-        /// 日志集合
-        /// </summary>
         public ObservableCollection<string> LogMessages { get; } = new();
 
-        /// <summary>
-        /// 添加日志
-        /// </summary>
         private void AddLog(string message)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -384,7 +547,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var timestamp = DateTime.Now.ToString("HH:mm:ss");
                 LogMessages.Add($"[{timestamp}] {message}");
 
-                // 限制日志条数防止内存溢出
                 while (LogMessages.Count > 500)
                 {
                     LogMessages.RemoveAt(0);
@@ -392,15 +554,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             });
         }
 
-        /// <summary>
-        /// 终了按钮 - 返回主菜单
-        /// </summary>
         [RelayCommand]
         private async Task FinishAndReturnAsync()
         {
             var confirmed = await _notificationService.ConfirmAsync(
-                "确定要结束当前测试并返回主菜单吗？",
-                "确认返回");
+                "确定要结束当前测试并返回主菜单吗？", "确认返回");
 
             if (confirmed)
             {
@@ -413,22 +571,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region INavigationAware 实现
 
-        //public Task OnNavigatedToAsync(object? parameter = null)
-        //{
-        //    _serilogLogger.Debug("进入测试页面");
-        //    AddLog("测试页面已就绪");
-        //    return Task.CompletedTask;
-        //}
-
         public Task OnNavigatedToAsync(object? parameter = null)
         {
             _serilogLogger.Debug("进入测试页面");
 
-            // 接收传入的作业员参数
             if (parameter is OperatorModel selectedOperator)
             {
                 OperatorName = selectedOperator.Name;
-                IsOperatorEditable = false; // 锁定作业员输入框
+                IsOperatorEditable = false;
                 AddLog($"当前作业员: {selectedOperator.Name}");
                 _serilogLogger.Information("测试页收到作业员参数: {Operator}", selectedOperator.Name);
             }
@@ -437,7 +587,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 AddLog("测试页面已就绪（未指定作业员）");
             }
 
+            // 自动连接硬件
+            _ = AutoConnectHardwareAsync();
+
             return Task.CompletedTask;
+        }
+
+        private async Task AutoConnectHardwareAsync()
+        {
+            AddLog("正在自动连接硬件设备...");
+
+            await ReconnectPlcAsync();
+            await ReconnectDmmAsync();
+            await ReconnectScannerAsync();
         }
 
         public Task OnNavigatedFromAsync()
@@ -448,10 +610,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         public Task<bool> CanNavigateFromAsync()
         {
-            // 如果正在测试中，询问是否确认离开
             if (TestStatus == "测试中")
             {
-                return Task.FromResult(false); // 测试中不允许离开
+                return Task.FromResult(false);
             }
             return Task.FromResult(true);
         }
@@ -464,6 +625,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _clockTimer?.Stop();
             _clockTimer = null;
+
+            if (_scanner != null)
+            {
+                _scanner.BarcodeReceived -= OnScannerBarcodeReceived;
+            }
+
+            if (_inspectionEngine != null)
+            {
+                _inspectionEngine.StateChanged -= OnInspectionStateChanged;
+                _inspectionEngine.StepCompleted -= OnStepCompleted;
+                _inspectionEngine.InspectionCompleted -= OnInspectionCompleted;
+            }
+
             GC.SuppressFinalize(this);
         }
 

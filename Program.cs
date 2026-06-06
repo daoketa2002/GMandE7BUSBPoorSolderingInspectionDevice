@@ -1,4 +1,13 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.Data;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
+using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
+using GMandE7BUSBPoorSolderingInspectionDevice.Views;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -7,12 +16,6 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Windows;
-using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
-using GMandE7BUSBPoorSolderingInspectionDevice.Data;
-using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
-using GMandE7BUSBPoorSolderingInspectionDevice.Services;
-using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
-using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice
 {
@@ -134,19 +137,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
         /// </summary>
         /// <param name="services">IServiceCollection 实例，用于注册服务。</param>
         /// <param name="configuration">应用程序配置对象，用于读取连接字符串等设置。</param>
+
         private static void ConfigureServices(IServiceCollection services, IConfiguration configuration)
         {
             // === 配置管理服务 ===
             services.AddSingleton<ConfigManagerService>();
 
-            // === 数据库配置（支持动态读取）===
+            // === 数据库配置 ===
             services.AddSingleton<DatabaseSettings>();
 
             // === 数据库初始化服务 ===
             services.AddScoped<DatabaseInitializer>();
-
-            // === 业务服务 ===
-         
 
             // === 基础设施服务 ===
             services.AddSingleton<INotificationService, NotificationService>();
@@ -161,25 +162,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 内存监控服务 === 
             services.AddSingleton<MemoryMonitorService>();
 
-            
-           
+            // ⭐⭐⭐ ====== 新增：硬件驱动服务注册 ====== ⭐⭐⭐
+
+            // 1. Modbus TCP PLC 服务（动作控制）
+            services.AddSingleton<ITcpClientPLCMotionService, TcpClientPLCMotionService>();
+            // UI层封装
+            services.AddSingleton<TcpPLCMotionWPFUIModbusService>();
+
+            // 2. 固纬 GDM-9060 万用表驱动
+            services.AddSingleton<GwInstekGDM9060Driver>();
+
+            // 3. 霍尼韦尔 H1900 扫描枪驱动
+            services.AddSingleton<HoneywellH1900Scanner>();
+
+            // 4. 检测流程引擎
+            services.AddSingleton<InspectionEngine>();
+
+            // ⭐⭐⭐ ====== 硬件驱动服务注册结束 ====== ⭐⭐⭐
 
             // === ViewModels ===
             services.AddTransient<MainViewModel>();
-        
             services.AddTransient<MainMenuViewModel>();
-    
             services.AddTransient<ExitConfirmViewModel>();
-
             services.AddTransient<TestPageViewModel>();
 
             // === Views ===
             services.AddTransient<MainWindow>();
-           
             services.AddTransient<MainMenuView>();
-        
             services.AddTransient<ExitConfirmDialog>();
-
             services.AddTransient<TestPageView>();
 
             // === 其他服务 ===
@@ -189,7 +199,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
 
 
-        
+
 
         /// <summary>
         /// 初始化数据库（智能处理，永不自动删除生产数据）

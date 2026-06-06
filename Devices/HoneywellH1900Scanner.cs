@@ -297,13 +297,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             }
         }
 
-        private void OnErrorReceived(object sender, SerialErrorReceivedEventArgs e)
+        private void OnErrorReceived(object sender, System.IO.Ports.SerialErrorReceivedEventArgs e)
         {
             _logger.LogWarning("扫描枪串口错误: {ErrorType}", e.EventType);
             Notify(NotificationType.Warning, $"串口错误: {e.EventType}");
 
             // 严重错误时尝试重连
-            if (e.EventType == SerialError.TXFull || e.EventType == SerialError.RXOver)
+            if (e.EventType == System.IO.Ports.SerialError.TXFull ||
+                e.EventType == System.IO.Ports.SerialError.RXOver)
             {
                 _ = Task.Run(async () =>
                 {
