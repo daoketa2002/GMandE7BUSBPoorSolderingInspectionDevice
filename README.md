@@ -90,7 +90,7 @@ GMandE7BUSBPoorSolderingInspectionDevice/
 │   ├── InspectionEngine.cs             # ★ 检测流程引擎 (核心业务逻辑)
 │   └── TcpModbus/                      # Modbus TCP 通信
 │       ├── TcpClientPLCMotionService.cs         # Modbus TCP 客户端 (连接/读写/心跳/重连)
-│       └── TcpPLCMotionWinFormsUIModbusService.cs  # WPF UI层封装 (线程安全)
+│       └── TcpPLCMotionWPFUIModbusService.cs   # WPF UI层封装 (线程安全)
 │
 ├── ViewModels/                         # 视图模型 (MVVM)
 │   ├── MainMenuViewModel.cs            # 主菜单VM (导航按钮、作业员选择、密码验证)
@@ -126,8 +126,8 @@ GMandE7BUSBPoorSolderingInspectionDevice/
 | **DI 容器** | Microsoft.Extensions.Hosting |
 | **日志** | Serilog (Debug输出 + 文件滚动日志) |
 | **数据库** | SQLite (EF Core) |
-| **PLC 通信** | Modbus TCP (松下 FP0H) |
-| **万用表通信** | SCPI over TCP Socket (固纬 GDM-9060, 端口 5025) |
+| **PLC 通信** | Modbus TCP (松下 FP0H AFP0HC32ET) |
+| **万用表通信** | SCPI over TCP Socket (固纬 GDM-9060) |
 | **扫描枪通信** | System.IO.Ports (霍尼韦尔 H1900, USB虚拟串口) |
 | **导航** | 自定义区域化导航 (ContentControl + UserControl) |
 

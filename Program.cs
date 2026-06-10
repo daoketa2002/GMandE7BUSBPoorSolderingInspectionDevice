@@ -149,7 +149,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // ⭐⭐⭐ ====== 新增：硬件驱动服务注册 ====== ⭐⭐⭐
 
             // 1. Modbus TCP PLC 服务（动作控制）
-            services.AddSingleton<ITcpClientPLCMotionService, TcpClientPLCMotionService>();
+            // 同时注册具体类型和接口，确保两者可解析到同一实例
+            services.AddSingleton<TcpClientPLCMotionService>();
+            services.AddSingleton<ITcpClientPLCMotionService>(sp =>
+                sp.GetRequiredService<TcpClientPLCMotionService>());
             // UI层封装
             services.AddSingleton<TcpPLCMotionWPFUIModbusService>();
 

@@ -1108,6 +1108,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     request = CreateModbusTcpWriteRequest(functionCode, unitId, startAddress, data, transactionId);
                     _logger.LogDebug($"发送写多个寄存器请求: 事务ID={transactionId}, 功能码={functionCode}, 从站地址={unitId}, 起始地址={startAddress}, 数据={string.Join(",", data)}");
                 }
+                else if (functionCode == 0x05) // 写单个线圈
+                {
+                    if (data.Length != 1)
+                        throw new ArgumentException("写单个线圈时数据长度必须为1");
+                    bool value = data[0] == 0xFF00;
+                    request = ModbusTcpMessageHelper.CreateWriteSingleCoilRequest(
+                        transactionId, unitId, startAddress, value);
+                }
                 else
                 {
                     throw new ArgumentException($"不支持的功能码: {functionCode}", nameof(functionCode));
