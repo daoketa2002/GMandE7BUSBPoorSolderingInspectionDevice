@@ -358,21 +358,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             }
         }
 
-        public IReadOnlyDictionary<string, PollingTaskConfig> GetActivePollingConfigs()
-        {
-            lock (_pollingLock)
-            {
-                return _pollingTasks.ToDictionary(
-                    kv => kv.Key,
-                    kv => kv.Value.Config);
-            }
-        }
+        //public IReadOnlyDictionary<string, PollingTaskConfig> GetActivePollingConfigs()
+        //{
+        //    lock (_pollingLock)
+        //    {
+        //        return _pollingTasks.ToDictionary(
+        //            kv => kv.Key,
+        //            kv => kv.Value.Config);
+        //    }
+        //}
 
-        private void UpdateUIWithPollingResult(ModbusResponse response, PollingTaskConfig config)
-        {
-            Console.WriteLine($"[{config.DisplayName}] 轮询结果: {BitConverter.ToString(response.Data)}");
-            OnPollingDataReceived?.Invoke(this, new PollingDataEventArgs(config.Key, config.DisplayName, response));
-        }
+        //private void UpdateUIWithPollingResult(ModbusResponse response, PollingTaskConfig config)
+        //{
+        //    Console.WriteLine($"[{config.DisplayName}] 轮询结果: {BitConverter.ToString(response.Data)}");
+        //    OnPollingDataReceived?.Invoke(this, new PollingDataEventArgs(config.Key, config.DisplayName, response));
+        //}
 
         #endregion
     }

@@ -71,12 +71,5 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Data
            
         }
 
-  
-
-     
-
-
-
-    
     }
 }

@@ -76,7 +76,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // app.ThemeMode = ThemeMode.Light;// 或 "Dark" ,实验性API
 
         }
-
+        
 
         /// <summary>
         /// 创建并配置 .NET 通用主机（IHostBuilder），包括：
@@ -110,22 +110,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                           retainedFileCountLimit: 7,
                           outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}");
               });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
         /// <summary>
@@ -195,10 +179,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 其他服务 ===
             services.AddLogging();
         }
-
-
-
-
 
 
         /// <summary>
@@ -278,14 +258,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
         }
 
 
-
-
-
-
-
-
-
-
         /// <summary>
         /// 初始化种子数据
         /// </summary>
@@ -304,19 +276,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                 Log.Error(ex, "种子数据初始化失败");
             }
         }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     }
