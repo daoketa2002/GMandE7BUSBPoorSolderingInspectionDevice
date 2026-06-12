@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
@@ -6,19 +6,18 @@ using System.Windows.Media;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters
 {
     /// <summary>
-    /// 判定结果转背景色
-    /// OK → 绿色, NG → 红色, 空 → 浅灰
+    /// 连接状态转颜色
+    /// true(已连接) → 绿色, false(断开) → 红色
     /// </summary>
-    public class JudgmentToBackgroundConverter : IValueConverter
+    public class BoolToConnectionColorConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            return value switch
+            if (value is bool isConnected)
             {
-                "OK" => Color.FromRgb(39, 174, 96),       // #27AE60 绿色
-                "NG" => Color.FromRgb(231, 76, 60),       // #E74C3C 红色
-                _ => Color.FromRgb(233, 236, 239)          // #E9ECEF 浅灰
-            };
+                return isConnected ? Color.FromRgb(39, 174, 96) : Color.FromRgb(231, 76, 60);
+            }
+            return Color.FromRgb(189, 195, 199);
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

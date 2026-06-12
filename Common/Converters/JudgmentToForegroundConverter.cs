@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
@@ -6,18 +6,18 @@ using System.Windows.Media;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters
 {
     /// <summary>
-    /// 判定结果转背景色
-    /// OK → 绿色, NG → 红色, 空 → 浅灰
+    /// 判定结果转字体颜色
+    /// OK/NG → 白色, 空 → 灰色
     /// </summary>
-    public class JudgmentToBackgroundConverter : IValueConverter
+    public class JudgmentToForegroundConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
             return value switch
             {
-                "OK" => Color.FromRgb(39, 174, 96),       // #27AE60 绿色
-                "NG" => Color.FromRgb(231, 76, 60),       // #E74C3C 红色
-                _ => Color.FromRgb(233, 236, 239)          // #E9ECEF 浅灰
+                "OK" => Color.FromRgb(255, 255, 255),      // 白色
+                "NG" => Color.FromRgb(255, 255, 255),      // 白色
+                _ => Color.FromRgb(173, 181, 189)           // 灰色
             };
         }
 

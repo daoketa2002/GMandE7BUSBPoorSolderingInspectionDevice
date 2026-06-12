@@ -1,4 +1,11 @@
-﻿using Serilog;
+﻿// ============================================================
+// LEGACY: 欧姆龙 FINS/TCP 协议实现
+// 来源：其他项目（马达特性履历/风扇压入机履历）
+// 说明：本项目使用松下 FP0H + Modbus TCP 协议，此文件不使用
+// 如需删除，请先确认没有被任何代码引用
+// ============================================================
+
+using Serilog;
 using System;
 using System.Buffers;
 using System.Diagnostics;  // ⭐ 添加 Debug

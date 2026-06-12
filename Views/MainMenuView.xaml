@@ -64,7 +64,7 @@
                     FontWeight="Bold"/>
 
             <Button x:Name="DataExtractBtn" 
-                    Content="📊 数据提取"
+                    Content="📊 日志数据"
                     Background="#2ECC71"
                     Foreground="White"
                     FontWeight="Bold"/>
