@@ -5,7 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
              mc:Ignorable="d" 
-              d:DesignHeight="450" d:DesignWidth="800">
+             d:DesignHeight="520" d:DesignWidth="800">
 
     <UserControl.Resources>
         <Style TargetType="Button">
@@ -60,6 +60,13 @@
             <Button x:Name="RunScreenBtn" 
                     Content="▶ 运行界面"
                     Background="#3498DB"
+                    Foreground="White"
+                    FontWeight="Bold"/>
+
+            <!-- 🆕 新增：作业员设定按钮 -->
+            <Button x:Name="OperatorSettingsBtn" 
+                    Content="👤 作业员设定"
+                    Background="#9B59B6"
                     Foreground="White"
                     FontWeight="Bold"/>
 

@@ -136,6 +136,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 基础设施服务 ===
             services.AddSingleton<INotificationService, NotificationService>();
             services.AddSingleton<ISettingsService, SettingsService>();
+            services.AddSingleton<IOperatorStorageService, OperatorStorageService>();
+            services.AddSingleton<IOperatorStateService, OperatorStateService>();
 
             // === 数据库上下文 ===
             services.AddDbContext<AppDbContext>();
@@ -172,12 +174,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<MainMenuViewModel>();
             services.AddTransient<ExitConfirmViewModel>();
             services.AddTransient<TestPageViewModel>();
+            services.AddTransient<OperatorSettingsViewModel>();
 
             // === Views ===
             services.AddTransient<MainWindow>();
             services.AddTransient<MainMenuView>();
             services.AddTransient<ExitConfirmDialog>();
             services.AddTransient<TestPageView>();
+            services.AddTransient<OperatorSettingsView>();
 
             // === 其他服务 ===
             services.AddLogging();

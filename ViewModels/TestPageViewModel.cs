@@ -35,6 +35,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         // ⭐ 新增：设置服务（避免手动new）
         private readonly ISettingsService _settingsService;
+        private readonly IOperatorStateService _operatorStateService;
 
         #endregion
 
@@ -43,6 +44,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public TestPageViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
+            IOperatorStateService operatorStateService,
             ILogger<TestPageViewModel> logger,
             ITcpClientPLCMotionService plcService,
             GwInstekGDM9060Driver dmmDriver,
@@ -54,6 +56,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _logger = logger;
             _serilogLogger = Log.ForContext<TestPageViewModel>();
+            _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
 
             _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
@@ -575,17 +578,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _serilogLogger.Debug("进入测试页面");
 
-            if (parameter is OperatorModel selectedOperator)
-            {
-                OperatorName = selectedOperator.Name;
-                IsOperatorEditable = false;
-                AddLog($"当前作业员: {selectedOperator.Name}");
-                _serilogLogger.Information("测试页收到作业员参数: {Operator}", selectedOperator.Name);
-            }
-            else
-            {
-                AddLog("测试页面已就绪（未指定作业员）");
-            }
+            // 🆕 从全局状态服务读取当前作业员
+            var operatorName = _operatorStateService?.CurrentOperatorName ?? "默认作业员";
+            OperatorName = operatorName;
+            IsOperatorEditable = false;  // 锁定，不可编辑
+
+            AddLog($"当前作业员: {operatorName}");
+            _serilogLogger.Information("测试页当前作业员: {Operator}", operatorName);
 
             // 自动连接硬件
             _ = AutoConnectHardwareAsync();

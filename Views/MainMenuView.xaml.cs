@@ -30,6 +30,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
             DataContext = viewModel;
 
             RunScreenBtn.Command = viewModel.NavigateToRunScreenCommand;
+            OperatorSettingsBtn.Command = viewModel.NavigateToOperatorSettingsCommand;
             DataExtractBtn.Command = viewModel.NavigateToDataExtractCommand;
             SystemSettingsBtn.Command = viewModel.NavigateToSystemSettingsCommand;
             ExitBtn.Command = viewModel.ExitApplicationCommand;

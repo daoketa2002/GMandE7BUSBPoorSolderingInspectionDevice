@@ -1,35 +1,36 @@
 ﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-
-using Microsoft.Extensions.Logging;
-using Serilog;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
+using Serilog;
+using System;
+using System.Threading.Tasks;
+using System.Windows;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
-
     public partial class MainMenuViewModel : ObservableObject, INavigationAware
     {
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
+        private readonly IOperatorStateService _operatorStateService;  // 🆕
         private readonly Serilog.ILogger _logger;
 
         public MainMenuViewModel(
             INavigationService navigationService,
-            INotificationService notificationService)
+            INotificationService notificationService,
+            IOperatorStateService operatorStateService)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
+            _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
             _logger = Log.ForContext<MainMenuViewModel>();
         }
 
+        /// <summary>
+        /// 🆕 运行界面 - 直接导航，不再弹窗
+        /// 如果未选择作业员，自动使用默认作业员
+        /// </summary>
         [RelayCommand]
         private async Task NavigateToRunScreenAsync()
         {
@@ -37,32 +38,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 _logger.Information("用户点击运行界面按钮");
 
-                // 1. 先弹出作业员选择窗口
-                var mainWindow = Application.Current.MainWindow;
-                if (mainWindow == null)
+                var operatorName = _operatorStateService.CurrentOperatorName;
+                _logger.Information("当前作业员: {Operator} (已选择: {HasOperator})",
+                    operatorName, _operatorStateService.HasOperator);
+
+                if (!_operatorStateService.HasOperator)
                 {
-                    _logger.Error("无法获取主窗口引用");
-                    return;
+                    _logger.Information("未选择作业员，使用默认作业员: {Default}", operatorName);
                 }
 
-                var selectedOperator = OperatorSelectionDialog.ShowDialog(mainWindow);
-
-                // 2. 用户取消 → 返回主菜单
-                if (selectedOperator == null)
-                {
-                    _logger.Information("用户取消了作业员选择，返回主菜单");
-                    return;
-                }
-
-                _logger.Information("用户选择了作业员: {Operator}", selectedOperator.Name);
-
-                // 3. 导航到测试页，传入选中的作业员
-                _logger.Information("导航到运行界面");
-                await _navigationService.NavigateToAsync<TestPageView>(selectedOperator);
+                // 🆕 直接导航到测试页，传null（TestPageViewModel自己从IOperatorStateService读取）
+                await _navigationService.NavigateToAsync<TestPageView>("Main", null);
             }
             catch (Exception ex)
             {
                 _logger.Error(ex, "导航到运行界面失败");
+                await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 作业员设定
+        /// </summary>
+        [RelayCommand]
+        private async Task NavigateToOperatorSettingsAsync()
+        {
+            try
+            {
+                _logger.Information("用户点击作业员设定按钮");
+                await _navigationService.NavigateToAsync<OperatorSettingsView>();
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "导航到作业员设定界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
@@ -73,7 +81,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             try
             {
                 _logger.Information("导航到数据提取界面");
-                //await _navigationService.NavigateToAsync<DataExtractionView>();
             }
             catch (Exception ex)
             {
@@ -87,20 +94,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                // ⭐ 添加密码验证
                 var mainWindow = Application.Current.MainWindow;
-                if (mainWindow == null)
-                {
-                   // await _navigationService.NavigateToAsync<SystemSettingsView>();
-                    return;
-                }
+                if (mainWindow == null) return;
 
                 bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow);
-
                 if (isPasswordVerified)
                 {
                     _logger.Information("密码验证通过，导航到系统设置界面");
-                   // await _navigationService.NavigateToAsync<SystemSettingsView>();
                 }
                 else
                 {
