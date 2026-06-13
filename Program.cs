@@ -149,8 +149,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddSingleton<ICurrentPlanService, CurrentPlanService>();
             services.AddSingleton<IPlanStorageService, PlanStorageService>();
 
+            // === 日志数据相关服务 ===
+            services.AddSingleton<LogDataService>();
+
             // === 内存监控服务 === 
             services.AddSingleton<MemoryMonitorService>();
+
+            services.AddSingleton<ILogDataService, LogDataService>();    // 日志数据服务（接口注入）
+            services.AddSingleton<ICsvExportService, CsvExportService>(); // CSV导出服务（接口注入）
 
             // ⭐⭐⭐ ====== 新增：硬件驱动服务注册 ====== ⭐⭐⭐
 
@@ -181,6 +187,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<OperatorSettingsViewModel>();
             services.AddTransient<PlanSettingViewModel>();
             services.AddTransient<PlanEditViewModel>();
+            services.AddTransient<LogDataViewModel>();
+            services.AddTransient<LogDataViewModel>();
 
             // === Views ===
             services.AddTransient<MainWindow>();
@@ -190,6 +198,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<OperatorSettingsView>();
             services.AddTransient<PlanSettingView>();
             services.AddTransient<PlanEditView>();
+            services.AddTransient<LogDataView>();
 
             // === 其他服务 ===
             services.AddLogging();

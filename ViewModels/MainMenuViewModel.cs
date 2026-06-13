@@ -100,11 +100,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                _logger.Information("导航到数据提取界面");
+                _logger.Information("导航到日志数据界面");
+                
+                _logger.Information("用户点击日志数据按钮");
+                await _navigationService.NavigateToAsync<LogDataView>("Main", null);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "导航到数据提取界面失败");
+                _logger.Error(ex, "导航到日志数据界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
