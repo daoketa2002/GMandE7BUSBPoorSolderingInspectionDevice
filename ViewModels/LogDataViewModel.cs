@@ -19,11 +19,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     /// <remarks>
     /// <para><b>数据流：</b></para>
     /// <para>1. 页面导航进入时（OnNavigatedToAsync）→ 仅加载机种下拉列表，不展示任何数据。</para>
-    /// <para>2. 用户点击「检索」→ 首次检索时加载所有CSV文件到 _allData 缓存，后续检索直接用缓存过滤。</para>
+    /// <para>2. 用户点击「检索」→ 解析文件夹下所有CSV文件名，按文件名匹配条件，
+    ///    只加载匹配的CSV文件内容并展示。</para>
     /// <para>3. 用户点击「重置」→ 清空检索条件，清空表格数据。</para>
     /// <para>4. 用户点击「导出」→ 将当前 LogDataList 导出为CSV文件。</para>
-    /// <para><b>动态列说明：</b>不同CSV文件可能有不同的检测项列（如 B4-B5、A1-A2），
-    /// 动态列保持文件中的原始顺序，不同文件的列不合并。</para>
+    /// <para><b>检索依据：</b>文件名格式为 机种名_序列号_方案名称.csv，
+    /// 从文件名提取三要素与检索条件做 Contains 模糊匹配（AND 关系）。</para>
+    /// <para><b>动态列说明：</b>动态列保持文件中的原始顺序，不同文件的列不合并。</para>
     /// </remarks>
     public partial class LogDataViewModel : ObservableObject, INavigationAware
     {
@@ -31,12 +33,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly ICsvExportService _csvExportService;
         private readonly INavigationService _navigationService;
         private readonly ILogger<LogDataViewModel> _logger;
-
-        /// <summary>全量数据缓存 — 首次检索时从CSV加载，后续检索直接复用</summary>
-        private List<LogDataModel> _allData = new();
-
-        /// <summary>标记全量数据是否已加载（避免重复读取文件）</summary>
-        private bool _dataLoaded = false;
 
         /// <summary>
         /// 构造器 — 通过DI注入所需服务。
@@ -92,8 +88,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 命令
 
         /// <summary>
-        /// 执行组合检索 — 首次检索时从CSV文件加载数据，后续直接过滤缓存。
-        /// 三个条件（机种名称、序列号、方案名称）为 AND 关系，空白条件视为忽略。
+        /// 执行基于文件名的组合检索。
+        /// 解析文件夹下所有CSV文件名（格式：机种名_序列号_方案名称.csv），
+        /// 文件名三要素与检索条件做 Contains 模糊匹配（AND 关系），
+        /// 只加载文件名匹配的CSV文件内容。
         /// </summary>
         [RelayCommand]
         private async Task SearchAsync()
@@ -103,38 +101,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.LogInformation("执行检索 - 机种:{MachineType}, 序列号:{Serial}, 方案:{Plan}",
                     SelectedMachineType, SearchSerialNumber, SearchPlanName);
 
-                // 首次检索时加载数据，后续直接复用缓存
-                if (!_dataLoaded)
-                {
-                    IsLoading = true;
-                    try
-                    {
-                        _allData = await _logDataService.LoadAllLogDataAsync();
-                        _dataLoaded = true;
-                        _logger.LogInformation("首次检索 - 已加载 {Count} 条日志数据", _allData.Count);
-                    }
-                    finally
-                    {
-                        IsLoading = false;
-                    }
-                }
+                IsLoading = true;
 
-                var filtered = _logDataService.Search(
-                    _allData,
+                // 直接按文件名过滤加载，不缓存全量数据
+                var matched = await _logDataService.LoadFilteredLogDataAsync(
                     string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
                     string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
                     string.IsNullOrWhiteSpace(SearchPlanName) ? null : SearchPlanName.Trim());
 
-                LogDataList = new ObservableCollection<LogDataModel>(filtered);
-                UpdateDynamicHeaders(filtered);
+                LogDataList = new ObservableCollection<LogDataModel>(matched);
+                UpdateDynamicHeaders(matched);
                 UpdateTotalCount();
 
-                _logger.LogInformation("检索完成，匹配 {Count} 条记录", filtered.Count);
+                _logger.LogInformation("检索完成，匹配 {Count} 条记录", matched.Count);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "检索失败");
                 MessageBox.Show($"检索失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsLoading = false;
             }
         }
 
@@ -166,7 +154,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 var dynamicHeaders = DynamicHeaders.ToList();
 
-                // 构建列头定义：固定列 → 动态列 → 日期时间
                 var headers = new List<(string Header, Func<LogDataModel, string> ValueSelector)>
                 {
                     ("序号",       m => m.Index.ToString()),
@@ -179,7 +166,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 foreach (var dh in dynamicHeaders)
                 {
-                    var capturedHeader = dh; // 闭包捕获
+                    var capturedHeader = dh;
                     headers.Add((capturedHeader, m =>
                         m.DynamicItems.TryGetValue(capturedHeader, out var val) ? val : string.Empty));
                 }
@@ -213,7 +200,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 页面导航进入时触发 — 仅加载机种下拉列表，不展示数据。
-        /// 数据在用户首次点击「检索」时才加载。
+        /// 数据在用户点击「检索」时才按文件名过滤加载。
         /// </summary>
         /// <param name="parameter">导航参数（当前未使用）</param>
         public async Task OnNavigatedToAsync(object? parameter = null)
@@ -223,13 +210,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             try
             {
-                // 仅加载机种名称列表（供下拉框使用）
+                // 仅加载机种名称列表（供下拉框使用），从文件名提取
                 var types = await _logDataService.GetMachineTypesAsync();
                 MachineTypes = new ObservableCollection<string>(types);
 
                 // 不加载数据 — 表格保持空白，等待用户点击「检索」
-                _allData = new List<LogDataModel>();
-                _dataLoaded = false;
                 LogDataList = new ObservableCollection<LogDataModel>();
                 DynamicHeaders = new ObservableCollection<string>();
                 UpdateTotalCount();
@@ -268,7 +253,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #endregion
 
         #region 私有方法
-
 
         /// <summary>
         /// 根据当前数据更新动态列名集合（触发XAML列生成）。
