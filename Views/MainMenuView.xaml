@@ -63,10 +63,16 @@
                     Foreground="White"
                     FontWeight="Bold"/>
 
-            <!-- 🆕 新增：作业员设定按钮 -->
             <Button x:Name="OperatorSettingsBtn" 
                     Content="👤 作业员设定"
                     Background="#9B59B6"
+                    Foreground="White"
+                    FontWeight="Bold"/>
+
+            <!-- 🆕 新增：方案设定按钮 -->
+            <Button x:Name="PlanSettingBtn" 
+                    Content="📋 方案设定"
+                    Background="#E67E22"
                     Foreground="White"
                     FontWeight="Bold"/>
 
@@ -78,7 +84,7 @@
 
             <Button x:Name="SystemSettingsBtn" 
                     Content="⚙ 系统设置"
-                    Background="#E67E22"
+                    Background="#7F8C8D"
                     Foreground="White"
                     FontWeight="Bold"/>
         </StackPanel>
@@ -96,5 +102,4 @@
                     FontWeight="Bold"/>
         </StackPanel>
     </Grid>
-
 </UserControl>

@@ -1,6 +1,5 @@
 ﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -31,10 +30,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
             RunScreenBtn.Command = viewModel.NavigateToRunScreenCommand;
             OperatorSettingsBtn.Command = viewModel.NavigateToOperatorSettingsCommand;
+            PlanSettingBtn.Command = viewModel.NavigateToPlanSettingCommand;      // 🆕
             DataExtractBtn.Command = viewModel.NavigateToDataExtractCommand;
             SystemSettingsBtn.Command = viewModel.NavigateToSystemSettingsCommand;
             ExitBtn.Command = viewModel.ExitApplicationCommand;
         }
     }
 }
-

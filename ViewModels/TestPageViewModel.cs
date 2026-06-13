@@ -26,6 +26,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INotificationService _notificationService;
         private readonly ILogger<TestPageViewModel> _logger;
         private readonly Serilog.ILogger _serilogLogger;
+        private readonly ICurrentPlanService _currentPlanService;
 
         // ⭐ 硬件服务
         private readonly ITcpClientPLCMotionService _plcService;
@@ -49,6 +50,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             ITcpClientPLCMotionService plcService,
             GwInstekGDM9060Driver dmmDriver,
             ISettingsService settingsService,
+            ICurrentPlanService currentPlanService,
             HoneywellH1900Scanner? scanner = null,
             InspectionEngine? inspectionEngine = null)
         {
@@ -57,6 +59,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _logger = logger;
             _serilogLogger = Log.ForContext<TestPageViewModel>();
             _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
+            _currentPlanService = currentPlanService ?? throw new ArgumentNullException(nameof(currentPlanService));
 
             _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
@@ -65,7 +68,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _inspectionEngine = inspectionEngine;
 
             InitializeClock();
-            InitializeTestItems();
             SubscribeToHardwareEvents();
         }
 
@@ -508,20 +510,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         public ObservableCollection<TestItemModel> TestItems { get; } = new();
 
-        private void InitializeTestItems()
+        /// <summary>
+        /// 默认检测项目（无方案时的回退）
+        /// </summary>
+        private void LoadDefaultTestItems()
         {
-            var items = new[]
+            var items = new[] 
             {
-                new { Name = "A1-A2", Condition = "OPEN 开路" },
-                new { Name = "A2-A3", Condition = "SHORT 短路" },
-                new { Name = "A3-A4", Condition = "OPEN 开路" },
-                new { Name = "A4-A5", Condition = "SHORT 短路" },
-                new { Name = "B1-B2", Condition = "OPEN 开路" },
-                new { Name = "B2-B3", Condition = "SHORT 短路" },
-                new { Name = "B3-B4", Condition = "OPEN 开路" },
-                new { Name = "C1-C2", Condition = "RESISTANCE 电阻" },
-                new { Name = "C2-C3", Condition = "OPEN 开路" },
-                new { Name = "D1-D2", Condition = "SHORT 短路" },
+                new { Name = "A1-A2", Condition = "OPEN" },
+                new { Name = "A2-A3", Condition = "SHORT" },
+                new { Name = "A3-A4", Condition = "OPEN" },
+                new { Name = "A4-A5", Condition = "SHORT" },
+                new { Name = "B1-B2", Condition = "OPEN" },
+                new { Name = "B2-B3", Condition = "SHORT" },
             };
 
             for (int i = 0; i < items.Length; i++)
@@ -535,6 +536,42 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     Judgment = string.Empty
                 });
             }
+        }
+
+        /// <summary>
+        ///  从全局当前方案加载检测项目
+        /// </summary>
+        private void LoadCurrentPlanItems()
+        {
+            TestItems.Clear();
+
+            var currentPlan = _currentPlanService.CurrentPlan;
+            if (currentPlan == null || currentPlan.Items.Count == 0)
+            {
+                // 没有方案时使用默认项目
+                SchemeName = "无方案 - 使用默认项目";
+                AddLog("⚠️ 未选择方案，使用默认检测项目");
+                LoadDefaultTestItems();
+                return;
+            }
+
+            SchemeName = currentPlan.PlanName;
+            ModelName = currentPlan.Model;
+            AddLog($"📋 已加载方案: {_currentPlanService.CurrentPlanName}");
+
+            foreach (var item in currentPlan.Items.OrderBy(i => i.Index))
+            {
+                TestItems.Add(new TestItemModel
+                {
+                    Index = item.Index,
+                    ItemName = item.ItemName,
+                    CheckCondition = item.CheckCondition,
+                    CheckResult = string.Empty,
+                    Judgment = string.Empty
+                });
+            }
+
+            AddLog($"共加载 {TestItems.Count} 个检测项目");
         }
 
         #endregion
@@ -578,13 +615,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _serilogLogger.Debug("进入测试页面");
 
-            // 🆕 从全局状态服务读取当前作业员
+            // 从全局状态服务读取当前作业员
             var operatorName = _operatorStateService?.CurrentOperatorName ?? "默认作业员";
             OperatorName = operatorName;
-            IsOperatorEditable = false;  // 锁定，不可编辑
+            IsOperatorEditable = false;
 
             AddLog($"当前作业员: {operatorName}");
-            _serilogLogger.Information("测试页当前作业员: {Operator}", operatorName);
+
+            // 从全局方案服务加载检测项目
+            LoadCurrentPlanItems();
+
+            _serilogLogger.Information("测试页当前作业员: {Operator}, 当前方案: {Plan}",
+                operatorName, _currentPlanService.CurrentPlanName);
 
             // 自动连接硬件
             _ = AutoConnectHardwareAsync();

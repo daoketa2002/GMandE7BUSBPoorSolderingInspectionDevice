@@ -13,7 +13,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     {
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
-        private readonly IOperatorStateService _operatorStateService;  // 🆕
+        private readonly IOperatorStateService _operatorStateService;
         private readonly Serilog.ILogger _logger;
 
         public MainMenuViewModel(
@@ -27,27 +27,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _logger = Log.ForContext<MainMenuViewModel>();
         }
 
-        /// <summary>
-        /// 🆕 运行界面 - 直接导航，不再弹窗
-        /// 如果未选择作业员，自动使用默认作业员
-        /// </summary>
         [RelayCommand]
         private async Task NavigateToRunScreenAsync()
         {
             try
             {
                 _logger.Information("用户点击运行界面按钮");
-
                 var operatorName = _operatorStateService.CurrentOperatorName;
                 _logger.Information("当前作业员: {Operator} (已选择: {HasOperator})",
                     operatorName, _operatorStateService.HasOperator);
-
                 if (!_operatorStateService.HasOperator)
                 {
                     _logger.Information("未选择作业员，使用默认作业员: {Default}", operatorName);
                 }
-
-                // 🆕 直接导航到测试页，传null（TestPageViewModel自己从IOperatorStateService读取）
                 await _navigationService.NavigateToAsync<TestPageView>("Main", null);
             }
             catch (Exception ex)
@@ -57,9 +49,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
-        /// <summary>
-        /// 作业员设定
-        /// </summary>
         [RelayCommand]
         private async Task NavigateToOperatorSettingsAsync()
         {
@@ -71,6 +60,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             catch (Exception ex)
             {
                 _logger.Error(ex, "导航到作业员设定界面失败");
+                await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 🆕 方案设定 - 需要密码保护
+        /// </summary>
+        [RelayCommand]
+        private async Task NavigateToPlanSettingAsync()
+        {
+            try
+            {
+                _logger.Information("用户点击方案设定按钮");
+
+                var mainWindow = Application.Current.MainWindow;
+                if (mainWindow == null) return;
+
+                bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow);
+                if (isPasswordVerified)
+                {
+                    _logger.Information("密码验证通过，导航到方案设定界面");
+                    await _navigationService.NavigateToAsync<PlanSettingView>();
+                }
+                else
+                {
+                    _logger.Information("用户取消或密码验证失败，未进入方案设定");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "导航到方案设定界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
