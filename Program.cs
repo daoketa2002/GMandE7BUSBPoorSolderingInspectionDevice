@@ -32,6 +32,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
         [STAThread]
         public static void Main(string[] args)
         {
+            // 注册代码页编码提供程序，使 .NET Core 支持 GB2312/GBK 等传统编码
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
             var app = new Application();
 
             try
