@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
@@ -17,6 +18,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
         private int _reconnectDelayMs = 2000;
         private int _maxReconnectAttempts = 12;
         private int _healthCheckIntervalSeconds = 5;
+        private HealthCheckMode _healthCheckMode = HealthCheckMode.Disabled;
 
         /// <summary>
         /// PLC IP地址
@@ -79,6 +81,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
         {
             get => _maxReconnectAttempts;
             set { _maxReconnectAttempts = value; OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// 心跳检测模式（默认：禁用）
+        /// </summary>
+        public HealthCheckMode HealthCheckMode
+        {
+            get => _healthCheckMode;
+            set { _healthCheckMode = value; OnPropertyChanged(); }
         }
 
         /// <summary>

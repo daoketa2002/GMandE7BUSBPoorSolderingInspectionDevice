@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
@@ -6,6 +7,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
     /// <summary>
     /// 固纬 GDM-9060 万用表配置
     /// 通信方式：LAN网线连接，SCPI协议 over TCP
+    /// 心跳检测：CommandResponse模式，通过*IDN?命令检测设备在线状态
     /// </summary>
     public class GDM9060CommunicationConfig : INotifyPropertyChanged
     {
@@ -13,6 +15,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
         private int _port = 5025;
         private int _receiveTimeoutMs = 5000;
         private int _sendTimeoutMs = 5000;
+        private HealthCheckMode _healthCheckMode = HealthCheckMode.CommandResponse;
         private int _healthCheckIntervalSeconds = 5;
         private int _lastDataTimeoutSeconds = 30;
 
@@ -50,6 +53,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
         {
             get => _sendTimeoutMs;
             set { _sendTimeoutMs = value; OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// 心跳检测模式（默认：CommandResponse）
+        /// </summary>
+        public HealthCheckMode HealthCheckMode
+        {
+            get => _healthCheckMode;
+            set { _healthCheckMode = value; OnPropertyChanged(); }
         }
 
         /// <summary>

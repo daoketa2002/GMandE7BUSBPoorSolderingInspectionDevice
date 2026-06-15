@@ -278,6 +278,25 @@
                                          Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
 
+                            <!-- 分隔线 -->
+                            <Separator Margin="0,15" Background="#ECF0F1"/>
+
+                            <TextBlock Text="心跳设置" Style="{StaticResource SectionTitleStyle}"/>
+
+                            <!-- 心跳检测模式 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="心跳检测模式：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValuePath="Tag"
+                                          SelectedValue="{Binding Fp0hConfig.HealthCheckMode}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Tag="CommandResponse" Content="命令响应"/>
+                                    <ComboBoxItem Tag="DataActivity" Content="数据活动"/>
+                                    <ComboBoxItem Tag="StatusQuery" Content="状态查询"/>
+                                    <ComboBoxItem Tag="Disabled" Content="禁用"/>
+                                </ComboBox>
+                            </StackPanel>
+
                             <!-- 心跳间隔 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="心跳间隔 (秒)：" Style="{StaticResource LabelStyle}"/>
@@ -383,18 +402,32 @@
 
                             <TextBlock Text="心跳设置" Style="{StaticResource SectionTitleStyle}"/>
 
+                            <!-- 心跳检测模式 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="心跳检测模式：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValuePath="Tag"
+                                          SelectedValue="{Binding ScannerConfig.HealthCheckMode}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Tag="CommandResponse" Content="命令响应"/>
+                                    <ComboBoxItem Tag="DataActivity" Content="数据活动"/>
+                                    <ComboBoxItem Tag="StatusQuery" Content="状态查询"/>
+                                    <ComboBoxItem Tag="Disabled" Content="禁用"/>
+                                </ComboBox>
+                            </StackPanel>
+
                             <!-- 心跳间隔 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="心跳间隔 (秒)：" Style="{StaticResource LabelStyle}"/>
                                 <TextBox Text="{Binding ScannerConfig.HealthCheckIntervalSeconds, UpdateSourceTrigger=PropertyChanged}"
-                                         Style="{StaticResource InputBoxStyle}"/>
+                                        Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
 
                             <!-- 数据超时 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="数据超时 (秒)：" Style="{StaticResource LabelStyle}"/>
                                 <TextBox Text="{Binding ScannerConfig.LastDataTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
-                                         Style="{StaticResource InputBoxStyle}"/>
+                                            Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
@@ -438,7 +471,7 @@
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="接收超时 (ms)：" Style="{StaticResource LabelStyle}"/>
                                 <TextBox Text="{Binding Gdm9060Config.ReceiveTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
-                                         Style="{StaticResource InputBoxStyle}"/>
+                                            Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
 
                             <!-- 发送超时 -->
@@ -448,18 +481,32 @@
                                          Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
 
+                            <!-- 心跳检测模式 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="心跳检测模式：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValuePath="Tag"
+                                          SelectedValue="{Binding Gdm9060Config.HealthCheckMode}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Tag="CommandResponse" Content="命令响应"/>
+                                    <ComboBoxItem Tag="DataActivity" Content="数据活动"/>
+                                    <ComboBoxItem Tag="StatusQuery" Content="状态查询"/>
+                                    <ComboBoxItem Tag="Disabled" Content="禁用"/>
+                                </ComboBox>
+                            </StackPanel>
+
                             <!-- 心跳间隔 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="心跳间隔 (秒)：" Style="{StaticResource LabelStyle}"/>
                                 <TextBox Text="{Binding Gdm9060Config.HealthCheckIntervalSeconds, UpdateSourceTrigger=PropertyChanged}"
-                                         Style="{StaticResource InputBoxStyle}"/>
+                                        Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
 
                             <!-- 数据超时 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="数据超时 (秒)：" Style="{StaticResource LabelStyle}"/>
                                 <TextBox Text="{Binding Gdm9060Config.LastDataTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
-                                         Style="{StaticResource InputBoxStyle}"/>
+                                        Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>

@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
@@ -6,6 +7,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
     /// <summary>
     /// 霍尼韦尔 H1900 扫描枪配置
     /// 通信方式：USB连接，串口通信（虚拟串口）
+    /// 心跳检测：DataActivity模式，通过检测数据活动判断设备在线状态
     /// </summary>
     public class ScannerSerialCommunicationConfig : INotifyPropertyChanged
     {
@@ -15,6 +17,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
         private int _dataBits = 8;
         private string _stopBits = "1";
         private string _flowControl = "None";
+        private HealthCheckMode _healthCheckMode = HealthCheckMode.DataActivity;
         private int _healthCheckIntervalSeconds = 5;
         private int _lastDataTimeoutSeconds = 30;
 
@@ -70,6 +73,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
         {
             get => _flowControl;
             set { _flowControl = value; OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// 心跳检测模式（默认：DataActivity）
+        /// </summary>
+        public HealthCheckMode HealthCheckMode
+        {
+            get => _healthCheckMode;
+            set { _healthCheckMode = value; OnPropertyChanged(); }
         }
 
         /// <summary>
