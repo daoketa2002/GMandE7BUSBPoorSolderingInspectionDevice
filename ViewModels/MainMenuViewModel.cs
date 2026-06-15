@@ -173,16 +173,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 刷新PLC通信测试按钮的可见性
-        /// 每次进入主菜单时从配置中读取最新状态
+        /// 每次进入主菜单时从设备配置文件中读取最新状态
         /// </summary>
         private void RefreshPlcTestButtonVisibility()
         {
             try
             {
-                var appSettings = _settingsService.LoadSettings();
-                // TODO: 从 appSettings 中读取 IsPlcCommunicationTestEnabled 的值
-                // 当前使用默认值false
-                IsPlcCommunicationTestVisible = false;
+                var deviceSettings = _settingsService.LoadSettings();
+                IsPlcCommunicationTestVisible = deviceSettings.IsPlcCommunicationTestEnabled;
             }
             catch (Exception ex)
             {

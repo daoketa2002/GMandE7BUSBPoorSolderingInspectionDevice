@@ -313,23 +313,25 @@
                             <!-- 波特率 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="波特率：" Style="{StaticResource LabelStyle}"/>
-                                <ComboBox SelectedValue="{Binding ScannerConfig.BaudRate}"
-                                          Width="200" Height="30"
-                                          VerticalContentAlignment="Center">
+                                <ComboBox Width="200" Height="30"
+                                          VerticalContentAlignment="Center"
+                                          SelectedValuePath="Tag"
+                                          SelectedValue="{Binding ScannerConfig.BaudRate}">
                                     <ComboBoxItem Content="9600" Tag="9600"/>
                                     <ComboBoxItem Content="19200" Tag="19200"/>
                                     <ComboBoxItem Content="38400" Tag="38400"/>
                                     <ComboBoxItem Content="57600" Tag="57600"/>
-                                    <ComboBoxItem Content="115200" Tag="115200" IsSelected="True"/>
+                                    <ComboBoxItem Content="115200" Tag="115200"/>
                                 </ComboBox>
                             </StackPanel>
 
                             <!-- 校验位 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="校验位：" Style="{StaticResource LabelStyle}"/>
-                                <ComboBox SelectedValue="{Binding ScannerConfig.Parity}"
-                                          Width="200" Height="30"
-                                          VerticalContentAlignment="Center">
+                                <ComboBox Width="200" Height="30"
+                                          VerticalContentAlignment="Center"
+                                          SelectedValuePath="Content"
+                                          SelectedValue="{Binding ScannerConfig.Parity}">
                                     <ComboBoxItem Content="None"/>
                                     <ComboBoxItem Content="Odd"/>
                                     <ComboBoxItem Content="Even"/>
@@ -339,22 +341,24 @@
                             <!-- 数据位 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="数据位：" Style="{StaticResource LabelStyle}"/>
-                                <ComboBox SelectedValue="{Binding ScannerConfig.DataBits}"
-                                          Width="200" Height="30"
-                                          VerticalContentAlignment="Center">
-                                    <ComboBoxItem Content="5" Tag="5"/>
-                                    <ComboBoxItem Content="6" Tag="6"/>
-                                    <ComboBoxItem Content="7" Tag="7"/>
-                                    <ComboBoxItem Content="8" Tag="8" IsSelected="True"/>
+                                <ComboBox Width="200" Height="30"
+                                          VerticalContentAlignment="Center"
+                                          SelectedValuePath="Content"
+                                          SelectedValue="{Binding ScannerConfig.DataBits}">
+                                    <ComboBoxItem Content="5"/>
+                                    <ComboBoxItem Content="6"/>
+                                    <ComboBoxItem Content="7"/>
+                                    <ComboBoxItem Content="8"/>
                                 </ComboBox>
                             </StackPanel>
 
                             <!-- 停止位 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="停止位：" Style="{StaticResource LabelStyle}"/>
-                                <ComboBox SelectedValue="{Binding ScannerConfig.StopBits}"
-                                          Width="200" Height="30"
-                                          VerticalContentAlignment="Center">
+                                <ComboBox Width="200" Height="30"
+                                          VerticalContentAlignment="Center"
+                                          SelectedValuePath="Content"
+                                          SelectedValue="{Binding ScannerConfig.StopBits}">
                                     <ComboBoxItem Content="1"/>
                                     <ComboBoxItem Content="1.5"/>
                                     <ComboBoxItem Content="2"/>
@@ -364,9 +368,10 @@
                             <!-- 流控制 -->
                             <StackPanel Orientation="Horizontal" Margin="0,8">
                                 <TextBlock Text="流控制：" Style="{StaticResource LabelStyle}"/>
-                                <ComboBox SelectedValue="{Binding ScannerConfig.FlowControl}"
-                                          Width="200" Height="30"
-                                          VerticalContentAlignment="Center">
+                                <ComboBox Width="200" Height="30"
+                                          VerticalContentAlignment="Center"
+                                          SelectedValuePath="Content"
+                                          SelectedValue="{Binding ScannerConfig.FlowControl}">
                                     <ComboBoxItem Content="None"/>
                                     <ComboBoxItem Content="XOnXOff"/>
                                     <ComboBoxItem Content="RequestToSend"/>

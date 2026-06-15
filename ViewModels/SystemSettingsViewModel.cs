@@ -54,128 +54,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private int _selectedTabIndex = 0;
 
-        // ==================== 默认值（后续从appsettings.json读取后删除此区域） ====================
-        // TODO: 以下默认值仅作占位使用，后续改为从 appsettings.json 中读取
-        // 实际读取方式参考下方 GetDefaultSettings() 方法中的注释
-
-        /// <summary>
-        /// 获取FP0H默认配置（占位版本 - 后续可删除）
-        /// </summary>
-        private FP0HCommunicationConfig GetDefaultFP0HConfig_Placeholder()
-        {
-            return new FP0HCommunicationConfig
-            {
-                IpAddress = "192.168.1.3",
-                Port = 502,
-                SlaveId = 1,
-                ReceiveTimeoutMs = 5000,
-                SendTimeoutMs = 5000,
-                ReconnectDelayMs = 2000,
-                MaxReconnectAttempts = 12,
-                HealthCheckIntervalSeconds = 5
-            };
-        }
-
-        /// <summary>
-        /// 获取扫描仪默认配置（占位版本 - 后续可删除）
-        /// </summary>
-        private ScannerSerialCommunicationConfig GetDefaultScannerConfig_Placeholder()
-        {
-            return new ScannerSerialCommunicationConfig
-            {
-                SerialNumber = "COM9",
-                BaudRate = 115200,
-                Parity = "None",
-                DataBits = 8,
-                StopBits = "1",
-                FlowControl = "None",
-                HealthCheckIntervalSeconds = 5,
-                LastDataTimeoutSeconds = 30
-            };
-        }
-
-        /// <summary>
-        /// 获取GDM-9060默认配置（占位版本 - 后续可删除）
-        /// </summary>
-        private GDM9060CommunicationConfig GetDefaultGDM9060Config_Placeholder()
-        {
-            return new GDM9060CommunicationConfig
-            {
-                IpAddress = "192.168.1.4",
-                Port = 5025,
-                ReceiveTimeoutMs = 5000,
-                SendTimeoutMs = 5000,
-                HealthCheckIntervalSeconds = 5,
-                LastDataTimeoutSeconds = 30
-            };
-        }
-
-        // ==================== 第二套实现：从现有配置类获取默认值（占位版本可删除时启用此方法） ====================
-        // TODO: 当上面的占位默认值不再需要时，删除上面的三个Placeholder方法，
-        //       启用下面三个方法（取消注释），它们从现有的 设置相关类\ApplicationSettings.cs 中获取默认值。
-
-        /*
-        /// <summary>
-        /// 从现有配置获取FP0H默认值（第二套实现）
-        /// 读取 设置相关类\ApplicationSettings 中的 TcpClientPLCMotionControlSettings
-        /// </summary>
-        private FP0HConfig GetDefaultFP0HConfig_FromExisting()
-        {
-            var existingSettings = _settingsService.LoadSettings();
-            var tcpClient = existingSettings.TcpClientPLCMotion;
-            return new FP0HConfig
-            {
-                IpAddress = tcpClient.Host ?? "192.168.1.3",
-                Port = tcpClient.Port,
-                SlaveId = 1, // 默认Modbus从站ID
-                ReceiveTimeoutMs = tcpClient.ReceiveTimeoutMs ?? 5000,
-                SendTimeoutMs = tcpClient.SendTimeoutMs ?? 5000,
-                ReconnectDelayMs = tcpClient.ReconnectDelayMs ?? 2000,
-                MaxReconnectAttempts = tcpClient.MaxReconnectAttempts ?? 12,
-                HealthCheckIntervalSeconds = tcpClient.HealthCheckIntervalSeconds
-            };
-        }
-
-        /// <summary>
-        /// 从现有配置获取扫描仪默认值（第二套实现）
-        /// 读取 设置相关类\ApplicationSettings 中的 ScannerSerialCommunicationSettings
-        /// </summary>
-        private ScannerConfig GetDefaultScannerConfig_FromExisting()
-        {
-            var existingSettings = _settingsService.LoadSettings();
-            var scanner = existingSettings.ScannerSerialCommunication;
-            return new ScannerConfig
-            {
-                SerialNumber = scanner.SerialNumber ?? "COM9",
-                BaudRate = scanner.BaudRate,
-                Parity = scanner.Parity ?? "None",
-                DataBits = scanner.DataBits,
-                StopBits = scanner.StopBits ?? "1",
-                FlowControl = scanner.FlowControl ?? "None",
-                HealthCheckIntervalSeconds = scanner.HealthCheckIntervalSeconds,
-                LastDataTimeoutSeconds = scanner.LastDataTimeoutSeconds ?? 30
-            };
-        }
-
-        /// <summary>
-        /// 从现有配置获取GDM-9060默认值（第二套实现）
-        /// 读取 设置相关类\ApplicationSettings 中的 TcpClientGWInstekSettings
-        /// </summary>
-        private GDM9060Config GetDefaultGDM9060Config_FromExisting()
-        {
-            var existingSettings = _settingsService.LoadSettings();
-            var gwInstek = existingSettings.TcpClientGWInstek;
-            return new GDM9060Config
-            {
-                IpAddress = gwInstek.Host ?? "192.168.1.4",
-                Port = gwInstek.Port,
-                ReceiveTimeoutMs = 5000,    // 现有配置中未定义，使用默认值
-                SendTimeoutMs = 5000,       // 现有配置中未定义，使用默认值
-                HealthCheckIntervalSeconds = gwInstek.HealthCheckIntervalSeconds,
-                LastDataTimeoutSeconds = gwInstek.LastDataTimeoutSeconds ?? 30
-            };
-        }
-        */
 
         // ==================== 构造函数 ====================
 
@@ -209,11 +87,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 if (!confirmed) return;
 
-                // TODO: 切换实现时，将下面三行的 Placeholder 方法替换为 FromExisting 方法
-                // 当前使用占位默认值版本
-                Fp0hConfig = GetDefaultFP0HConfig_Placeholder();
-                ScannerConfig = GetDefaultScannerConfig_Placeholder();
-                Gdm9060Config = GetDefaultGDM9060Config_Placeholder();
+                // 恢复为默认值
+                Fp0hConfig = new FP0HCommunicationConfig();
+                ScannerConfig = new ScannerSerialCommunicationConfig();
+                Gdm9060Config = new GDM9060CommunicationConfig();
                 IsPlcCommunicationTestEnabled = false;
 
                 _logger.Information("所有设备配置已恢复为默认值");
@@ -235,30 +112,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                // 构建系统设备配置对象
                 var deviceSettings = new DeviceSettings
                 {
+                    // 映射 FP0H 配置
                     FP0HCommunication = Fp0hConfig,
+
+                    // 映射扫描仪配置
                     ScannerSerialCommunication = ScannerConfig,
+
+                    // 映射万用表配置
                     GDM9060Communication = Gdm9060Config,
+
+                    // 保存PLC测试开关状态
                     IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled
                 };
 
-                // TODO: 实际保存逻辑 - 将配置写入 settings.json
-                // 获取现有全部配置，更新其中的设备部分
-                var appSettings = _settingsService.LoadSettings();
-
-                // TODO: 将 deviceSettings 的值映射到 appSettings 中对应的属性
-                // 例如：
-                // appSettings.TcpClientPLCMotion.Host = deviceSettings.FP0HConfig.IpAddress;
-                // appSettings.TcpClientPLCMotion.Port = deviceSettings.FP0HConfig.Port;
-                // ... 其他映射
-                // appSettings.ScannerSerialCommunication.SerialNumber = deviceSettings.ScannerConfig.SerialNumber;
-                // ... 其他映射
-                // appSettings.TcpClientGWInstek.Host = deviceSettings.GDM9060Config.IpAddress;
-                // ... 其他映射
-
-                _settingsService.SaveSettings(appSettings);
+                // 直接保存 deviceSettings（它已经包含了所有需要的信息）
+                _settingsService.SaveSettings(deviceSettings);
 
                 _logger.Information("所有设备配置已保存成功");
                 await _notificationService.ShowInfoAsync("所有配置已保存成功！");
@@ -297,17 +167,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                var appSettings = _settingsService.LoadSettings();
+                var deviceSettings = _settingsService.LoadSettings();
 
-                // TODO: 从 appsettings.json 加载已保存的配置值
-                // 当前使用默认值占位，后续补充实际读取逻辑
+                // 加载 FP0H 配置
+                if (deviceSettings.FP0HCommunication != null)
+                    Fp0hConfig = deviceSettings.FP0HCommunication;
 
-                // 示例：从现有配置加载PLC设置
-                // Fp0hConfig.IpAddress = appSettings.TcpClientPLCMotion.Host ?? "192.168.1.3";
-                // Fp0hConfig.Port = appSettings.TcpClientPLCMotion.Port;
-                // ... 其他属性的加载
+                // 加载扫描仪配置
+                if (deviceSettings.ScannerSerialCommunication != null)
+                    ScannerConfig = deviceSettings.ScannerSerialCommunication;
 
-                _logger.Debug("设备配置加载完成（当前使用默认值占位）");
+                // 加载万用表配置
+                if (deviceSettings.GDM9060Communication != null)
+                    Gdm9060Config = deviceSettings.GDM9060Communication;
+
+                // 加载PLC测试开关状态
+                IsPlcCommunicationTestEnabled = deviceSettings.IsPlcCommunicationTestEnabled;
+
+                _logger.Debug("设备配置加载完成");
             }
             catch (Exception ex)
             {

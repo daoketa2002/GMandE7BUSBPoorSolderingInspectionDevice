@@ -124,7 +124,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // === 基础设施服务 ===
             services.AddSingleton<INotificationService, NotificationService>();
-            services.AddSingleton<IDeviceSettingsService, SettingsService>();
+            services.AddSingleton<IDeviceSettingsService, DeviceSettingsService>();
             services.AddSingleton<IOperatorStorageService, OperatorStorageService>();
             services.AddSingleton<IOperatorStateService, OperatorStateService>();
 

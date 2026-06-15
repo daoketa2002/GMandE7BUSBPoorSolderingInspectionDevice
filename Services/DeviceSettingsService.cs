@@ -11,11 +11,11 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
-    public class SettingsService : IDeviceSettingsService
+    public class DeviceSettingsService : IDeviceSettingsService
     {
         private readonly string _settingsFilePath;
 
-        public SettingsService(IConfiguration configuration)
+        public DeviceSettingsService(IConfiguration configuration)
         {
             var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
             var settingsFolderPath = Path.Combine(baseDirectory, "设置", "设备设置");
