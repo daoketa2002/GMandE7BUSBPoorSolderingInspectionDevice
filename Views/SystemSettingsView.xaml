@@ -1,0 +1,498 @@
+﻿<UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.SystemSettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
+             xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
+             mc:Ignorable="d" 
+             d:DesignHeight="600" d:DesignWidth="800"
+             Background="#F5F6FA">
+
+    <UserControl.Resources>
+        <!-- 标题样式 -->
+        <Style x:Key="HeaderTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#2C3E50"/>
+            <Setter Property="Margin" Value="0,0,0,20"/>
+        </Style>
+
+        <!-- 区块标题样式 -->
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#34495E"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+
+        <!-- 输入标签样式 -->
+        <Style x:Key="LabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="#555"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+            <Setter Property="MinWidth" Value="140"/>
+        </Style>
+
+        <!-- 输入框样式 -->
+        <Style x:Key="InputBoxStyle" TargetType="TextBox">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Width" Value="200"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="BorderBrush" Value="#BDC3C7"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="White"/>
+        </Style>
+
+        <!-- 底部按钮样式 -->
+        <Style x:Key="BottomButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="42"/>
+            <Setter Property="Width" Value="160"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="10,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                BorderThickness="0">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Opacity" Value="0.85"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- TabItem样式 -->
+        <Style TargetType="TabItem">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="20,10"/>
+            <Setter Property="Background" Value="#ECF0F1"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="8,8,0,0"
+                                Padding="{TemplateBinding Padding}"
+                                Margin="2,0,0,0">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            ContentSource="Header"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="TabBorder" Property="Background" Value="#3498DB"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- 
+        整体布局说明：
+        - 最外层Grid高度由父容器决定
+        - Row 0：顶部标题栏（固定高度）
+        - Row 1：TabControl内容区（占据剩余空间，内部各Tab页均可滚动）
+        - Row 2：底部按钮栏（固定高度）
+    -->
+    <Grid Margin="30">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ==================== 顶部标题栏 ==================== -->
+        <Border Grid.Row="0"
+                Background="White"
+                CornerRadius="10"
+                Padding="20"
+                Margin="0,0,0,20">
+            <StackPanel>
+                <TextBlock Text="⚙ 系统设定"
+                           FontSize="26"
+                           FontWeight="Bold"
+                           Foreground="#2C3E50"/>
+                <TextBlock Text="配置设备通信参数，修改后请点击保存"
+                           FontSize="13"
+                           Foreground="#7F8C8D"
+                           Margin="0,5,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 
+            ==================== 中间内容区：TabControl ====================
+            关键设计：
+            1. Border 高度自动填充剩余空间（Grid.Row="1" Height="*"）
+            2. TabControl 内部使用 ScrollViewer 包裹每个TabItem内容
+            3. 大窗口时ScrollViewer不显示滚动条，小窗口时自动出现滚动条
+        -->
+        <Border Grid.Row="1"
+                Background="White"
+                CornerRadius="10"
+                Padding="25">
+            <!-- 
+                TabControl 外层不设固定高度，由 Border 自动约束
+                Border 高度由 Grid.Row="1" Height="*" 决定
+            -->
+            <TabControl x:Name="DeviceTabControl"
+                        SelectedIndex="{Binding SelectedTabIndex}"
+                        BorderThickness="0"
+                        Background="Transparent">
+
+                <!-- ============================================================ -->
+                <!-- Tab 0：常规设置（PLC通信测试勾选框放在此处） -->
+                <!-- ============================================================ -->
+                <TabItem Header="⚙ 常规设置">
+                    <!-- 
+                        ScrollViewer 包裹整个Tab内容区域
+                        VerticalScrollBarVisibility="Auto"：内容超出时自动显示滚动条
+                        HorizontalScrollBarVisibility="Disabled"：禁用水平滚动，避免内容被截断
+                    -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="10">
+                        <StackPanel Margin="5">
+                            <TextBlock Text="系统常规设置"
+                                       Style="{StaticResource SectionTitleStyle}"
+                                       Margin="0,0,0,15"/>
+
+                            <!-- PLC通信测试勾选框区域 -->
+                            <Border Background="#F8F9FA"
+                                    CornerRadius="8"
+                                    Padding="20"
+                                    Margin="0,10,0,0">
+                                <StackPanel>
+                                    <CheckBox x:Name="PlcTestCheckBox"
+                                              IsChecked="{Binding IsPlcCommunicationTestEnabled}"
+                                              VerticalAlignment="Center"
+                                              Margin="0,0,0,10">
+                                        <CheckBox.Content>
+                                            <TextBlock Text="开启 PLC 通信测试功能"
+                                                       FontSize="15"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#2C3E50"/>
+                                        </CheckBox.Content>
+                                    </CheckBox>
+                                    <TextBlock Text="勾选后，主菜单将在「系统设置」按钮上方显示「PLC通信测试」按钮"
+                                               FontSize="12"
+                                               Foreground="#95A5A6"
+                                               Margin="20,0,0,0"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 预留其他常规设置的位置 -->
+                            <TextBlock Text="更多常规设置将在后续版本中添加..."
+                                       FontSize="12"
+                                       Foreground="#BDC3C7"
+                                       Margin="0,30,0,0"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ============================================================ -->
+                <!-- Tab 1：FP0H AFP0HC32ET PLC -->
+                <!-- ============================================================ -->
+                <TabItem Header="🔌 FP0H PLC">
+                    <!-- ScrollViewer：内容超出TabItem可用高度时自动出现垂直滚动条 -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="10">
+                        <StackPanel Margin="5">
+                            <TextBlock Text="FP0H AFP0HC32ET - ModbusTCP通信参数"
+                                       Style="{StaticResource SectionTitleStyle}"/>
+                            <TextBlock Text="通信方式：LAN网线连接 | 协议：ModbusTCP"
+                                       FontSize="11"
+                                       Foreground="#95A5A6"
+                                       Margin="0,0,0,15"/>
+
+                            <!-- IP地址 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="IP 地址：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.IpAddress, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 端口号 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="端口号：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.Port, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 从站ID -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="Modbus从站ID：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.SlaveId, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 分隔线 -->
+                            <Separator Margin="0,15" Background="#ECF0F1"/>
+
+                            <TextBlock Text="超时与重连设置" Style="{StaticResource SectionTitleStyle}"/>
+
+                            <!-- 接收超时 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="接收超时 (ms)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.ReceiveTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 发送超时 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="发送超时 (ms)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.SendTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 重连延迟 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="重连延迟 (ms)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.ReconnectDelayMs, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 最大重连次数 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="最大重连次数：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.MaxReconnectAttempts, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 心跳间隔 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="心跳间隔 (秒)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Fp0hConfig.HealthCheckIntervalSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ============================================================ -->
+                <!-- Tab 2：霍尼韦尔 H1900 扫描仪 -->
+                <!-- ============================================================ -->
+                <TabItem Header="📷 扫描仪 H1900">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="10">
+                        <StackPanel Margin="5">
+                            <TextBlock Text="霍尼韦尔 H1900 - 串口通信参数"
+                                       Style="{StaticResource SectionTitleStyle}"/>
+                            <TextBlock Text="通信方式：USB连接（虚拟串口）"
+                                       FontSize="11"
+                                       Foreground="#95A5A6"
+                                       Margin="0,0,0,15"/>
+
+                            <!-- 串口号 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="串口号：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding ScannerConfig.SerialNumber, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 波特率 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="波特率：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValue="{Binding ScannerConfig.BaudRate}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Content="9600" Tag="9600"/>
+                                    <ComboBoxItem Content="19200" Tag="19200"/>
+                                    <ComboBoxItem Content="38400" Tag="38400"/>
+                                    <ComboBoxItem Content="57600" Tag="57600"/>
+                                    <ComboBoxItem Content="115200" Tag="115200" IsSelected="True"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- 校验位 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="校验位：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValue="{Binding ScannerConfig.Parity}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Content="None"/>
+                                    <ComboBoxItem Content="Odd"/>
+                                    <ComboBoxItem Content="Even"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- 数据位 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="数据位：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValue="{Binding ScannerConfig.DataBits}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Content="5" Tag="5"/>
+                                    <ComboBoxItem Content="6" Tag="6"/>
+                                    <ComboBoxItem Content="7" Tag="7"/>
+                                    <ComboBoxItem Content="8" Tag="8" IsSelected="True"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- 停止位 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="停止位：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValue="{Binding ScannerConfig.StopBits}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Content="1"/>
+                                    <ComboBoxItem Content="1.5"/>
+                                    <ComboBoxItem Content="2"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- 流控制 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="流控制：" Style="{StaticResource LabelStyle}"/>
+                                <ComboBox SelectedValue="{Binding ScannerConfig.FlowControl}"
+                                          Width="200" Height="30"
+                                          VerticalContentAlignment="Center">
+                                    <ComboBoxItem Content="None"/>
+                                    <ComboBoxItem Content="XOnXOff"/>
+                                    <ComboBoxItem Content="RequestToSend"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- 分隔线 -->
+                            <Separator Margin="0,15" Background="#ECF0F1"/>
+
+                            <TextBlock Text="心跳设置" Style="{StaticResource SectionTitleStyle}"/>
+
+                            <!-- 心跳间隔 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="心跳间隔 (秒)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding ScannerConfig.HealthCheckIntervalSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 数据超时 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="数据超时 (秒)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding ScannerConfig.LastDataTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ============================================================ -->
+                <!-- Tab 3：固纬 GDM-9060 万用表 -->
+                <!-- ============================================================ -->
+                <TabItem Header="📏 GDM-9060 万用表">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="10">
+                        <StackPanel Margin="5">
+                            <TextBlock Text="固纬 GDM-9060 - SCPI通信参数"
+                                       Style="{StaticResource SectionTitleStyle}"/>
+                            <TextBlock Text="通信方式：LAN网线连接 | 协议：SCPI over TCP"
+                                       FontSize="11"
+                                       Foreground="#95A5A6"
+                                       Margin="0,0,0,15"/>
+
+                            <!-- IP地址 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="IP 地址：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.IpAddress, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 端口号 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="端口号：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.Port, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 分隔线 -->
+                            <Separator Margin="0,15" Background="#ECF0F1"/>
+
+                            <TextBlock Text="超时与心跳设置" Style="{StaticResource SectionTitleStyle}"/>
+
+                            <!-- 接收超时 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="接收超时 (ms)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.ReceiveTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 发送超时 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="发送超时 (ms)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.SendTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 心跳间隔 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="心跳间隔 (秒)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.HealthCheckIntervalSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+
+                            <!-- 数据超时 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="数据超时 (秒)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.LastDataTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+            </TabControl>
+        </Border>
+
+        <!-- ==================== 底部按钮栏 ==================== -->
+        <Border Grid.Row="2"
+                Background="White"
+                CornerRadius="10"
+                Padding="20"
+                Margin="0,20,0,0">
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Center">
+                <!-- 恢复默认配置 -->
+                <Button Content="🔄 恢复默认配置"
+                        Style="{StaticResource BottomButtonStyle}"
+                        Background="#E67E22"
+                        Foreground="White"
+                        Command="{Binding ResetToDefaultCommand}"/>
+
+                <!-- 保存所有配置 -->
+                <Button Content="💾 保存所有配置"
+                        Style="{StaticResource BottomButtonStyle}"
+                        Background="#27AE60"
+                        Foreground="White"
+                        Command="{Binding SaveAllConfigCommand}"/>
+
+                <!-- 返回主菜单 -->
+                <Button Content="↩ 返回主菜单"
+                        Style="{StaticResource BottomButtonStyle}"
+                        Background="#7F8C8D"
+                        Foreground="White"
+                        Command="{Binding NavigateBackToMainMenuCommand}"/>
+            </StackPanel>
+        </Border>
+
+    </Grid>
+</UserControl>

@@ -14,18 +14,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IOperatorStateService _operatorStateService;
+        private readonly ISettingsService _settingsService;
         private readonly Serilog.ILogger _logger;
 
         public MainMenuViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
-            IOperatorStateService operatorStateService)
+            IOperatorStateService operatorStateService,
+            ISettingsService settingsService)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
+            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _logger = Log.ForContext<MainMenuViewModel>();
         }
+
+        /// <summary>
+        /// 是否显示PLC通信测试按钮
+        /// 从系统设备配置中读取，由系统设定页面的勾选框控制
+        /// </summary>
+        [ObservableProperty]
+        private bool _isPlcCommunicationTestVisible = false;
 
         [RelayCommand]
         private async Task NavigateToRunScreenAsync()
@@ -112,6 +122,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 系统设定导航命令（修改原有的 NavigateToSystemSettingsAsync）
+        /// </summary>
         [RelayCommand]
         private async Task NavigateToSystemSettingsAsync()
         {
@@ -124,6 +137,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 if (isPasswordVerified)
                 {
                     _logger.Information("密码验证通过，导航到系统设置界面");
+                    await _navigationService.NavigateToAsync<SystemSettingsView>("Main", null);
                 }
                 else
                 {
@@ -136,6 +150,47 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
+
+        /// <summary>
+        /// PLC通信测试按钮点击命令
+        /// TODO: 实际PLC通信测试逻辑待实现
+        /// </summary>
+        [RelayCommand]
+        private async Task NavigateToPlcCommunicationTestAsync()
+        {
+            try
+            {
+                _logger.Information("用户点击PLC通信测试按钮");
+                // TODO: 跳转到PLC通信测试页面或直接执行测试
+                await _notificationService.ShowInfoAsync("PLC通信测试功能开发中...\n该功能将在后续版本实现。", "提示");
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "PLC通信测试操作失败");
+                await _notificationService.ShowErrorAsync($"操作失败：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 刷新PLC通信测试按钮的可见性
+        /// 每次进入主菜单时从配置中读取最新状态
+        /// </summary>
+        private void RefreshPlcTestButtonVisibility()
+        {
+            try
+            {
+                var appSettings = _settingsService.LoadSettings();
+                // TODO: 从 appSettings 中读取 IsPlcCommunicationTestEnabled 的值
+                // 当前使用默认值false
+                IsPlcCommunicationTestVisible = false;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "读取PLC通信测试配置失败，默认隐藏按钮");
+                IsPlcCommunicationTestVisible = false;
+            }
+        }
+
 
         [RelayCommand]
         private async Task ExitApplicationAsync()
@@ -158,6 +213,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.Debug("进入主菜单");
+            RefreshPlcTestButtonVisibility();   // 刷新PLC通信测试按钮状态
             return Task.CompletedTask;
         }
 

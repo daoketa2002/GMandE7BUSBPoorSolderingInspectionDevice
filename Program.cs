@@ -191,7 +191,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<PlanSettingViewModel>();
             services.AddTransient<PlanEditViewModel>();
             services.AddTransient<LogDataViewModel>();
-            services.AddTransient<LogDataViewModel>();
+            services.AddTransient<SystemSettingsViewModel>();
 
             // === Views ===
             services.AddTransient<MainWindow>();
@@ -202,6 +202,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<PlanSettingView>();
             services.AddTransient<PlanEditView>();
             services.AddTransient<LogDataView>();
+            services.AddTransient<SystemSettingsView>();
 
             // === 其他服务 ===
             services.AddLogging();

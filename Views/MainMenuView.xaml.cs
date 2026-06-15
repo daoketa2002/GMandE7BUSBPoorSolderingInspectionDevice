@@ -28,10 +28,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
             InitializeComponent();
             DataContext = viewModel;
 
+            // 绑定各按钮命令
             RunScreenBtn.Command = viewModel.NavigateToRunScreenCommand;
             OperatorSettingsBtn.Command = viewModel.NavigateToOperatorSettingsCommand;
-            PlanSettingBtn.Command = viewModel.NavigateToPlanSettingCommand;      // 🆕
+            PlanSettingBtn.Command = viewModel.NavigateToPlanSettingCommand;      
             DataExtractBtn.Command = viewModel.NavigateToDataExtractCommand;
+            PlcTestBtn.Command = viewModel.NavigateToPlcCommunicationTestCommand;
             SystemSettingsBtn.Command = viewModel.NavigateToSystemSettingsCommand;
             ExitBtn.Command = viewModel.ExitApplicationCommand;
         }
