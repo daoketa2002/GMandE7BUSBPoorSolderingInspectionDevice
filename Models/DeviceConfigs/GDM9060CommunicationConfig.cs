@@ -7,7 +7,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
     /// 固纬 GDM-9060 万用表配置
     /// 通信方式：LAN网线连接，SCPI协议 over TCP
     /// </summary>
-    public class GDM9060Config : INotifyPropertyChanged
+    public class GDM9060CommunicationConfig : INotifyPropertyChanged
     {
         private string _ipAddress = "192.168.1.4";
         private int _port = 5025;

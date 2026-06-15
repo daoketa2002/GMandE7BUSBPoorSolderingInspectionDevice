@@ -17,7 +17,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     {
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
-        private readonly ISettingsService _settingsService;
+        private readonly IDeviceSettingsService _settingsService;
         private readonly Serilog.ILogger _logger;
 
         // ==================== 设备配置属性 ====================
@@ -26,19 +26,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// FP0H PLC配置
         /// </summary>
         [ObservableProperty]
-        private FP0HConfig _fp0hConfig = new FP0HConfig();
+        private FP0HCommunicationConfig _fp0hConfig = new FP0HCommunicationConfig();
 
         /// <summary>
         /// 扫描仪H1900配置
         /// </summary>
         [ObservableProperty]
-        private ScannerConfig _scannerConfig = new ScannerConfig();
+        private ScannerSerialCommunicationConfig _scannerConfig = new ScannerSerialCommunicationConfig();
 
         /// <summary>
         /// GDM-9060万用表配置
         /// </summary>
         [ObservableProperty]
-        private GDM9060Config _gdm9060Config = new GDM9060Config();
+        private GDM9060CommunicationConfig _gdm9060Config = new GDM9060CommunicationConfig();
 
         /// <summary>
         /// 是否开启PLC通信测试功能
@@ -61,9 +61,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 获取FP0H默认配置（占位版本 - 后续可删除）
         /// </summary>
-        private FP0HConfig GetDefaultFP0HConfig_Placeholder()
+        private FP0HCommunicationConfig GetDefaultFP0HConfig_Placeholder()
         {
-            return new FP0HConfig
+            return new FP0HCommunicationConfig
             {
                 IpAddress = "192.168.1.3",
                 Port = 502,
@@ -79,9 +79,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 获取扫描仪默认配置（占位版本 - 后续可删除）
         /// </summary>
-        private ScannerConfig GetDefaultScannerConfig_Placeholder()
+        private ScannerSerialCommunicationConfig GetDefaultScannerConfig_Placeholder()
         {
-            return new ScannerConfig
+            return new ScannerSerialCommunicationConfig
             {
                 SerialNumber = "COM9",
                 BaudRate = 115200,
@@ -97,9 +97,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 获取GDM-9060默认配置（占位版本 - 后续可删除）
         /// </summary>
-        private GDM9060Config GetDefaultGDM9060Config_Placeholder()
+        private GDM9060CommunicationConfig GetDefaultGDM9060Config_Placeholder()
         {
-            return new GDM9060Config
+            return new GDM9060CommunicationConfig
             {
                 IpAddress = "192.168.1.4",
                 Port = 5025,
@@ -182,7 +182,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public SystemSettingsViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
-            ISettingsService settingsService)
+            IDeviceSettingsService settingsService)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
@@ -236,11 +236,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             try
             {
                 // 构建系统设备配置对象
-                var deviceSettings = new SystemDeviceSettings
+                var deviceSettings = new DeviceSettings
                 {
-                    FP0HConfig = Fp0hConfig,
-                    ScannerConfig = ScannerConfig,
-                    GDM9060Config = Gdm9060Config,
+                    FP0HCommunication = Fp0hConfig,
+                    ScannerSerialCommunication = ScannerConfig,
+                    GDM9060Communication = Gdm9060Config,
                     IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled
                 };
 

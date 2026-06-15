@@ -7,7 +7,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
     /// 霍尼韦尔 H1900 扫描枪配置
     /// 通信方式：USB连接，串口通信（虚拟串口）
     /// </summary>
-    public class ScannerConfig : INotifyPropertyChanged
+    public class ScannerSerialCommunicationConfig : INotifyPropertyChanged
     {
         private string _serialNumber = "COM9";
         private int _baudRate = 115200;

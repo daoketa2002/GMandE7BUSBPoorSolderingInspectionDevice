@@ -58,7 +58,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _logDataFolder = Path.Combine(
                 AppDomain.CurrentDomain.BaseDirectory,
-                "设置", "日志数据");
+                 "日志数据");
             _logger.LogInformation("日志数据服务初始化，数据路径: {Path}", _logDataFolder);
         }
 

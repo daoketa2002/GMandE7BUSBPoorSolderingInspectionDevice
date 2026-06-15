@@ -10,6 +10,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 配置管理器 - 统一管理 appsettings.json 的读写操作
+    /// 当前项目未使用
     /// </summary>
     public class ConfigManagerService : IDisposable
     {

@@ -7,7 +7,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
     /// FP0H AFP0HC32ET PLC 设备配置
     /// 通信方式：LAN网线连接，ModbusTCP协议
     /// </summary>
-    public class FP0HConfig : INotifyPropertyChanged
+    public class FP0HCommunicationConfig : INotifyPropertyChanged
     {
         private string _ipAddress = "192.168.1.3";
         private int _port = 502;

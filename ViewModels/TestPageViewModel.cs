@@ -35,7 +35,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly InspectionEngine? _inspectionEngine;
 
         // ⭐ 新增：设置服务（避免手动new）
-        private readonly ISettingsService _settingsService;
+        private readonly IDeviceSettingsService _settingsService;
         private readonly IOperatorStateService _operatorStateService;
 
         #endregion
@@ -49,7 +49,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             ILogger<TestPageViewModel> logger,
             ITcpClientPLCMotionService plcService,
             GwInstekGDM9060Driver dmmDriver,
-            ISettingsService settingsService,
+            IDeviceSettingsService settingsService,
             ICurrentPlanService currentPlanService,
             HoneywellH1900Scanner? scanner = null,
             InspectionEngine? inspectionEngine = null)

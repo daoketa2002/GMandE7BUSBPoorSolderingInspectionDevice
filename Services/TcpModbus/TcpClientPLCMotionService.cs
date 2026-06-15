@@ -7,10 +7,11 @@ using System.Text;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
-using static GMandE7BUSBPoorSolderingInspectionDevice.设置相关类.ApplicationSettings;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Generic;
+using static GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs.DeviceSettings;
 
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
@@ -36,9 +37,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         private readonly ILogger<TcpClientPLCMotionService> _logger;
 
         /// <summary>
-        /// 设置服务
+        /// 设备设置服务
         /// </summary>
-        private readonly ISettingsService _settingsService;
+        private readonly IDeviceSettingsService _settingsService;
 
         /// <summary>
         /// 当前TCP客户端PLC动作控制设置
@@ -163,7 +164,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <param name="settingsService">设置服务，用于加载TCP客户端PLC动作控制设置</param>
         public TcpClientPLCMotionService(
             ILogger<TcpClientPLCMotionService> logger,
-            ISettingsService settingsService)
+            IDeviceSettingsService settingsService)
         {
             _logger = logger;
             _settingsService = settingsService;

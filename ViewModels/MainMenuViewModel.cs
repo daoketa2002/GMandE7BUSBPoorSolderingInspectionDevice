@@ -14,14 +14,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IOperatorStateService _operatorStateService;
-        private readonly ISettingsService _settingsService;
+        private readonly IDeviceSettingsService _settingsService;
         private readonly Serilog.ILogger _logger;
 
         public MainMenuViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
             IOperatorStateService operatorStateService,
-            ISettingsService settingsService)
+            IDeviceSettingsService settingsService)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
