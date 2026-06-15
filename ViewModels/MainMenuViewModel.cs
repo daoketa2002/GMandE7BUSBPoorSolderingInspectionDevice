@@ -181,6 +181,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 var deviceSettings = _settingsService.LoadSettings();
                 IsPlcCommunicationTestVisible = deviceSettings.IsPlcCommunicationTestEnabled;
+                _logger.Debug("PLC通信测试按钮可见性: {IsVisible}", IsPlcCommunicationTestVisible);
             }
             catch (Exception ex)
             {
