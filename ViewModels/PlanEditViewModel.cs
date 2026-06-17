@@ -9,6 +9,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Windows;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
@@ -17,6 +18,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
+        private readonly IScannerBarcodeService? _scannerService;
         private readonly Serilog.ILogger _logger;
 
         private bool _isEditMode = false;
@@ -25,11 +27,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public PlanEditViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
-            IPlanStorageService planStorageService)
+            IPlanStorageService planStorageService,
+            IScannerBarcodeService? scannerService = null)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
+            _scannerService = scannerService;
             _logger = Log.ForContext<PlanEditViewModel>();
 
             SeriesOptions = new ObservableCollection<string>(PlanStorageService.DefaultSeries);
@@ -279,11 +283,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.Information("新增模式");
             }
 
+            // 订阅扫描枪（用于自动填充机种名称）
+            if (_scannerService != null)
+            {
+                _scannerService.BarcodeParsed += OnBarcodeParsed;
+            }
+
             return Task.CompletedTask;
         }
 
         public Task OnNavigatedFromAsync()
         {
+            if (_scannerService != null)
+            {
+                _scannerService.BarcodeParsed -= OnBarcodeParsed;
+            }
             _logger.Debug("离开方案编辑页面");
             return Task.CompletedTask;
         }
@@ -294,6 +308,27 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         #endregion
+
+        private void OnBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                // 自动填充机种名称
+                if (string.IsNullOrWhiteSpace(Model))
+                {
+                    Model = e.ModelName;
+                }
+
+                // 自动推断系列
+                if (string.IsNullOrWhiteSpace(Series))
+                {
+                    if (e.ModelName.StartsWith("T998", StringComparison.OrdinalIgnoreCase))
+                        Series = "GM5";
+                    else if (e.ModelName.StartsWith("998", StringComparison.OrdinalIgnoreCase))
+                        Series = "E78";
+                }
+            });
+        }
     }
 
     /// <summary>

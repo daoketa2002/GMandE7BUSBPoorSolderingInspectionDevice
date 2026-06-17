@@ -31,12 +31,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         // ⭐ 硬件服务
         private readonly ITcpClientPLCMotionService _plcService;
         private readonly GwInstekGDM9060Driver _dmmDriver;
-        private readonly HoneywellH1900Scanner? _scanner;
         private readonly InspectionEngine? _inspectionEngine;
 
-        // ⭐ 新增：设置服务（避免手动new）
         private readonly IDeviceSettingsService _settingsService;
         private readonly IOperatorStateService _operatorStateService;
+        private readonly IScannerBarcodeService? _scannerService;
 
         #endregion
 
@@ -51,8 +50,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             GwInstekGDM9060Driver dmmDriver,
             IDeviceSettingsService settingsService,
             IPlanStorageService planStorageService,
-            HoneywellH1900Scanner? scanner = null,
-            InspectionEngine? inspectionEngine = null)
+            IScannerBarcodeService scannerBarcodeService,
+            InspectionEngine? inspectionEngine = null
+            )
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
@@ -64,7 +64,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
-            _scanner = scanner;
+            _scannerService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
             _inspectionEngine = inspectionEngine;
 
             InitializeClock();
@@ -112,10 +112,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             };
 
             // 扫描枪事件
-            if (_scanner != null)
+            if (_scannerService != null)
             {
-                _scanner.BarcodeReceived += OnScannerBarcodeReceived;
-                _scanner.ConnectionStateChanged += (s, connected) =>
+                _scannerService.BarcodeParsed += OnScannerBarcodeParsed;
+                _scannerService.ConnectionStateChanged += (s, connected) =>
                 {
                     Application.Current.Dispatcher.Invoke(() =>
                     {
@@ -135,12 +135,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
-        private void OnScannerBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
+        private void OnScannerBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
-                SerialNumber = e.Barcode;
-                AddLog($"📷 扫描到条码: {e.Barcode}");
+                SerialNumber = e.SerialPart ?? e.RawBarcode;
+                AddLog($"📷 扫描到条码: {e.RawBarcode}");
             });
         }
 
@@ -302,14 +302,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             try
             {
-                if (_scanner != null)
+                if (_scannerService != null)
                 {
-                    _scanner.Disconnect();
+                    _scannerService.Disconnect();
 
                     // ✅ 修正：直接使用注入的 _settingsService
                     var settings = _settingsService.LoadSettings();
                     var portName = settings.ScannerSerialCommunication?.SerialNumber ?? "COM9";
-                    var result = _scanner.Connect(portName);
+                    var result = _scannerService.Connect(portName);
 
                     IsScannerConnected = result;
                     ScannerStatusText = result ? "已连接" : "断开";
@@ -663,9 +663,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _clockTimer?.Stop();
             _clockTimer = null;
 
-            if (_scanner != null)
+            if (_scannerService != null)
             {
-                _scanner.BarcodeReceived -= OnScannerBarcodeReceived;
+                _scannerService.BarcodeParsed -= OnScannerBarcodeParsed;
             }
 
             if (_inspectionEngine != null)

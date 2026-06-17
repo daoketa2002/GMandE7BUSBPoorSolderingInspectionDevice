@@ -142,6 +142,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             services.AddSingleton<ILogDataService, LogDataService>();    // 日志数据服务（接口注入）
             services.AddSingleton<ICsvExportService, CsvExportService>(); // CSV导出服务（接口注入）
+            services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>(); // 扫描枪条码接收和解析
 
             // ⭐⭐⭐ ====== 新增：硬件驱动服务注册 ====== ⭐⭐⭐
 
