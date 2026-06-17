@@ -149,11 +149,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     await _notificationService.ShowWarningAsync("请输入/选择系列！", "校验失败");
                     return;
                 }
-                if (string.IsNullOrWhiteSpace(Model))
-                {
-                    await _notificationService.ShowWarningAsync("请输入/选择型号！", "校验失败");
-                    return;
-                }
+                //if (string.IsNullOrWhiteSpace(Model))
+                //{
+                //    await _notificationService.ShowWarningAsync("请输入/选择型号！", "校验失败");
+                //    return;
+                //}
                 if (string.IsNullOrWhiteSpace(PlanName))
                 {
                     await _notificationService.ShowWarningAsync("请输入方案名称！", "校验失败");
@@ -178,7 +178,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var plan = new PlanModel
                 {
                     Series = Series.Trim(),
-                    Model = Model.Trim(),
+                    Model = Model?.Trim() ?? string.Empty,  // ← 允许为空
                     PlanName = PlanName.Trim(),
                     Items = Items.Select(item => new PlanItem
                     {

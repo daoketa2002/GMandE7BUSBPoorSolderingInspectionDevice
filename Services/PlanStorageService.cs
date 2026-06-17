@@ -238,8 +238,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             if (string.IsNullOrWhiteSpace(plan.Series))
                 throw new ArgumentException("系列不能为空");
-            if (string.IsNullOrWhiteSpace(plan.Model))
-                throw new ArgumentException("型号不能为空");
+            //if (string.IsNullOrWhiteSpace(plan.Model))
+            //    throw new ArgumentException("型号不能为空");
             if (string.IsNullOrWhiteSpace(plan.PlanName))
                 throw new ArgumentException("方案名称不能为空");
 
