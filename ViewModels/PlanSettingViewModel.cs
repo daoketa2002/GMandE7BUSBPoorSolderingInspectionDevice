@@ -134,31 +134,66 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 应用过滤条件
+        /// 应用过滤条件，初版
+        /// </summary>
+        //private void ApplyFilter()
+        //{
+        //    var filtered = _allPlans.AsEnumerable();
+
+        //    if (!string.IsNullOrWhiteSpace(FilterSeries))
+        //    {
+        //        var series = FilterSeries.Trim();
+        //        filtered = filtered.Where(p => p.Series.Contains(series, StringComparison.OrdinalIgnoreCase));
+        //    }
+
+        //    if (!string.IsNullOrWhiteSpace(FilterModel))
+        //    {
+        //        var model = FilterModel.Trim();
+        //        filtered = filtered.Where(p => p.Model.Contains(model, StringComparison.OrdinalIgnoreCase));
+        //    }
+
+        //    if (!string.IsNullOrWhiteSpace(FilterPlanName))
+        //    {
+        //        var planName = FilterPlanName.Trim();
+        //        filtered = filtered.Where(p => p.PlanName.Contains(planName, StringComparison.OrdinalIgnoreCase));
+        //    }
+
+        //    Plans = new ObservableCollection<PlanModel>(filtered.OrderBy(p => p.Series).ThenBy(p => p.Model).ThenBy(p => p.PlanName));
+        //    TotalCountText = $"共 {Plans.Count} 个方案";
+        //    _totalPlanCount = Plans.Count;
+        //}
+
+        /// <summary>
+        /// 应用过滤条件（AND组合，空条件跳过，全空返回全部方案）
         /// </summary>
         private void ApplyFilter()
         {
             var filtered = _allPlans.AsEnumerable();
 
-            if (!string.IsNullOrWhiteSpace(FilterSeries))
-            {
-                var series = FilterSeries.Trim();
+            var series = FilterSeries?.Trim();
+            var model = FilterModel?.Trim();
+            var planName = FilterPlanName?.Trim();
+
+            // AND组合：有值的条件参与筛选，空的条件跳过
+            if (!string.IsNullOrWhiteSpace(series))
                 filtered = filtered.Where(p => p.Series.Contains(series, StringComparison.OrdinalIgnoreCase));
-            }
 
-            if (!string.IsNullOrWhiteSpace(FilterModel))
-            {
-                var model = FilterModel.Trim();
+            if (!string.IsNullOrWhiteSpace(model))
                 filtered = filtered.Where(p => p.Model.Contains(model, StringComparison.OrdinalIgnoreCase));
-            }
 
-            if (!string.IsNullOrWhiteSpace(FilterPlanName))
-            {
-                var planName = FilterPlanName.Trim();
+            if (!string.IsNullOrWhiteSpace(planName))
                 filtered = filtered.Where(p => p.PlanName.Contains(planName, StringComparison.OrdinalIgnoreCase));
-            }
 
-            Plans = new ObservableCollection<PlanModel>(filtered.OrderBy(p => p.Series).ThenBy(p => p.Model).ThenBy(p => p.PlanName));
+            var result = filtered.OrderBy(p => p.Series)
+                                 .ThenBy(p => p.Model)
+                                 .ThenBy(p => p.PlanName)
+                                 .ToList();
+
+            Plans.Clear();
+            foreach (var p in result)
+            {
+                Plans.Add(p);
+            }
             TotalCountText = $"共 {Plans.Count} 个方案";
             _totalPlanCount = Plans.Count;
         }

@@ -1,9 +1,11 @@
 ﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -11,13 +13,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 基于JSON文件的方案存储服务
-    /// 按系列保存到同一个JSON文件（如 GM5_Scheme.json）
+    /// 按系列分文件夹，单文件最多MaxSchemesPerFile个方案，超出自动分片
+    /// 目录结构：设置\方案设置\{系列名}\scheme_001.json, scheme_002.json...
     /// </summary>
     public class PlanStorageService : IPlanStorageService
     {
         private readonly ILogger<PlanStorageService> _logger;
         private readonly string _planFolderPath;
         private readonly JsonSerializerOptions _jsonOptions;
+        private readonly int _maxSchemesPerFile;
         private static readonly object _lock = new();
 
         /// <summary>
@@ -35,7 +39,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         public static readonly List<string> PinList = GeneratePinList();
 
-        public PlanStorageService(ILogger<PlanStorageService> logger)
+        public PlanStorageService(ILogger<PlanStorageService> logger, IConfiguration configuration)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -48,8 +52,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 PropertyNameCaseInsensitive = true
             };
 
-            _logger.LogInformation("方案存储服务初始化完成，路径: {Path}", _planFolderPath);
+            _maxSchemesPerFile = configuration?.GetValue<int>("PlanStorage:MaxSchemesPerFile", 50) ?? 50;
+            if (_maxSchemesPerFile < 1) _maxSchemesPerFile = 50;
+
+            _logger.LogInformation("方案存储服务初始化完成，路径: {Path}，单文件上限: {Max}", _planFolderPath, _maxSchemesPerFile);
         }
+
+        #region 辅助方法
 
         /// <summary>
         /// 生成固定引脚列表 A1~A20, B1~B20
@@ -66,69 +75,124 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <summary>
-        /// 获取系列对应的JSON文件路径
+        /// 安全的文件名
         /// </summary>
-        private string GetSeriesFilePath(string series)
+        private static string SanitizeFileName(string name)
         {
-            var safeName = series
-                .Replace("\\", "_")
-                .Replace("/", "_")
-                .Replace(":", "_")
-                .Replace("*", "_")
-                .Replace("?", "_")
-                .Replace("\"", "_")
-                .Replace("<", "_")
-                .Replace(">", "_")
-                .Replace("|", "_");
-            return Path.Combine(_planFolderPath, $"{safeName}_Scheme.json");
+            var invalid = Path.GetInvalidFileNameChars();
+            var safe = new StringBuilder(name);
+            foreach (var c in invalid)
+                safe.Replace(c, '_');
+            return safe.ToString();
         }
 
         /// <summary>
-        /// 加载指定系列的所有方案
+        /// 获取系列文件夹路径：设置\方案设置\GM5\
         /// </summary>
-        private SeriesSchemeCollection LoadSeriesSchemes(string series)
+        private string GetSeriesFolderPath(string series)
         {
-            var filePath = GetSeriesFilePath(series);
-            if (!File.Exists(filePath))
-            {
-                return new SeriesSchemeCollection();
-            }
+            var safeName = SanitizeFileName(series);
+            var folder = Path.Combine(_planFolderPath, safeName);
+            Directory.CreateDirectory(folder);
+            return folder;
+        }
+
+        /// <summary>
+        /// 获取分片文件路径：设置\方案设置\GM5\scheme_001.json
+        /// </summary>
+        private string GetSchemeFilePath(string series, int fileIndex)
+        {
+            return Path.Combine(GetSeriesFolderPath(series), $"scheme_{fileIndex:D3}.json");
+        }
+
+        /// <summary>
+        /// 加载指定系列的所有方案（合并所有分片文件）
+        /// </summary>
+        private List<PlanModel> LoadSchemesFromSeriesFolder(string series)
+        {
+            var folder = GetSeriesFolderPath(series);
+            var allSchemes = new List<PlanModel>();
+
+            if (!Directory.Exists(folder))
+                return allSchemes;
 
             try
             {
-                var json = File.ReadAllText(filePath, System.Text.Encoding.UTF8);
-                var collection = JsonSerializer.Deserialize<SeriesSchemeCollection>(json, _jsonOptions);
-                return collection ?? new SeriesSchemeCollection();
+                var files = Directory.GetFiles(folder, "scheme_*.json")
+                                     .OrderBy(f => f)
+                                     .ToList();
+
+                foreach (var file in files)
+                {
+                    try
+                    {
+                        var json = File.ReadAllText(file, Encoding.UTF8);
+                        var schemes = JsonSerializer.Deserialize<List<PlanModel>>(json, _jsonOptions);
+                        if (schemes != null)
+                            allSchemes.AddRange(schemes);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "解析方案分片文件失败: {File}", file);
+                    }
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "加载系列方案文件失败: {FilePath}", filePath);
-                return new SeriesSchemeCollection();
+                _logger.LogWarning(ex, "遍历系列文件夹失败: {Folder}", folder);
             }
+
+            return allSchemes;
         }
 
         /// <summary>
-        /// 保存指定系列的所有方案
+        /// 将方案列表分片写入系列文件夹
         /// </summary>
-        private void SaveSeriesSchemes(string series, SeriesSchemeCollection collection)
+        private void WriteSchemesToSeriesFolder(string series, List<PlanModel> schemes)
         {
-            var filePath = GetSeriesFilePath(series);
+            var folder = GetSeriesFolderPath(series);
 
-            // 如果方案列表为空，删除文件
-            if (collection.Schemes.Count == 0)
+            // 计算分片数
+            int totalFiles = (schemes.Count + _maxSchemesPerFile - 1) / _maxSchemesPerFile;
+            if (totalFiles == 0) totalFiles = 0;
+
+            // 写入各分片
+            for (int i = 0; i < totalFiles; i++)
             {
-                if (File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                    _logger.LogInformation("系列方案文件已删除（无方案）: {FilePath}", filePath);
-                }
-                return;
+                var chunk = schemes.Skip(i * _maxSchemesPerFile).Take(_maxSchemesPerFile).ToList();
+                var filePath = GetSchemeFilePath(series, i + 1);
+                var json = JsonSerializer.Serialize(chunk, _jsonOptions);
+                File.WriteAllText(filePath, json, Encoding.UTF8);
+                _logger.LogDebug("分片写入: {File}, 方案数: {Count}", filePath, chunk.Count);
             }
 
-            var json = JsonSerializer.Serialize(collection, _jsonOptions);
-            File.WriteAllText(filePath, json, System.Text.Encoding.UTF8);
-            _logger.LogInformation("系列方案文件已保存: {FilePath}", filePath);
+            // 删除多余的空文件（方案减少后残留的scheme_xxx.json）
+            if (Directory.Exists(folder))
+            {
+                var existingFiles = Directory.GetFiles(folder, "scheme_*.json");
+                foreach (var file in existingFiles)
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(file);
+                    var numStr = fileName.Replace("scheme_", "");
+                    if (int.TryParse(numStr, out int index) && index > totalFiles)
+                    {
+                        File.Delete(file);
+                        _logger.LogInformation("已删除多余分片文件: {File}", file);
+                    }
+                }
+
+                // 如果文件夹为空，删除文件夹
+                if (Directory.GetFiles(folder).Length == 0)
+                {
+                    Directory.Delete(folder);
+                    _logger.LogInformation("系列文件夹已删除（无方案）: {Folder}", folder);
+                }
+            }
         }
+
+        #endregion
+
+        #region IPlanStorageService 实现
 
         /// <inheritdoc/>
         public async Task<List<PlanModel>> LoadAllPlansAsync()
@@ -141,37 +205,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                     if (!Directory.Exists(_planFolderPath))
                     {
-                        _logger.LogInformation("方案文件夹不存在，返回空列表");
-                        return allPlans;
+                        Directory.CreateDirectory(_planFolderPath);
                     }
 
-                    try
+                    // 遍历系列子文件夹
+                    var seriesDirs = Directory.GetDirectories(_planFolderPath);
+
+                    // 首次运行：无任何系列文件夹，自动导入默认方案
+                    if (seriesDirs.Length == 0)
                     {
-                        var files = Directory.GetFiles(_planFolderPath, "*_Scheme.json");
-                        foreach (var file in files)
+                        _logger.LogInformation("未检测到任何方案，正在导入默认方案...");
+                        var defaults = PlanModel.GetDefaultPlans();
+                        foreach (var plan in defaults)
                         {
-                            try
-                            {
-                                var json = File.ReadAllText(file, System.Text.Encoding.UTF8);
-                                var collection = JsonSerializer.Deserialize<SeriesSchemeCollection>(json, _jsonOptions);
-                                if (collection?.Schemes != null)
-                                {
-                                    allPlans.AddRange(collection.Schemes);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "解析方案文件失败: {File}", Path.GetFileName(file));
-                            }
+                            WriteSchemesToSeriesFolder(plan.Series, new List<PlanModel> { plan });
                         }
-
-                        _logger.LogInformation("成功加载 {Count} 个方案", allPlans.Count);
+                        _logger.LogInformation("默认方案导入完成: GM5 + E78");
+                        return defaults;
                     }
-                    catch (Exception ex)
+
+                    // 遍历所有系列文件夹，加载方案
+                    foreach (var dir in seriesDirs)
                     {
-                        _logger.LogError(ex, "加载方案文件失败");
+                        var seriesName = Path.GetFileName(dir);
+                        var schemes = LoadSchemesFromSeriesFolder(seriesName);
+                        allPlans.AddRange(schemes);
                     }
 
+                    _logger.LogInformation("成功加载 {Count} 个方案（来自 {SeriesCount} 个系列）",
+                        allPlans.Count, seriesDirs.Length);
                     return allPlans;
                 }
             });
@@ -197,42 +259,42 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         plan.Items[i].Index = i + 1;
                     }
 
-                    // 如果系列发生了变更，需要从旧系列文件中删除
+                    // 系列变更处理：从旧系列中删除
                     if (!string.IsNullOrWhiteSpace(originalSeries) &&
                         !string.Equals(originalSeries, plan.Series, StringComparison.OrdinalIgnoreCase))
                     {
-                        var oldCollection = LoadSeriesSchemes(originalSeries);
-                        var removed = oldCollection.Schemes.RemoveAll(s =>
+                        var oldSchemes = LoadSchemesFromSeriesFolder(originalSeries);
+                        var removed = oldSchemes.RemoveAll(s =>
                             string.Equals(s.Model, plan.Model, StringComparison.OrdinalIgnoreCase) &&
                             string.Equals(s.PlanName, plan.PlanName, StringComparison.OrdinalIgnoreCase));
+
                         if (removed > 0)
                         {
-                            SaveSeriesSchemes(originalSeries, oldCollection);
-                            _logger.LogInformation("从旧系列 {Series} 中移除了方案", originalSeries);
+                            WriteSchemesToSeriesFolder(originalSeries, oldSchemes);
+                            _logger.LogInformation("系列变更：已从旧系列 {OldSeries} 中移除方案 {Plan}",
+                                originalSeries, plan.PlanName);
                         }
                     }
 
-                    // 保存到当前系列文件
-                    var collection = LoadSeriesSchemes(plan.Series);
+                    // 保存到当前系列
+                    var currentSchemes = LoadSchemesFromSeriesFolder(plan.Series);
 
-                    // 查找是否已存在同型号+同方案名
-                    var existingIndex = collection.Schemes.FindIndex(s =>
+                    var existingIndex = currentSchemes.FindIndex(s =>
                         string.Equals(s.Model, plan.Model, StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(s.PlanName, plan.PlanName, StringComparison.OrdinalIgnoreCase));
 
                     if (existingIndex >= 0)
                     {
-                        // 更新已有方案
-                        collection.Schemes[existingIndex] = plan;
+                        currentSchemes[existingIndex] = plan;
                     }
                     else
                     {
-                        // 新增方案
-                        collection.Schemes.Add(plan);
+                        currentSchemes.Add(plan);
                     }
 
-                    SaveSeriesSchemes(plan.Series, collection);
-                    _logger.LogInformation("方案已保存: {Series} - {Model} - {Name}", plan.Series, plan.Model, plan.PlanName);
+                    WriteSchemesToSeriesFolder(plan.Series, currentSchemes);
+                    _logger.LogInformation("方案已保存: {Series} - {Model} - {Name}, 该系列共 {Count} 个方案",
+                        plan.Series, plan.Model, plan.PlanName, currentSchemes.Count);
                 }
             });
         }
@@ -244,14 +306,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 lock (_lock)
                 {
-                    var collection = LoadSeriesSchemes(series);
-                    var removed = collection.Schemes.RemoveAll(s =>
+                    var schemes = LoadSchemesFromSeriesFolder(series);
+                    var removed = schemes.RemoveAll(s =>
                         string.Equals(s.Model, model, StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(s.PlanName, planName, StringComparison.OrdinalIgnoreCase));
 
                     if (removed > 0)
                     {
-                        SaveSeriesSchemes(series, collection);
+                        WriteSchemesToSeriesFolder(series, schemes);
                         _logger.LogInformation("方案已删除: {Series} - {Model} - {Name}", series, model, planName);
                     }
                     else
@@ -271,7 +333,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                               .Distinct()
                               .ToList();
 
-            // 合并默认系列（去重）
             foreach (var ds in DefaultSeries)
             {
                 if (!series.Contains(ds))
@@ -284,15 +345,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// <inheritdoc/>
         public async Task<List<string>> GetModelsBySeriesAsync(string series)
         {
-            // 优先从文件中加载
-            var collection = await Task.Run(() => LoadSeriesSchemes(series));
-            var models = collection.Schemes
-                                   .Select(s => s.Model)
-                                   .Where(m => !string.IsNullOrWhiteSpace(m))
-                                   .Distinct()
-                                   .ToList();
+            var schemes = await Task.Run(() => LoadSchemesFromSeriesFolder(series));
+            var models = schemes.Select(s => s.Model)
+                                .Where(m => !string.IsNullOrWhiteSpace(m))
+                                .Distinct()
+                                .ToList();
 
-            // 合并默认型号（去重）
             foreach (var dm in DefaultModels)
             {
                 if (!models.Contains(dm))
@@ -301,5 +359,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             return models.OrderBy(m => m).ToList();
         }
+
+        #endregion
     }
 }
