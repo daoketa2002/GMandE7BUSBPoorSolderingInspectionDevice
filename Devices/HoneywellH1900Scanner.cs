@@ -1,21 +1,23 @@
-﻿// 📁 Devices/Scanner/HoneywellH1900Scanner.cs
-using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO.Ports;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Windows.Devices.SerialCommunication;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 {
     /// <summary>
     /// 霍尼韦尔 H1900 条码扫描枪驱动
     /// 通讯方式：USB虚拟串口 (CDC类)
-    /// 工作原理：监听串口，解析条码数据（通常以 \r\n 结尾）
+    /// 工作原理：监听串口，通过超时判定提取完整条码
     /// 
     /// ⚠️ 使用前请用Honeywell配置条码将扫描枪切换为 USB Serial 模式
+    /// 
+    /// 兼容性说明：
+    /// - 不依赖条码结束符（\r\n），兼容扫描枪有/无结束符两种模式
+    /// - 采用100ms数据停顿超时判定条码完整，响应速度无感知
     /// </summary>
     public class HoneywellH1900Scanner : IDisposable
     {
@@ -29,6 +31,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private const int WRITE_TIMEOUT_MS = 100;
         private const int RECONNECT_CHECK_INTERVAL_MS = 3000;
 
+        /// <summary>
+        /// 条码完整判定超时（毫秒）
+        /// 串口收到数据后，若此时间内无新数据到达，则认为条码已接收完整
+        /// H1900扫描枪连续发送字符间隔通常 < 10ms，100ms足够覆盖且无感知延迟
+        /// </summary>
+        private const int BARCODE_COMPLETE_TIMEOUT_MS = 100;
+
         #endregion
 
         #region 字段
@@ -38,6 +47,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private CancellationTokenSource? _readLoopCts;
         private readonly StringBuilder _dataBuffer = new();
         private readonly object _lockObject = new();
+
+        /// <summary>
+        /// 条码完整超时计时器
+        /// 原理：每次收到串口数据时重置，超时后认为一条完整条码已接收
+        /// 不依赖 \r\n 结束符，兼容扫描枪的各种配置模式
+        /// </summary>
+        private System.Timers.Timer? _barcodeCompleteTimer;
 
         private string _portName = "COM9";
         private volatile bool _isConnected;
@@ -211,11 +227,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             _readLoopCts?.Dispose();
             _readLoopCts = null;
 
+            // 停止并释放超时计时器
+            _barcodeCompleteTimer?.Stop();
+            _barcodeCompleteTimer?.Dispose();
+            _barcodeCompleteTimer = null;
+
             _logger.LogDebug("扫描枪数据监听已停止");
         }
 
         /// <summary>
         /// 串口数据接收事件处理
+        /// 
+        /// 工作原理（超时判定法）：
+        /// 1. 扫描枪通过串口连续发送条码字符，间隔通常 < 10ms
+        /// 2. 每次收到数据追加到缓冲区，同时重置 100ms 计时器
+        /// 3. 100ms 内无新数据 → 认为条码已完整发送 → 触发回调提取条码
+        /// 
+        /// 优势：不依赖 \r\n 结束符，兼容扫描枪有/无结束符两种配置模式
         /// </summary>
         private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
         {
@@ -238,7 +266,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                         _logger.LogDebug("扫描枪原始数据: {Data}", data.Replace("\r", "\\r").Replace("\n", "\\n"));
 
                         RawDataReceived?.Invoke(this, data);
-                        ProcessIncomingData(data);
+
+                        // 追加到缓冲区（累积字符直到超时判定完整）
+                        _dataBuffer.Append(data);
+
+                        // 初始化或重置超时计时器
+                        // 每次收到数据都重新计时，直到100ms内无新数据才认为条码完整
+                        if (_barcodeCompleteTimer == null)
+                        {
+                            _barcodeCompleteTimer = new System.Timers.Timer(BARCODE_COMPLETE_TIMEOUT_MS);
+                            _barcodeCompleteTimer.AutoReset = false;  // 只触发一次
+                            _barcodeCompleteTimer.Elapsed += OnBarcodeCompleteTimeout;
+                        }
+                        _barcodeCompleteTimer.Stop();    // 停止上一次计时
+                        _barcodeCompleteTimer.Start();   // 重新开始100ms倒计时
                     }
                 }
             }
@@ -253,47 +294,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         }
 
         /// <summary>
-        /// 处理接收到的数据，提取完整条码
-        /// H1900默认配置：条码 + \r\n (CRLF)
+        /// 条码完整超时回调
+        /// 
+        /// 触发条件：最后一次收到串口数据后 100ms 内无新数据到达
+        /// 此时认为扫描枪已完成一条条码的发送，提取缓冲区内容
+        /// 
+        /// 清理逻辑：
+        /// - 去除首尾空白字符
+        /// - 去除末尾的 \r、\n、\t（如果有配置结束符）
+        /// - 空条码忽略
         /// </summary>
-        private void ProcessIncomingData(string data)
+        private void OnBarcodeCompleteTimeout(object? sender, System.Timers.ElapsedEventArgs e)
         {
-            _dataBuffer.Append(data);
-            var bufferContent = _dataBuffer.ToString();
-
-            // 按换行符分割
-            int newLineIndex;
-            while ((newLineIndex = bufferContent.IndexOf('\r')) != -1 ||
-                   (newLineIndex = bufferContent.IndexOf('\n')) != -1)
+            string barcode;
+            lock (_lockObject)
             {
-                string barcode = bufferContent.Substring(0, newLineIndex).Trim();
-
-                // 移除剩余数据
-                int skipLength = newLineIndex + 1;
-                if (bufferContent.Length > newLineIndex + 1 &&
-                    bufferContent[newLineIndex] == '\r' && bufferContent[newLineIndex + 1] == '\n')
-                {
-                    skipLength = newLineIndex + 2;
-                }
-
-                bufferContent = bufferContent.Substring(skipLength);
-
-                // 处理有效条码
-                if (!string.IsNullOrWhiteSpace(barcode))
-                {
-                    _logger.LogInformation("扫描到条码: {Barcode}", barcode);
-
-                    // 在UI线程触发事件
-                    var args = new BarcodeReceivedEventArgs(barcode, data);
-                    BarcodeReceived?.Invoke(this, args);
-                }
+                barcode = _dataBuffer.ToString();
+                _dataBuffer.Clear();
             }
 
-            // 更新缓冲区
-            _dataBuffer.Clear();
-            if (!string.IsNullOrEmpty(bufferContent))
+            // 清理条码：去首尾空白，去末尾换行符（兼容有/无结束符两种模式）
+            barcode = barcode.Trim().TrimEnd('\r', '\n', '\t', ' ');
+
+            if (!string.IsNullOrWhiteSpace(barcode))
             {
-                _dataBuffer.Append(bufferContent);
+                _logger.LogInformation("扫描到条码: {Barcode}", barcode);
+
+                // 触发条码事件（BarcodeReceivedEventArgs 内部会再次 Trim）
+                var args = new BarcodeReceivedEventArgs(barcode, barcode);
+                BarcodeReceived?.Invoke(this, args);
             }
         }
 
@@ -412,6 +441,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
             Disconnect();
             _readLoopCts?.Dispose();
+            _barcodeCompleteTimer?.Stop();
+            _barcodeCompleteTimer?.Dispose();
 
             GC.SuppressFinalize(this);
         }

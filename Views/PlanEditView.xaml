@@ -116,7 +116,7 @@
                 <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding Series, UpdateSourceTrigger=PropertyChanged}"
                           ItemsSource="{Binding SeriesOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
 
-                <TextBlock Grid.Column="2" Text="★ 型号：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <TextBlock Grid.Column="2" Text="★ 机种名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
                 <ComboBox Grid.Column="3" IsEditable="True" Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}"
                           ItemsSource="{Binding ModelOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
 
