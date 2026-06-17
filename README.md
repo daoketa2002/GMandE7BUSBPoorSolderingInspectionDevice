@@ -11,24 +11,23 @@ GMandE7BUSBPoorSolderingInspectionDevice/
 ├── App.xaml / App.xaml.cs              # 应用程序入口，Fluent 主题加载
 ├── Program.cs                          # 主机配置 (Generic Host)，DI容器，数据库初始化
 ├── AssemblyInfo.cs                     # 程序集信息
+├── appsettings.json                    # 主配置文件 (连接串、Serilog、应用设置)
 ├── .gitattributes / .gitignore         # Git配置
 ├── LICENSE.txt                         # 许可证
 ├── README.md                           # ← 本文件
 │
-├── AppConfig/                          # 配置管理
-│   ├── appsettings.json                # 主配置文件 (连接串、Serilog、应用设置)
-│   ├── ApplicationSettings.cs          # 应用设置模型
-│   └── DatabaseSettings.cs             # 数据库设置
-│
 ├── Common/                             # 公共组件
-│   ├── Converters/                     # WPF 值转换器 (7个)
+│   ├── Converters/                     # WPF 值转换器 (10个)
 │   │   ├── BoolInverterConverter.cs            # bool取反
+│   │   ├── BoolToConnectionColorConverter.cs   # bool→连接颜色
 │   │   ├── BoolToTextConverter.cs              # bool→文本
 │   │   ├── BoolToVisibilityConverter.cs        # bool→可见性
 │   │   ├── ConnectionStatusToBackgroundConverter.cs  # 连接状态→背景色
 │   │   ├── DataSourceToVisibilityConverter.cs  # 数据源→可见性
-│   │   ├── JudgmentToBackgroundConverter.cs    # 判定结果→背景色
-│   │   └── SortDirectionConverter.cs           # 排序方向转换
+│   │   ├── JudgmentToBackgroundConverter.cs    # 综合判定→背景色 (PASS=绿, FAIL=红)
+│   │   ├── JudgmentToForegroundConverter.cs    # 综合判定→前景色
+│   │   ├── SortDirectionConverter.cs           # 排序方向转换
+│   │   └── TestStatusToColorConverter.cs       # 测试状态→颜色
 │   └── Navigation/                     # 区域化导航框架
 │       ├── RegionNames.cs              # 导航区域常量 (Main / Shell / Modal / Sidebar)
 │       ├── NavigationViewModelAttribute.cs     # 视图→ViewModel 特性绑定
@@ -44,15 +43,19 @@ GMandE7BUSBPoorSolderingInspectionDevice/
 │   ├── GwInstekGDM9060Driver.cs        # 固纬 GDM-9060 万用表驱动 (SCPI over TCP)
 │   └── HoneywellH1900Scanner.cs        # 霍尼韦尔 H1900 扫描枪驱动 (USB虚拟串口)
 │
-├── Interfaces/                         # 接口定义 (10个)
+├── Interfaces/                         # 接口定义 (14个)
 │   ├── INavigationService.cs           # 导航服务接口
 │   ├── INavigationAware.cs             # 导航生命周期感知
 │   ├── INavigationInterceptor.cs       # 导航拦截器
 │   ├── INotificationService.cs         # 消息通知服务
 │   ├── IStatefulViewModel.cs           # ViewModel状态保存/恢复
 │   ├── IParameterizedView.cs           # 参数化视图
-│   ├── ISettingsService.cs             # 设置读写服务
-│   ├── IAppSettingsService.cs          # 应用设置服务
+│   ├── IDeviceSettingsService.cs       # 设备设置读写服务
+│   ├── IOperatorStorageService.cs      # 操作员持久化存储服务
+│   ├── IOperatorStateService.cs        # 操作员状态管理服务
+│   ├── IPlanStorageService.cs          # 方案存储服务
+│   ├── ILogDataService.cs              # 日志数据服务 (CSV读取/检索)
+│   ├── ICsvExportService.cs            # CSV导出服务
 │   ├── ITcpClientPLCMotionService.cs   # PLC Modbus TCP 客户端接口
 │   └── ITcpServerPLCMotionService.cs   # PLC Modbus TCP 服务端接口 (预留)
 │
@@ -60,9 +63,16 @@ GMandE7BUSBPoorSolderingInspectionDevice/
 │   ├── BarcodeReceivedEventArgs.cs     # 条码接收事件
 │   ├── CommunicationNotification.cs    # 通信通知模型
 │   ├── HealthCheckMode.cs              # 心跳检测模式枚举
+│   ├── LogDataModel.cs                 # 日志数据模型 (固定列 + 动态列)
 │   ├── NotificationType.cs             # 通知类型枚举
 │   ├── OperatorModel.cs                # 操作员模型
+│   ├── PlanModel.cs                    # 方案模型
 │   ├── TestItemModel.cs                # 测试项目数据模型
+│   ├── DeviceConfigs/                  # 设备通信配置
+│   │   ├── DeviceSettings.cs           # 设备设置聚合模型
+│   │   ├── FP0HCommunicationConfig.cs  # PLC通信配置
+│   │   ├── GDM9060CommunicationConfig.cs # 万用表通信配置
+│   │   └── ScannerSerialCommunicationConfig.cs # 扫描枪串口配置
 │   ├── PLC动作控制/                     # PLC动作控制相关
 │   │   ├── AlarmState.cs               # 报警状态
 │   │   ├── PollingDataEventArgs.cs     # 轮询数据事件
@@ -73,46 +83,56 @@ GMandE7BUSBPoorSolderingInspectionDevice/
 │       ├── ModbusMessageHelper.cs       # Modbus报文解析
 │       ├── ModbusRequest.cs             # Modbus请求
 │       ├── ModbusResponse.cs            # Modbus响应
-│       ├── ModbusRtuMessageHelper.cs    # Modbus RTU 报文
 │       └── ModbusTcpMessageHelper.cs    # Modbus TCP 报文生成/解析
 │
-├── PLC通讯模块/                         # PLC通信 (来自其他项目的遗留代码)
+├── PLC通讯模块/                         # PLC通信 (遗留代码)
 │   ├── FinsTcpUtil.cs                  # 欧姆龙 FINS/TCP 协议实现 (当前项目未使用)
 │   └── PlcConnectionState.cs           # PLC连接状态枚举
 │
 ├── Services/                           # 服务实现层
 │   ├── NavigationService.cs            # 核心导航服务 (区域注册、缓存、拦截器)
 │   ├── NotificationService.cs          # 消息通知服务
-│   ├── SettingsService.cs              # JSON设置读写服务
 │   ├── ConfigManagerService.cs         # 配置热更新管理
-│   ├── DatabaseInitializer.cs          # 数据库初始化 (种子数据)
+│   ├── DeviceSettingsService.cs        # 设备设置服务
 │   ├── MemoryMonitorService.cs         # 内存使用监控
 │   ├── InspectionEngine.cs             # ★ 检测流程引擎 (核心业务逻辑)
+│   ├── OperatorStorageService.cs       # 操作员持久化 (JSON文件存储)
+│   ├── OperatorStateService.cs         # 操作员状态管理 (登入/登出/切换)
+│   ├── PlanStorageService.cs           # 方案存储服务 (分片存储/智能检索)
+│   ├── LogDataService.cs               # 日志数据服务 (CSV文件解析/文件名检索)
+│   ├── CsvExportService.cs             # CSV导出服务 (UTF-8 BOM, RFC 4180)
 │   └── TcpModbus/                      # Modbus TCP 通信
 │       ├── TcpClientPLCMotionService.cs         # Modbus TCP 客户端 (连接/读写/心跳/重连)
 │       └── TcpPLCMotionWPFUIModbusService.cs   # WPF UI层封装 (线程安全)
 │
-├── ViewModels/                         # 视图模型 (MVVM)
-│   ├── MainMenuViewModel.cs            # 主菜单VM (导航按钮、作业员选择、密码验证)
+├── ViewModels/                         # 视图模型 (MVVM, 11个)
+│   ├── MainMenuViewModel.cs            # 主菜单VM (导航按钮、硬件状态)
 │   ├── MainViewModel.cs                # [空存根，待实现]
 │   ├── MainWindowViewModel.cs          # [空存根，待实现]
 │   ├── TestPageViewModel.cs            # ★ 测试页面VM (硬件连接、检测控制、统计)
-│   ├── OperatorSelectionViewModel.cs   # 作业员选择对话框VM
+│   ├── OperatorSettingsViewModel.cs    # 操作员设置页VM
 │   ├── PasswordDialogViewModel.cs      # 密码验证对话框VM
-│   └── ExitConfirmViewModel.cs         # 退出确认对话框VM
+│   ├── ExitConfirmViewModel.cs         # 退出确认对话框VM
+│   ├── PlanSettingViewModel.cs         # 方案设定页VM
+│   ├── PlanEditViewModel.cs            # 方案编辑页VM
+│   ├── LogDataViewModel.cs             # 日志数据页VM (按文件名检索/导出)
+│   └── SystemSettingsViewModel.cs      # 系统设置页VM
 │
-├── Views/                              # WPF视图 (XAML)
+├── Views/                              # WPF视图 (XAML, 12个页面)
 │   ├── MainWindow.xaml/.cs             # ★ 主窗口 (ContentControl区域导航宿主)
-│   ├── MainMenuView.xaml/.cs           # 主菜单页 (运行界面/数据提取/系统设置)
+│   ├── MainMenuView.xaml/.cs           # 主菜单页
 │   ├── TestPageView.xaml/.cs           # ★ 测试运行页 (状态面板/DataGrid/日志)
 │   ├── BaseLayoutView.xaml/.cs         # 基础布局页
-│   ├── OperatorSelectionDialog.xaml/.cs # 作业员选择对话框
+│   ├── OperatorSettingsView.xaml/.cs   # 操作员设置页
 │   ├── PasswordDialog.xaml/.cs         # 密码验证对话框
-│   └── ExitConfirmDialog.xaml/.cs      # 退出确认对话框
+│   ├── ExitConfirmDialog.xaml/.cs      # 退出确认对话框
+│   ├── PlanSettingView.xaml/.cs        # 方案设定页
+│   ├── PlanEditView.xaml/.cs           # 方案编辑页
+│   ├── LogDataView.xaml/.cs            # 日志数据页 (动态列生成/组合检索)
+│   └── SystemSettingsView.xaml/.cs     # 系统设置页
 │
-└── 设置相关类/                          # 设置模型 (来自其他项目的遗留代码)
-    └── ApplicationSettings.cs           # TcpServer/TcpClient/Scanner/PLC通用设置
-```
+└── 日志数据/                            # 运行期日志数据存储
+    └── *.csv                            # 机种名_序列号_方案名称.csv (GB2312编码)
 
 ---
 
@@ -251,20 +271,20 @@ dotnet run
 - [x] 扫描枪串口驱动
 - [x] 检测流程引擎 `InspectionEngine`
 - [x] 测试页面 UI (状态面板、DataGrid、日志)
-- [x] 作业员选择/密码验证对话框
+- [x] 作业员设置/选择/密码验证
+- [x] 方案设定/编辑功能 (分片存储/智能检索)
+- [x] 日志数据页面 (CSV 文件读取/文件名检索/动态列/导出)
+- [x] 系统设置页面
 - [x] Serilog 日志系统
 
 ### ⚠️ 待完善
 
 - [ ] **PLC 握手逻辑** — InspectionEngine 当前由 UI 按钮触发，需改为监听 PLC M100 标志位自动触发
 - [ ] **ExecuteWriteOperationAsync 不支持 0x05(写单线圈)** — InspectionEngine 调用会失败
-- [ ] XAML 引用但未实现的转换器: `JudgmentToForegroundConverter`, `BoolToConnectionColorConverter`, `TestStatusToColorConverter`
+- [ ] XAML 引用但未实现的转换器: `BoolToConnectionColorConverter`、`TestStatusToColorConverter`
 - [ ] `MainViewModel.cs` / `MainWindowViewModel.cs` 为空存根
 - [ ] 主窗口标题仍为旧项目名 "Gb2Gb3TraceSystem"
 - [ ] `FinsTcpUtil.cs` 为欧姆龙 FINS 协议（遗留代码，当前项目使用 Modbus，不相关）
-- [ ] `设置相关类/ApplicationSettings.cs` 中的设置模型需要与新系统对齐
-- [ ] 数据提取页面未实现
-- [ ] 系统设置页面未实现
 - [ ] InspectionConfig 的 10 个默认测试点为硬编码示例，需从数据库/配置文件加载
 - [ ] 数据库种子数据为空
 
