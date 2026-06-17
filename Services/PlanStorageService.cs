@@ -214,14 +214,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     // 首次运行：无任何系列文件夹，自动导入默认方案
                     if (seriesDirs.Length == 0)
                     {
-                        _logger.LogInformation("未检测到任何方案，正在导入默认方案...");
-                        var defaults = PlanModel.GetDefaultPlans();
-                        foreach (var plan in defaults)
-                        {
-                            WriteSchemesToSeriesFolder(plan.Series, new List<PlanModel> { plan });
-                        }
-                        _logger.LogInformation("默认方案导入完成: GM5 + E78");
-                        return defaults;
+                        _logger.LogInformation("未检测到任何方案文件，方案列表为空");
+                        return allPlans; // 空列表
                     }
 
                     // 遍历所有系列文件夹，加载方案

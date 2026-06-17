@@ -19,7 +19,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
-        private readonly ICurrentPlanService _currentPlanService;
         private readonly Serilog.ILogger _logger;
 
         // 全部方案列表（原始数据）
@@ -57,13 +56,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
-            ICurrentPlanService currentPlanService,
             HoneywellH1900Scanner? scanner = null)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-            _currentPlanService = currentPlanService ?? throw new ArgumentNullException(nameof(currentPlanService));
             _logger = Log.ForContext<PlanSettingViewModel>();
             _scanner = scanner;  // ← 允许为null
 
@@ -97,12 +94,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 型号下拉选项
         /// </summary>
         public ObservableCollection<string> ModelOptions { get; }
-
-        /// <summary>
-        /// 当前方案名称（显示用）
-        /// </summary>
-        [ObservableProperty]
-        private string _currentPlanDisplay = "未选择方案";
 
         #endregion
 
@@ -304,14 +295,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 await _planStorageService.DeletePlanAsync(plan.Series, plan.Model, plan.PlanName);
 
-                // 如果删除的是当前方案，清除
-                if (_currentPlanService.CurrentPlan?.Series == plan.Series &&
-                    _currentPlanService.CurrentPlan?.Model == plan.Model &&
-                    _currentPlanService.CurrentPlan?.PlanName == plan.PlanName)
-                {
-                    _currentPlanService.CurrentPlan = null;
-                }
-
                 await RefreshPlansAsync();
                 _logger.Information("方案已删除: {Plan}", plan.PlanName);
                 await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 已删除", "删除成功");
@@ -320,33 +303,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 _logger.Error(ex, "删除方案失败");
                 await _notificationService.ShowErrorAsync($"删除失败：{ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 选择当前方案（供运行界面使用）
-        /// </summary>
-        [RelayCommand]
-        private async Task SetAsCurrentPlanAsync()
-        {
-            try
-            {
-                if (SelectedPlan == null)
-                {
-                    await _notificationService.ShowWarningAsync("请先选择方案！", "未选择");
-                    return;
-                }
-
-                _currentPlanService.CurrentPlan = SelectedPlan;
-                CurrentPlanDisplay = _currentPlanService.CurrentPlanName;
-
-                _logger.Information("当前方案已设为: {Plan}", CurrentPlanDisplay);
-                await _notificationService.ShowInfoAsync($"当前方案已设为：\n{CurrentPlanDisplay}", "设置成功");
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "设置当前方案失败");
-                await _notificationService.ShowErrorAsync($"设置失败：{ex.Message}");
             }
         }
 
@@ -607,9 +563,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public async Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.Debug("进入方案设定页面");
-
-            // 刷新当前方案显示
-            CurrentPlanDisplay = _currentPlanService.CurrentPlanName;
 
             // 刷新列表
             await RefreshPlansAsync();

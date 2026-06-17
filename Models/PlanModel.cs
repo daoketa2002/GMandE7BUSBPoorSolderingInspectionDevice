@@ -38,55 +38,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         [JsonPropertyName("ConcatenatedInfo")]
         public string ConcatenatedInfo => $"{Series}-{Model}-{PlanName}";
 
-        /// <summary>
-        /// 创建GM5默认方案（仅1对示例针脚，其余请手动添加）
-        /// </summary>
-        public static PlanModel CreateGM5Default()
-        {
-            var items = new List<PlanItem>
-            {
-                new PlanItem { Index = 1, ItemName = "A1-B3", CheckCondition = "OPEN" },
-                // TODO: 手动添加其余19对针脚
-                // new PlanItem { Index = 2, ItemName = "A2-B2", CheckCondition = "OPEN" },
-                // ...
-            };
-            return new PlanModel
-            {
-                Series = "GM5",
-                Model = "T998248391",
-                PlanName = "默认方案",
-                Items = items
-            };
-        }
-
-        /// <summary>
-        /// 创建E78默认方案（仅1对示例针脚，其余请手动添加）
-        /// </summary>
-        public static PlanModel CreateE78Default()
-        {
-            var items = new List<PlanItem>
-            {
-                new PlanItem { Index = 1, ItemName = "A1-A2", CheckCondition = "OPEN" },
-                // TODO: 手动添加其余19对针脚
-                // new PlanItem { Index = 2, ItemName = "A2-B2", CheckCondition = "OPEN" },
-                // ...
-            };
-            return new PlanModel
-            {
-                Series = "E78",
-                Model = "998245664NNHB",
-                PlanName = "默认方案",
-                Items = items
-            };
-        }
-
-        /// <summary>
-        /// 获取所有内置默认方案
-        /// </summary>
-        public static List<PlanModel> GetDefaultPlans()
-        {
-            return new List<PlanModel> { CreateGM5Default(), CreateE78Default() };
-        }
     }
 
     /// <summary>

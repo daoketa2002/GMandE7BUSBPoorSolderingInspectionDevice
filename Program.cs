@@ -132,7 +132,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddSingleton<INavigationService, NavigationService>();
 
             // === 方案设定相关服务 === 
-            services.AddSingleton<ICurrentPlanService, CurrentPlanService>();
             services.AddSingleton<IPlanStorageService, PlanStorageService>();
 
             // === 日志数据相关服务 ===

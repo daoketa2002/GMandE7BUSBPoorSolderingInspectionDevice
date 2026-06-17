@@ -26,7 +26,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INotificationService _notificationService;
         private readonly ILogger<TestPageViewModel> _logger;
         private readonly Serilog.ILogger _serilogLogger;
-        private readonly ICurrentPlanService _currentPlanService;
+        private readonly IPlanStorageService _planStorageService;
 
         // ⭐ 硬件服务
         private readonly ITcpClientPLCMotionService _plcService;
@@ -50,7 +50,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             ITcpClientPLCMotionService plcService,
             GwInstekGDM9060Driver dmmDriver,
             IDeviceSettingsService settingsService,
-            ICurrentPlanService currentPlanService,
+            IPlanStorageService planStorageService,
             HoneywellH1900Scanner? scanner = null,
             InspectionEngine? inspectionEngine = null)
         {
@@ -59,7 +59,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _logger = logger;
             _serilogLogger = Log.ForContext<TestPageViewModel>();
             _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
-            _currentPlanService = currentPlanService ?? throw new ArgumentNullException(nameof(currentPlanService));
+            _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
 
             _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
@@ -539,25 +539,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        ///  从全局当前方案加载检测项目
+        /// 从方案文件中加载检测项目（自动选择第一个可用方案）
         /// </summary>
-        private void LoadCurrentPlanItems()
+        private async Task LoadPlanItemsAsync()
         {
             TestItems.Clear();
 
-            var currentPlan = _currentPlanService.CurrentPlan;
+            var allPlans = await _planStorageService.LoadAllPlansAsync();
+            var currentPlan = allPlans.FirstOrDefault();
+
             if (currentPlan == null || currentPlan.Items.Count == 0)
             {
-                // 没有方案时使用默认项目
                 SchemeName = "无方案 - 使用默认项目";
-                AddLog("⚠️ 未选择方案，使用默认检测项目");
+                AddLog("⚠️ 未找到任何方案，使用默认检测项目");
                 LoadDefaultTestItems();
                 return;
             }
 
             SchemeName = currentPlan.PlanName;
             ModelName = currentPlan.Model;
-            AddLog($"📋 已加载方案: {_currentPlanService.CurrentPlanName}");
+            AddLog($"📋 已加载方案: {currentPlan.Series} - {currentPlan.Model} - {currentPlan.PlanName}");
 
             foreach (var item in currentPlan.Items.OrderBy(i => i.Index))
             {
@@ -611,27 +612,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region INavigationAware 实现
 
-        public Task OnNavigatedToAsync(object? parameter = null)
+        public async Task OnNavigatedToAsync(object? parameter = null)
         {
             _serilogLogger.Debug("进入测试页面");
 
-            // 从全局状态服务读取当前作业员
             var operatorName = _operatorStateService?.CurrentOperatorName ?? "默认作业员";
             OperatorName = operatorName;
             IsOperatorEditable = false;
 
             AddLog($"当前作业员: {operatorName}");
 
-            // 从全局方案服务加载检测项目
-            LoadCurrentPlanItems();
+            //  改为异步加载
+            await LoadPlanItemsAsync();
 
-            _serilogLogger.Information("测试页当前作业员: {Operator}, 当前方案: {Plan}",
-                operatorName, _currentPlanService.CurrentPlanName);
+            _serilogLogger.Information("测试页当前作业员: {Operator}", operatorName);
 
-            // 自动连接硬件
             _ = AutoConnectHardwareAsync();
-
-            return Task.CompletedTask;
         }
 
         private async Task AutoConnectHardwareAsync()

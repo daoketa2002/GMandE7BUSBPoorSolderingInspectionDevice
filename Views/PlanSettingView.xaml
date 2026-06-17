@@ -283,8 +283,6 @@
             <Border Grid.Column="0" Background="#E9ECEF" CornerRadius="6" Padding="14,8">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="{Binding TotalCountText}" FontSize="14" FontWeight="SemiBold" Foreground="#2C3E50" VerticalAlignment="Center"/>
-                    <TextBlock Text="  |  当前方案: " FontSize="14" Foreground="#6C757D" VerticalAlignment="Center" Margin="10,0,0,0"/>
-                    <TextBlock Text="{Binding CurrentPlanDisplay}" FontSize="14" FontWeight="Bold" Foreground="#27AE60" VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
 
@@ -296,8 +294,6 @@
                         Command="{Binding EditPlanCommand}" Margin="4,0"/>
                 <Button Style="{StaticResource ActionButtonStyle}" Background="#E74C3C" Content="🗑 删除"
                         Command="{Binding DeletePlanCommand}" Margin="4,0"/>
-                <Button Style="{StaticResource ActionButtonStyle}" Background="#27AE60" Content="⭐ 设为当前"
-                        Command="{Binding SetAsCurrentPlanCommand}" Margin="4,0" Width="130"/>
             </UniformGrid>
         </Grid>
     </Grid>
