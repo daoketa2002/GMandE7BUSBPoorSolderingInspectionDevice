@@ -239,7 +239,9 @@
                     <DataGridTemplateColumn Header="检查条件" Width="150">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox SelectedItem="{Binding CheckCondition, UpdateSourceTrigger=PropertyChanged}"
+                                <ComboBox IsEditable="True"
+                                          IsReadOnly="True"
+                                          Text="{Binding CheckCondition, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding DataContext.CheckConditionOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
                                           Height="30"
