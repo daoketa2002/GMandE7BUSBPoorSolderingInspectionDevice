@@ -88,7 +88,7 @@
             </Grid>
         </Border>
 
-        <!-- ===== ② 检索条件区（双行布局） ===== -->
+        <!-- ===== ② 检索条件区（重构布局逻辑） ===== -->
         <Border Grid.Row="1"
                 Background="#F8F9FA"
                 CornerRadius="8"
@@ -106,17 +106,20 @@
                 <Grid Grid.Row="0" Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="1.2*"/>
                         <ColumnDefinition Width="20"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="1.5*"/>
                         <ColumnDefinition Width="20"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="1.2*"/>
                         <ColumnDefinition Width="20"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="150"/>
-                        <ColumnDefinition Width="30"/>
+                        <ColumnDefinition Width="1*"/>
+                        <ColumnDefinition Width="20"/>
+                        <!-- 将检索和重置按钮直接放在第一行末尾统一对齐 -->
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="10"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
@@ -168,19 +171,28 @@
                             FontSize="14" FontWeight="Bold"
                             Foreground="White" Background="#3498DB"
                             Cursor="Hand" BorderThickness="0"/>
+
+                    <!-- 重置按钮（与检索放一起，逻辑上更统一） -->
+                    <Button Grid.Column="14"
+                            Content="↺ 重置"
+                            Command="{Binding ResetCommand}"
+                            Width="80" Height="36"
+                            FontSize="14" FontWeight="Bold"
+                            Foreground="White" Background="#E67E22"
+                            Cursor="Hand" BorderThickness="0"/>
                 </Grid>
 
-                <!-- 第二行：开始日期 / 结束日期 / 重置 / 导出 -->
+                <!-- 第二行：开始日期 / 结束日期（去掉了多余的宽度冲突列） -->
                 <Grid Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="1.5*"/>
                         <ColumnDefinition Width="20"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="180"/>
-                        <ColumnDefinition Width="30"/>
-                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="1.5*"/>
                         <ColumnDefinition Width="*"/>
+                        <!-- 右侧自动填充的弹性空白 -->
+                        <!-- 导出放在表格右侧更好，去掉此处右侧按钮 -->
                     </Grid.ColumnDefinitions>
 
                     <!-- 开始日期 -->
@@ -192,33 +204,14 @@
                                 VerticalContentAlignment="Center"
                                 ToolTip="选择查询起始日期（含当天）"/>
 
-                    <!-- 结束日期 -->
+                    <!-- 结束日期（修复了被 30px 宽度列挤压丢失的 Bug） -->
                     <TextBlock Grid.Column="3" Text="结束日期：" VerticalAlignment="Center"
                                FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
-                    <DatePicker Grid.Column="5"
+                    <DatePicker Grid.Column="4"
                                 SelectedDate="{Binding EndDate}"
                                 Height="36" FontSize="14"
                                 VerticalContentAlignment="Center"
                                 ToolTip="选择查询截止日期（含当天）"/>
-
-                    <!-- 重置按钮 -->
-                    <Button Grid.Column="6"
-                            Content="↺ 重置"
-                            Command="{Binding ResetCommand}"
-                            Width="80" Height="36"
-                            FontSize="14" FontWeight="Bold"
-                            Foreground="White" Background="#E67E22"
-                            Cursor="Hand" BorderThickness="0"/>
-
-                    <!-- 导出CSV按钮（右对齐） -->
-                    <Button Grid.Column="7"
-                            Content="📥 导出CSV"
-                            Command="{Binding ExportToCsvCommand}"
-                            Width="110" Height="36"
-                            FontSize="14" FontWeight="Bold"
-                            Foreground="White" Background="#27AE60"
-                            Cursor="Hand" BorderThickness="0"
-                            HorizontalAlignment="Right"/>
                 </Grid>
             </Grid>
         </Border>
@@ -235,115 +228,134 @@
                        HorizontalAlignment="Center"/>
         </Border>
 
-        <!-- ===== ④ 数据表格 ===== -->
-        <DataGrid Grid.Row="3"
-                  ItemsSource="{Binding LogDataList}"
-                  AutoGenerateColumns="False"
-                  IsReadOnly="True"
-                  CanUserAddRows="False"
-                  CanUserDeleteRows="False"
-                  CanUserReorderColumns="False"
-                  CanUserSortColumns="True"
-                  SelectionMode="Extended"
-                  SelectionUnit="FullRow"
-                  GridLinesVisibility="Horizontal"
-                  HorizontalGridLinesBrush="#E9ECEF"
-                  RowHeaderWidth="0"
-                  RowHeight="36"
-                  ColumnHeaderHeight="40"
-                  FontSize="13"
-                  VerticalScrollBarVisibility="Auto"
-                  HorizontalScrollBarVisibility="Auto"
-                  Background="White"
-                  BorderBrush="#DEE2E6"
-                  BorderThickness="1"
-                  x:Name="LogDataGrid">
-            <DataGrid.Resources>
-                <Style TargetType="DataGridColumnHeader">
-                    <Setter Property="Background" Value="#34495E"/>
-                    <Setter Property="Foreground" Value="White"/>
-                    <Setter Property="FontWeight" Value="Bold"/>
-                    <Setter Property="FontSize" Value="13"/>
-                    <Setter Property="HorizontalContentAlignment" Value="Center"/>
-                    <Setter Property="Padding" Value="8,0"/>
-                    <Setter Property="BorderBrush" Value="#2C3E50"/>
-                    <Setter Property="BorderThickness" Value="0,0,0,2"/>
-                </Style>
-                <Style TargetType="DataGridRow">
-                    <Setter Property="Background" Value="White"/>
-                    <Style.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="#EBF5FB"/>
-                        </Trigger>
-                        <Trigger Property="IsSelected" Value="True">
-                            <Setter Property="Background" Value="#D4E6F1"/>
-                        </Trigger>
-                    </Style.Triggers>
-                </Style>
-                <Style TargetType="DataGridCell">
-                    <Setter Property="VerticalContentAlignment" Value="Center"/>
-                    <Setter Property="HorizontalContentAlignment" Value="Center"/>
-                    <Setter Property="Padding" Value="6,0"/>
-                    <Setter Property="BorderBrush" Value="#E9ECEF"/>
-                    <Setter Property="BorderThickness" Value="0,0,0,0"/>
-                    <Setter Property="Template">
-                        <Setter.Value>
-                            <ControlTemplate TargetType="DataGridCell">
-                                <Border Background="{TemplateBinding Background}"
-                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                        Padding="{TemplateBinding Padding}">
-                                    <ContentPresenter VerticalAlignment="Center"
-                                                      HorizontalAlignment="Center"/>
-                                </Border>
-                            </ControlTemplate>
-                        </Setter.Value>
-                    </Setter>
-                </Style>
-            </DataGrid.Resources>
+        <!-- ===== ④ 数据表格（导出按钮移到表格右上角） ===== -->
+        <Grid Grid.Row="3">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <!-- 工具栏（导出） -->
+                <RowDefinition Height="*"/>
+                <!-- 表格 -->
+            </Grid.RowDefinitions>
 
-            <!-- ===== 固定列定义 ===== -->
-            <DataGrid.Columns>
-                <!-- 检测时间 -->
-                <DataGridTextColumn Header="检测时间"
-                                    Binding="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
-                                    Width="160"/>
-                <!-- 机种名称 -->
-                <DataGridTextColumn Header="机种名称"
-                                    Binding="{Binding Series}"
-                                    Width="100"/>
-                <!-- 序列号 -->
-                <DataGridTextColumn Header="序列号"
-                                    Binding="{Binding SerialNumber}"
-                                    Width="140"/>
-                <!-- 方案名称 -->
-                <DataGridTextColumn Header="方案名称"
-                                    Binding="{Binding PlanName}"
-                                    Width="120"/>
-                <!-- 操作员 -->
-                <DataGridTextColumn Header="操作员"
-                                    Binding="{Binding Operator}"
-                                    Width="90"/>
-                <!-- 综合判定 — 带颜色标签 -->
-                <DataGridTemplateColumn Header="综合判定" Width="90">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <Border CornerRadius="4"
-                                    Padding="8,3"
-                                    HorizontalAlignment="Center"
-                                    Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
-                                <TextBlock Text="{Binding FinalResult}"
-                                           FontWeight="Bold"
-                                           FontSize="13"
-                                           Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
-                                           HorizontalAlignment="Center"/>
-                            </Border>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-                <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
-            </DataGrid.Columns>
-        </DataGrid>
+            <!-- 表格工具栏（放置导出CSV） -->
+            <Border Grid.Row="0" Padding="0,0,0,8" HorizontalAlignment="Right">
+                <Button Content="📥 导出CSV"
+                        Command="{Binding ExportToCsvCommand}"
+                        Width="110" Height="36"
+                        FontSize="14" FontWeight="Bold"
+                        Foreground="White" Background="#27AE60"
+                        Cursor="Hand" BorderThickness="0"/>
+            </Border>
+
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding LogDataList}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      CanUserAddRows="False"
+                      CanUserDeleteRows="False"
+                      CanUserReorderColumns="False"
+                      CanUserSortColumns="True"
+                      SelectionMode="Extended"
+                      SelectionUnit="FullRow"
+                      GridLinesVisibility="Horizontal"
+                      HorizontalGridLinesBrush="#E9ECEF"
+                      RowHeaderWidth="0"
+                      RowHeight="36"
+                      ColumnHeaderHeight="40"
+                      FontSize="13"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Auto"
+                      Background="White"
+                      BorderBrush="#DEE2E6"
+                      BorderThickness="1"
+                      x:Name="LogDataGrid">
+                <DataGrid.Resources>
+                    <Style TargetType="DataGridColumnHeader">
+                        <Setter Property="Background" Value="#34495E"/>
+                        <Setter Property="Foreground" Value="White"/>
+                        <Setter Property="FontWeight" Value="Bold"/>
+                        <Setter Property="FontSize" Value="13"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                        <Setter Property="Padding" Value="8,0"/>
+                        <Setter Property="BorderBrush" Value="#2C3E50"/>
+                        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                    </Style>
+                    <Style TargetType="DataGridRow">
+                        <Setter Property="Background" Value="White"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#EBF5FB"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Background" Value="#D4E6F1"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                    <Style TargetType="DataGridCell">
+                        <Setter Property="VerticalContentAlignment" Value="Center"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                        <Setter Property="Padding" Value="6,0"/>
+                        <Setter Property="BorderBrush" Value="#E9ECEF"/>
+                        <Setter Property="BorderThickness" Value="0,0,0,0"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="DataGridCell">
+                                    <Border Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter VerticalAlignment="Center"
+                                                          HorizontalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </DataGrid.Resources>
+
+                <!-- ===== 固定列定义 ===== -->
+                <DataGrid.Columns>
+                    <!-- 检测时间 -->
+                    <DataGridTextColumn Header="检测时间"
+                                        Binding="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                                        Width="160"/>
+                    <!-- 机种名称 -->
+                    <DataGridTextColumn Header="机种名称"
+                                        Binding="{Binding Series}"
+                                        Width="100"/>
+                    <!-- 序列号 -->
+                    <DataGridTextColumn Header="序列号"
+                                        Binding="{Binding SerialNumber}"
+                                        Width="140"/>
+                    <!-- 方案名称 -->
+                    <DataGridTextColumn Header="方案名称"
+                                        Binding="{Binding PlanName}"
+                                        Width="120"/>
+                    <!-- 操作员 -->
+                    <DataGridTextColumn Header="操作员"
+                                        Binding="{Binding Operator}"
+                                        Width="90"/>
+                    <!-- 综合判定 — 带颜色标签 -->
+                    <DataGridTemplateColumn Header="综合判定" Width="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="4"
+                                        Padding="8,3"
+                                        HorizontalAlignment="Center"
+                                        Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
+                                    <TextBlock Text="{Binding FinalResult}"
+                                               FontWeight="Bold"
+                                               FontSize="13"
+                                               Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
+                                               HorizontalAlignment="Center"/>
+                                </Border>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
+                </DataGrid.Columns>
+            </DataGrid>
+        </Grid>
 
         <!-- ===== ⑤ 分页控件 ===== -->
         <Border Grid.Row="4"
