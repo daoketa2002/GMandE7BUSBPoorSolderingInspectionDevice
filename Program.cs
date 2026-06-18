@@ -3,10 +3,12 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Data;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,7 +18,6 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Windows;
-using Microsoft.EntityFrameworkCore;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice
 {
@@ -307,8 +308,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             try
             {
                 // 此处添加初始化配置
-             
+                if (db.LogRecords.Any()) return; // 已有数据则跳过
 
+                var random = new Random();
+                var records = new List<LogRecord>();
+                var planNames = new[] { "测试1" };
+                var seriesList = new[] { "GM5", "E78" };
+                var serialPrefix = "SN-TEST";
+
+                for (int i = 1; i <= 30; i++)
+                {
+                    var series = seriesList[i % 2];          // 交替 GM5 / E78
+                    var planName = planNames[i % planNames.Length];
+                    var isNg = i % 5 == 0;                    // 每5条1条NG
+
+                    var record = new LogRecord
+                    {
+                        Timestamp = DateTime.Now.AddDays(-random.Next(0, 7))
+                                            .AddHours(-random.Next(0, 24)),
+                        Series = series,
+                        SerialNumber = $"{serialPrefix}-{i:D4}",
+                        PlanName = planName,
+                        Operator = $"操作员{i % 3 + 1}",
+                        FinalResult = isNg ? "NG" : "OK",
+                        CreatedAt = DateTime.Now,
+                        PinResults = new List<PinResult>
+                        {
+                            new() { PinName = "A1-A2", Result = isNg ? "OPEN" : "SHORT" }
+                        }
+                    };
+                    records.Add(record);
+                }
+
+                db.LogRecords.AddRange(records);
                 db.SaveChanges();
                 Log.Information("种子数据初始化完成");
             }
