@@ -2,10 +2,11 @@
   ============================================================
   文件: Views/LogDataView.xaml
   修改:
-    1. 检索条件区新增：开始日期、结束日期、判定结果筛选
-    2. 方案名称改为可编辑下拉框（支持"全部方案"）
-    3. 底部新增分页控件（每页条数+翻页+页号显示）
-    4. 数据源从 LogDataModel 改为 LogRecord
+    1. 布局重构：日期行上移，操作按钮统一放第三行
+    2. 新增「🧹清空条件」按钮
+    3. DatePicker 增加清除"小x"样式
+    4. 修复分页按钮悬停/点击变白问题
+    5. 导出按钮与检索/重置同行，节省垂直空间
   ============================================================
 -->
 <UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.LogDataView"
@@ -29,22 +30,26 @@
         <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
         <!-- bool → Visibility 转换器 -->
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <!-- bool → Opacity 转换器（分页按钮禁用态） -->
+        <converters:BoolToOpacityConverter x:Key="BoolToOpacityConverter"
+                                           EnabledOpacity="1.0"
+                                           DisabledOpacity="0.5"/>
     </UserControl.Resources>
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <!-- 标题栏 -->
+            <!-- ① 标题栏 -->
             <RowDefinition Height="Auto"/>
-            <!-- 检索条件 -->
+            <!-- ② 检索条件区 -->
             <RowDefinition Height="Auto"/>
-            <!-- 加载提示 -->
+            <!-- ③ 加载提示 -->
             <RowDefinition Height="*"/>
-            <!-- 数据表格 -->
+            <!-- ④ 数据表格 -->
             <RowDefinition Height="Auto"/>
-            <!-- 分页控件 -->
+            <!-- ⑤ 分页控件 -->
             <RowDefinition Height="Auto"/>
-            <!-- 底部状态栏 -->
+            <!-- ⑥ 底部状态栏 -->
         </Grid.RowDefinitions>
 
         <!-- ===== ① 标题栏 ===== -->
@@ -88,7 +93,7 @@
             </Grid>
         </Border>
 
-        <!-- ===== ② 检索条件区（重构布局逻辑） ===== -->
+        <!-- ===== ② 检索条件区（重构版） ===== -->
         <Border Grid.Row="1"
                 Background="#F8F9FA"
                 CornerRadius="8"
@@ -99,7 +104,11 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <!-- 第一行：机种名称 / 序列号 / 方案名称 / 判定结果 -->
                     <RowDefinition Height="Auto"/>
+                    <!-- 第二行：开始日期 / 结束日期 -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- 第三行：操作按钮（检索/重置/清空/导出） -->
                 </Grid.RowDefinitions>
 
                 <!-- 第一行：机种名称 / 序列号 / 方案名称 / 判定结果 -->
@@ -116,11 +125,6 @@
                         <ColumnDefinition Width="20"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="1*"/>
-                        <ColumnDefinition Width="20"/>
-                        <!-- 将检索和重置按钮直接放在第一行末尾统一对齐 -->
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="10"/>
-                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- 机种名称 -->
@@ -162,28 +166,10 @@
                               ItemsSource="{Binding FinalResultOptions}"
                               Height="36" FontSize="14"
                               VerticalContentAlignment="Center"/>
-
-                    <!-- 检索按钮 -->
-                    <Button Grid.Column="12"
-                            Content="🔍 检索"
-                            Command="{Binding SearchCommand}"
-                            Width="80" Height="36"
-                            FontSize="14" FontWeight="Bold"
-                            Foreground="White" Background="#3498DB"
-                            Cursor="Hand" BorderThickness="0"/>
-
-                    <!-- 重置按钮（与检索放一起，逻辑上更统一） -->
-                    <Button Grid.Column="14"
-                            Content="↺ 重置"
-                            Command="{Binding ResetCommand}"
-                            Width="80" Height="36"
-                            FontSize="14" FontWeight="Bold"
-                            Foreground="White" Background="#E67E22"
-                            Cursor="Hand" BorderThickness="0"/>
                 </Grid>
 
-                <!-- 第二行：开始日期 / 结束日期（去掉了多余的宽度冲突列） -->
-                <Grid Grid.Row="1">
+                <!-- 第二行：开始日期 / 结束日期（带清除"小x"） -->
+                <Grid Grid.Row="1" Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="1.5*"/>
@@ -191,8 +177,6 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="1.5*"/>
                         <ColumnDefinition Width="*"/>
-                        <!-- 右侧自动填充的弹性空白 -->
-                        <!-- 导出放在表格右侧更好，去掉此处右侧按钮 -->
                     </Grid.ColumnDefinitions>
 
                     <!-- 开始日期 -->
@@ -202,17 +186,163 @@
                                 SelectedDate="{Binding StartDate}"
                                 Height="36" FontSize="14"
                                 VerticalContentAlignment="Center"
+                                x:Name="StartDatePicker"
                                 ToolTip="选择查询起始日期（含当天）"/>
 
-                    <!-- 结束日期（修复了被 30px 宽度列挤压丢失的 Bug） -->
+                    <!-- 结束日期 -->
                     <TextBlock Grid.Column="3" Text="结束日期：" VerticalAlignment="Center"
                                FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
                     <DatePicker Grid.Column="4"
                                 SelectedDate="{Binding EndDate}"
                                 Height="36" FontSize="14"
                                 VerticalContentAlignment="Center"
+                                x:Name="EndDatePicker"
                                 ToolTip="选择查询截止日期（含当天）"/>
                 </Grid>
+
+                <!-- 第三行：操作按钮（检索/重置/清空条件/导出CSV） -->
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Left">
+                    <!-- 🔍 检索 -->
+                    <Button Content="🔍 检索"
+                            Command="{Binding SearchCommand}"
+                            Width="90" Height="38"
+                            FontSize="14" FontWeight="Bold"
+                            Foreground="White" Background="#3498DB"
+                            Cursor="Hand" BorderThickness="0"
+                            Margin="0,0,10,0">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="border"
+                                        Background="{TemplateBinding Background}"
+                                        CornerRadius="6"
+                                        BorderThickness="0">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#2980B9"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#2471A3"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border"
+                                                Property="Opacity" Value="0.6"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- ↺ 重置 -->
+                    <Button Content="↺ 重置"
+                            Command="{Binding ResetCommand}"
+                            Width="90" Height="38"
+                            FontSize="14" FontWeight="Bold"
+                            Foreground="White" Background="#E67E22"
+                            Cursor="Hand" BorderThickness="0"
+                            Margin="0,0,10,0">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="border"
+                                        Background="{TemplateBinding Background}"
+                                        CornerRadius="6"
+                                        BorderThickness="0">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#D35400"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#BA4A00"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border"
+                                                Property="Opacity" Value="0.6"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- 🧹 清空条件 -->
+                    <Button Content="🧹 清空条件"
+                            Command="{Binding ClearConditionsCommand}"
+                            Width="110" Height="38"
+                            FontSize="14" FontWeight="Bold"
+                            Foreground="White" Background="#95A5A6"
+                            Cursor="Hand" BorderThickness="0"
+                            Margin="0,0,10,0"
+                            ToolTip="清空所有检索条件输入框（不刷新表格）">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="border"
+                                        Background="{TemplateBinding Background}"
+                                        CornerRadius="6"
+                                        BorderThickness="0">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#7F8C8D"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#707B7C"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border"
+                                                Property="Opacity" Value="0.6"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- 📥 导出CSV -->
+                    <Button Content="📥 导出CSV"
+                            Command="{Binding ExportToCsvCommand}"
+                            Width="120" Height="38"
+                            FontSize="14" FontWeight="Bold"
+                            Foreground="White" Background="#27AE60"
+                            Cursor="Hand" BorderThickness="0"
+                            ToolTip="导出当前筛选条件下的全部数据为CSV文件">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="border"
+                                        Background="{TemplateBinding Background}"
+                                        CornerRadius="6"
+                                        BorderThickness="0">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#219A52"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border"
+                                                Property="Background" Value="#1E8449"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border"
+                                                Property="Opacity" Value="0.6"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -228,136 +358,117 @@
                        HorizontalAlignment="Center"/>
         </Border>
 
-        <!-- ===== ④ 数据表格（导出按钮移到表格右上角） ===== -->
-        <Grid Grid.Row="3">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <!-- 工具栏（导出） -->
-                <RowDefinition Height="*"/>
-                <!-- 表格 -->
-            </Grid.RowDefinitions>
-
-            <!-- 表格工具栏（放置导出CSV） -->
-            <Border Grid.Row="0" Padding="0,0,0,8" HorizontalAlignment="Right">
-                <Button Content="📥 导出CSV"
-                        Command="{Binding ExportToCsvCommand}"
-                        Width="110" Height="36"
-                        FontSize="14" FontWeight="Bold"
-                        Foreground="White" Background="#27AE60"
-                        Cursor="Hand" BorderThickness="0"/>
-            </Border>
-
-            <DataGrid Grid.Row="1"
-                      ItemsSource="{Binding LogDataList}"
-                      AutoGenerateColumns="False"
-                      IsReadOnly="True"
-                      CanUserAddRows="False"
-                      CanUserDeleteRows="False"
-                      CanUserReorderColumns="False"
-                      CanUserSortColumns="True"
-                      SelectionMode="Extended"
-                      SelectionUnit="FullRow"
-                      GridLinesVisibility="Horizontal"
-                      HorizontalGridLinesBrush="#E9ECEF"
-                      RowHeaderWidth="0"
-                      RowHeight="36"
-                      ColumnHeaderHeight="40"
-                      FontSize="13"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Auto"
-                      Background="White"
-                      BorderBrush="#DEE2E6"
-                      BorderThickness="1"
-                      x:Name="LogDataGrid">
-                <DataGrid.Resources>
-                    <Style TargetType="DataGridColumnHeader">
-                        <Setter Property="Background" Value="#34495E"/>
-                        <Setter Property="Foreground" Value="White"/>
-                        <Setter Property="FontWeight" Value="Bold"/>
-                        <Setter Property="FontSize" Value="13"/>
-                        <Setter Property="HorizontalContentAlignment" Value="Center"/>
-                        <Setter Property="Padding" Value="8,0"/>
-                        <Setter Property="BorderBrush" Value="#2C3E50"/>
-                        <Setter Property="BorderThickness" Value="0,0,0,2"/>
-                    </Style>
-                    <Style TargetType="DataGridRow">
-                        <Setter Property="Background" Value="White"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#EBF5FB"/>
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="#D4E6F1"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-                    <Style TargetType="DataGridCell">
-                        <Setter Property="VerticalContentAlignment" Value="Center"/>
-                        <Setter Property="HorizontalContentAlignment" Value="Center"/>
-                        <Setter Property="Padding" Value="6,0"/>
-                        <Setter Property="BorderBrush" Value="#E9ECEF"/>
-                        <Setter Property="BorderThickness" Value="0,0,0,0"/>
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="DataGridCell">
-                                    <Border Background="{TemplateBinding Background}"
-                                            BorderBrush="{TemplateBinding BorderBrush}"
-                                            BorderThickness="{TemplateBinding BorderThickness}"
-                                            Padding="{TemplateBinding Padding}">
-                                        <ContentPresenter VerticalAlignment="Center"
-                                                          HorizontalAlignment="Center"/>
-                                    </Border>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </DataGrid.Resources>
-
-                <!-- ===== 固定列定义 ===== -->
-                <DataGrid.Columns>
-                    <!-- 检测时间 -->
-                    <DataGridTextColumn Header="检测时间"
-                                        Binding="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
-                                        Width="160"/>
-                    <!-- 机种名称 -->
-                    <DataGridTextColumn Header="机种名称"
-                                        Binding="{Binding Series}"
-                                        Width="100"/>
-                    <!-- 序列号 -->
-                    <DataGridTextColumn Header="序列号"
-                                        Binding="{Binding SerialNumber}"
-                                        Width="140"/>
-                    <!-- 方案名称 -->
-                    <DataGridTextColumn Header="方案名称"
-                                        Binding="{Binding PlanName}"
-                                        Width="120"/>
-                    <!-- 操作员 -->
-                    <DataGridTextColumn Header="操作员"
-                                        Binding="{Binding Operator}"
-                                        Width="90"/>
-                    <!-- 综合判定 — 带颜色标签 -->
-                    <DataGridTemplateColumn Header="综合判定" Width="90">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <Border CornerRadius="4"
-                                        Padding="8,3"
-                                        HorizontalAlignment="Center"
-                                        Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
-                                    <TextBlock Text="{Binding FinalResult}"
-                                               FontWeight="Bold"
-                                               FontSize="13"
-                                               Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
-                                               HorizontalAlignment="Center"/>
+        <!-- ===== ④ 数据表格 ===== -->
+        <DataGrid Grid.Row="3"
+                  ItemsSource="{Binding LogDataList}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  CanUserReorderColumns="False"
+                  CanUserSortColumns="True"
+                  SelectionMode="Extended"
+                  SelectionUnit="FullRow"
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="#E9ECEF"
+                  RowHeaderWidth="0"
+                  RowHeight="36"
+                  ColumnHeaderHeight="40"
+                  FontSize="13"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Auto"
+                  Background="White"
+                  BorderBrush="#DEE2E6"
+                  BorderThickness="1"
+                  x:Name="LogDataGrid">
+            <DataGrid.Resources>
+                <Style TargetType="DataGridColumnHeader">
+                    <Setter Property="Background" Value="#34495E"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="FontWeight" Value="Bold"/>
+                    <Setter Property="FontSize" Value="13"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                    <Setter Property="Padding" Value="8,0"/>
+                    <Setter Property="BorderBrush" Value="#2C3E50"/>
+                    <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                </Style>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="Background" Value="White"/>
+                    <Style.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="#EBF5FB"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="#D4E6F1"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+                <Style TargetType="DataGridCell">
+                    <Setter Property="VerticalContentAlignment" Value="Center"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                    <Setter Property="Padding" Value="6,0"/>
+                    <Setter Property="BorderBrush" Value="#E9ECEF"/>
+                    <Setter Property="BorderThickness" Value="0,0,0,0"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="DataGridCell">
+                                <Border Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter VerticalAlignment="Center"
+                                                      HorizontalAlignment="Center"/>
                                 </Border>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                    <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
-                </DataGrid.Columns>
-            </DataGrid>
-        </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </DataGrid.Resources>
 
-        <!-- ===== ⑤ 分页控件 ===== -->
+            <!-- ===== 固定列定义 ===== -->
+            <DataGrid.Columns>
+                <!-- 检测时间 -->
+                <DataGridTextColumn Header="检测时间"
+                                    Binding="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                                    Width="160"/>
+                <!-- 机种名称 -->
+                <DataGridTextColumn Header="机种名称"
+                                    Binding="{Binding Series}"
+                                    Width="100"/>
+                <!-- 序列号 -->
+                <DataGridTextColumn Header="序列号"
+                                    Binding="{Binding SerialNumber}"
+                                    Width="140"/>
+                <!-- 方案名称 -->
+                <DataGridTextColumn Header="方案名称"
+                                    Binding="{Binding PlanName}"
+                                    Width="120"/>
+                <!-- 操作员 -->
+                <DataGridTextColumn Header="操作员"
+                                    Binding="{Binding Operator}"
+                                    Width="90"/>
+                <!-- 综合判定 — 带颜色标签 -->
+                <DataGridTemplateColumn Header="综合判定" Width="90">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="4"
+                                    Padding="8,3"
+                                    HorizontalAlignment="Center"
+                                    Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
+                                <TextBlock Text="{Binding FinalResult}"
+                                           FontWeight="Bold"
+                                           FontSize="13"
+                                           Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
+                                           HorizontalAlignment="Center"/>
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- ===== ⑤ 分页控件（修复按钮样式） ===== -->
         <Border Grid.Row="4"
                 Background="#F8F9FA"
                 CornerRadius="4"
@@ -391,39 +502,75 @@
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"/>
 
-                <!-- 右侧：翻页按钮 -->
+                <!-- 右侧：翻页按钮（修复悬停/点击变白 + 禁用态半透明） -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <!-- ◀ 上一页 -->
                     <Button Content="◀ 上一页"
                             Command="{Binding PreviousPageCommand}"
-                            IsEnabled="{Binding CanGoPrevious}"
                             Width="90" Height="32"
                             FontSize="13" FontWeight="Bold"
-                            Foreground="White" Background="#3498DB"
+                            Foreground="White"
                             Cursor="Hand" BorderThickness="0"
                             Margin="0,0,8,0">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border Background="{TemplateBinding Background}"
-                                        CornerRadius="4" BorderThickness="0"
-                                        Opacity="{TemplateBinding IsEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border x:Name="border"
+                                        CornerRadius="4"
+                                        BorderThickness="0"
+                                        Background="#3498DB"
+                                        Opacity="{Binding IsEnabled, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource BoolToOpacityConverter}}">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
                                 </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsEnabled" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#3498DB"/>
+                                    </Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#2980B9"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#2471A3"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border" Property="Background" Value="#95A5A6"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
+
+                    <!-- 下一页 ▶ -->
                     <Button Content="下一页 ▶"
                             Command="{Binding NextPageCommand}"
-                            IsEnabled="{Binding CanGoNext}"
                             Width="90" Height="32"
                             FontSize="13" FontWeight="Bold"
-                            Foreground="White" Background="#3498DB"
+                            Foreground="White"
                             Cursor="Hand" BorderThickness="0">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border Background="{TemplateBinding Background}"
-                                        CornerRadius="4" BorderThickness="0">
-                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border x:Name="border"
+                                        CornerRadius="4"
+                                        BorderThickness="0"
+                                        Background="#3498DB"
+                                        Opacity="{Binding IsEnabled, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource BoolToOpacityConverter}}">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
                                 </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsEnabled" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#3498DB"/>
+                                    </Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#2980B9"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#2471A3"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border" Property="Background" Value="#95A5A6"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Button.Template>
                     </Button>

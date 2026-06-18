@@ -344,6 +344,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
+        /// 清空所有检索条件输入框（不清空表格数据）
+        /// 与「重置」的区别：重置会清空表格并恢复默认值；
+        /// 清空条件只清空输入框，方便用户快速重新输入
+        /// </summary>
+        [RelayCommand]
+        private void ClearConditions()
+        {
+            _logger.LogInformation("清空检索条件输入框");
+
+            SelectedMachineType = string.Empty;
+            SearchSerialNumber = string.Empty;
+            SelectedPlanName = "全部方案";
+            StartDate = null;
+            EndDate = null;
+            FilterFinalResult = "全部";
+            PageIndex = 1;
+
+            // 不清空表格数据，不触发重新检索
+            // 用户可修改条件后手动点击「检索」
+        }
+
+        /// <summary>
         /// 返回主菜单
         /// </summary>
         [RelayCommand]
