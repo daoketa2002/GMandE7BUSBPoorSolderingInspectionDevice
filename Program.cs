@@ -16,6 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Windows;
+using Microsoft.EntityFrameworkCore;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice
 {
@@ -145,19 +146,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 数据库上下文 ===
             services.AddDbContext<AppDbContext>();
 
+            // === 数据库上下文工厂 ===（替代直接注入 DbContext，避免跨线程问题）
+            services.AddDbContextFactory<AppDbContext>((sp, options) =>
+            {
+                var dbSettings = sp.GetRequiredService<DatabaseSettings>();
+                var connectionString = dbSettings.SqliteConnectionString;
+                options.UseSqlite(connectionString);
+            }, ServiceLifetime.Scoped);
+
+            // === 日志数据库服务（EF Core 实现）===
+            services.AddSingleton<ILogDatabaseService, LogDatabaseService>();
+
+
             // === 导航服务 === 
             services.AddSingleton<INavigationService, NavigationService>();
 
             // === 方案设定相关服务 === 
             services.AddSingleton<IPlanStorageService, PlanStorageService>();
 
-            // === 日志数据相关服务 ===
-            services.AddSingleton<LogDataService>();
+            //// === 日志数据相关服务（已弃用） ===
+            //services.AddSingleton<LogDataService>();
+            //services.AddSingleton<ILogDataService, LogDataService>();    // 日志数据服务（接口注入）
 
             // === 内存监控服务 === 
             services.AddSingleton<MemoryMonitorService>();
-
-            services.AddSingleton<ILogDataService, LogDataService>();    // 日志数据服务（接口注入）
+            
             services.AddSingleton<ICsvExportService, CsvExportService>(); // CSV导出服务（接口注入）
             services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>(); // 扫描枪条码接收和解析
 

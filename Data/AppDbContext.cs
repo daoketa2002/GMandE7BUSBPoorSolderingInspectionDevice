@@ -1,16 +1,26 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Serilog;
 using System;
 using System.Diagnostics;
-using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Data
 {
     public class AppDbContext : DbContext
     {
-        // 现有实体
-      
+        
+        /// <summary>
+        /// 检测主记录表
+        /// </summary>
+        public DbSet<LogRecord> LogRecords => Set<LogRecord>();
+
+        /// <summary>
+        /// Pin结果明细表
+        /// </summary>
+        public DbSet<PinResult> PinResults => Set<PinResult>();
+
         // 数据库设定
         private readonly DatabaseSettings _databaseSettings;
         private static readonly ILogger _logger = Log.ForContext<AppDbContext>();

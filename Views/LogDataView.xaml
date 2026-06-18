@@ -1,22 +1,12 @@
 <!--
-    日志数据页面 — 展示CSV检测日志的浏览与检索界面。
-
-    页面布局（从上到下）：
-      1. 标题栏      — 页面标题 + 返回主菜单按钮
-      2. 检索条件区  — 机种名称（可编辑下拉框）、序列号、方案名称 + 检索/重置/导出按钮
-      3. 加载提示    — 数据加载中时显示的进度提示条
-      4. 数据表格    — DataGrid，固定列 + 动态列 + 日期 + 时间
-      5. 底部状态栏  — 总记录数 + 操作提示
-
-    动态列机制：
-      - 固定列（序号、机种名称、序列号、方案名称、检查者、综合判定）在XAML中静态定义
-      - 动态列（如 B4-B5、A1-A2、B5-B6 等）由 LogDataView.xaml.cs 根据 DynamicHeaders 集合运行时生成
-      - 日期和时间列紧跟在所有动态列之后
-
-    检索机制：
-      - 机种名称、序列号、方案名称 三个条件之间为 AND 关系（同时满足）
-      - 空白条件视为忽略该维度
-      - 匹配方式：Contains 模糊匹配（忽略大小写）
+  ============================================================
+  文件: Views/LogDataView.xaml
+  修改:
+    1. 检索条件区新增：开始日期、结束日期、判定结果筛选
+    2. 方案名称改为可编辑下拉框（支持"全部方案"）
+    3. 底部新增分页控件（每页条数+翻页+页号显示）
+    4. 数据源从 LogDataModel 改为 LogRecord
+  ============================================================
 -->
 <UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.LogDataView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -33,21 +23,28 @@
              Background="White">
 
     <UserControl.Resources>
-        <!-- 综合判定 → 背景色转换器（PASS=绿, FAIL=红 等） -->
+        <!-- 综合判定 → 背景色转换器（OK=绿, NG=红 等） -->
         <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
         <!-- 综合判定 → 前景色转换器 -->
         <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
-        <!-- bool → Visibility 转换器（用于加载提示） -->
+        <!-- bool → Visibility 转换器 -->
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </UserControl.Resources>
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>  <!-- 标题栏 -->
-            <RowDefinition Height="Auto"/>  <!-- 检索条件 -->
-            <RowDefinition Height="Auto"/>  <!-- 加载提示 -->
-            <RowDefinition Height="*"/>     <!-- 数据表格（占据剩余空间） -->
-            <RowDefinition Height="Auto"/>  <!-- 底部状态栏 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 标题栏 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 检索条件 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 加载提示 -->
+            <RowDefinition Height="*"/>
+            <!-- 数据表格 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 分页控件 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 底部状态栏 -->
         </Grid.RowDefinitions>
 
         <!-- ===== ① 标题栏 ===== -->
@@ -61,7 +58,6 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <!-- 标题文字 -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="📊 " FontSize="24" Foreground="White" VerticalAlignment="Center"/>
                     <TextBlock Text="日志数据"
@@ -71,15 +67,13 @@
                                FontSize="14" Foreground="#BDC3C7"
                                VerticalAlignment="Center" Margin="12,0,0,0"/>
                 </StackPanel>
-                <!-- 返回主菜单按钮 -->
                 <Button Grid.Column="1"
                         Content="↩ 返回主菜单"
                         Command="{Binding GoBackCommand}"
                         Width="130" Height="40"
                         FontSize="14" FontWeight="Bold"
                         Foreground="White" Background="#95A5A6"
-                        Cursor="Hand"
-                        BorderThickness="0">
+                        Cursor="Hand" BorderThickness="0">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border Background="{TemplateBinding Background}"
@@ -94,7 +88,7 @@
             </Grid>
         </Border>
 
-        <!-- ===== ② 检索条件区 ===== -->
+        <!-- ===== ② 检索条件区（双行布局） ===== -->
         <Border Grid.Row="1"
                 Background="#F8F9FA"
                 CornerRadius="8"
@@ -103,72 +97,129 @@
                 Padding="16,12"
                 Margin="0,0,0,12">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>  <!-- 机种名称标签 -->
-                    <ColumnDefinition Width="200"/>   <!-- 机种名称下拉框 -->
-                    <ColumnDefinition Width="20"/>    <!-- 间距 -->
-                    <ColumnDefinition Width="Auto"/>  <!-- 序列号标签 -->
-                    <ColumnDefinition Width="180"/>   <!-- 序列号输入框 -->
-                    <ColumnDefinition Width="20"/>    <!-- 间距 -->
-                    <ColumnDefinition Width="Auto"/>  <!-- 方案名称标签 -->
-                    <ColumnDefinition Width="180"/>   <!-- 方案名称输入框 -->
-                    <ColumnDefinition Width="30"/>    <!-- 间距 -->
-                    <ColumnDefinition Width="Auto"/>  <!-- 按钮组 -->
-                    <ColumnDefinition Width="*"/>     <!-- 右侧留白 -->
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <!-- 机种名称 — 可编辑下拉框，支持预设选择或手动输入 -->
-                <TextBlock Grid.Column="0" Text="机种名称：" VerticalAlignment="Center"
-                           FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
-                <ComboBox Grid.Column="1"
-                          IsEditable="True"
-                          Text="{Binding SelectedMachineType, UpdateSourceTrigger=PropertyChanged}"
-                          ItemsSource="{Binding MachineTypes}"
-                          Height="36" FontSize="14"
-                          VerticalContentAlignment="Center"
-                          ToolTip="可选择预设值或手动输入"/>
+                <!-- 第一行：机种名称 / 序列号 / 方案名称 / 判定结果 -->
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="30"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                <!-- 序列号 — 自定义输入，支持模糊匹配 -->
-                <TextBlock Grid.Column="3" Text="序列号：" VerticalAlignment="Center"
-                           FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
-                <TextBox Grid.Column="4"
-                         Text="{Binding SearchSerialNumber, UpdateSourceTrigger=PropertyChanged}"
-                         Height="36" FontSize="14"
-                         VerticalContentAlignment="Center"
-                         ToolTip="输入序列号进行检索（支持模糊匹配）"/>
+                    <!-- 机种名称 -->
+                    <TextBlock Grid.Column="0" Text="机种名称：" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <ComboBox Grid.Column="1"
+                              IsEditable="True"
+                              Text="{Binding SelectedMachineType, UpdateSourceTrigger=PropertyChanged}"
+                              ItemsSource="{Binding MachineTypes}"
+                              Height="36" FontSize="14"
+                              VerticalContentAlignment="Center"
+                              ToolTip="可选择预设值或手动输入"/>
 
-                <!-- 方案名称 — 自定义输入，支持模糊匹配 -->
-                <TextBlock Grid.Column="6" Text="方案名称：" VerticalAlignment="Center"
-                           FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
-                <TextBox Grid.Column="7"
-                         Text="{Binding SearchPlanName, UpdateSourceTrigger=PropertyChanged}"
-                         Height="36" FontSize="14"
-                         VerticalContentAlignment="Center"
-                         ToolTip="输入方案名称进行检索（支持模糊匹配）"/>
+                    <!-- 序列号 -->
+                    <TextBlock Grid.Column="3" Text="序列号：" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <TextBox Grid.Column="4"
+                             Text="{Binding SearchSerialNumber, UpdateSourceTrigger=PropertyChanged}"
+                             Height="36" FontSize="14"
+                             VerticalContentAlignment="Center"
+                             ToolTip="输入序列号进行检索（支持模糊匹配）"/>
 
-                <!-- 操作按钮组：检索 / 重置 / 导出CSV -->
-                <StackPanel Grid.Column="9" Orientation="Horizontal">
-                    <Button Content="🔍 检索"
+                    <!-- 方案名称 -->
+                    <TextBlock Grid.Column="6" Text="方案名称：" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <ComboBox Grid.Column="7"
+                              IsEditable="True"
+                              Text="{Binding SelectedPlanName, UpdateSourceTrigger=PropertyChanged}"
+                              ItemsSource="{Binding PlanNames}"
+                              Height="36" FontSize="14"
+                              VerticalContentAlignment="Center"
+                              ToolTip="选择方案名称（全部方案=不筛选）"/>
+
+                    <!-- 判定结果 -->
+                    <TextBlock Grid.Column="9" Text="判定结果：" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <ComboBox Grid.Column="10"
+                              SelectedItem="{Binding FilterFinalResult}"
+                              ItemsSource="{Binding FinalResultOptions}"
+                              Height="36" FontSize="14"
+                              VerticalContentAlignment="Center"/>
+
+                    <!-- 检索按钮 -->
+                    <Button Grid.Column="12"
+                            Content="🔍 检索"
                             Command="{Binding SearchCommand}"
                             Width="80" Height="36"
                             FontSize="14" FontWeight="Bold"
                             Foreground="White" Background="#3498DB"
-                            Cursor="Hand" BorderThickness="0"
-                            Margin="0,0,8,0"/>
-                    <Button Content="↺ 重置"
+                            Cursor="Hand" BorderThickness="0"/>
+                </Grid>
+
+                <!-- 第二行：开始日期 / 结束日期 / 重置 / 导出 -->
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="30"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 开始日期 -->
+                    <TextBlock Grid.Column="0" Text="开始日期：" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <DatePicker Grid.Column="1"
+                                SelectedDate="{Binding StartDate}"
+                                Height="36" FontSize="14"
+                                VerticalContentAlignment="Center"
+                                ToolTip="选择查询起始日期（含当天）"/>
+
+                    <!-- 结束日期 -->
+                    <TextBlock Grid.Column="3" Text="结束日期：" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <DatePicker Grid.Column="5"
+                                SelectedDate="{Binding EndDate}"
+                                Height="36" FontSize="14"
+                                VerticalContentAlignment="Center"
+                                ToolTip="选择查询截止日期（含当天）"/>
+
+                    <!-- 重置按钮 -->
+                    <Button Grid.Column="6"
+                            Content="↺ 重置"
                             Command="{Binding ResetCommand}"
                             Width="80" Height="36"
                             FontSize="14" FontWeight="Bold"
                             Foreground="White" Background="#E67E22"
-                            Cursor="Hand" BorderThickness="0"
-                            Margin="0,0,8,0"/>
-                    <Button Content="📥 导出CSV"
+                            Cursor="Hand" BorderThickness="0"/>
+
+                    <!-- 导出CSV按钮（右对齐） -->
+                    <Button Grid.Column="7"
+                            Content="📥 导出CSV"
                             Command="{Binding ExportToCsvCommand}"
-                            Width="100" Height="36"
+                            Width="110" Height="36"
                             FontSize="14" FontWeight="Bold"
                             Foreground="White" Background="#27AE60"
-                            Cursor="Hand" BorderThickness="0"/>
-                </StackPanel>
+                            Cursor="Hand" BorderThickness="0"
+                            HorizontalAlignment="Right"/>
+                </Grid>
             </Grid>
         </Border>
 
@@ -185,13 +236,6 @@
         </Border>
 
         <!-- ===== ④ 数据表格 ===== -->
-        <!--
-            表格列结构：
-              固定列（XAML静态定义）→ 动态列（代码生成）→ 日期、时间（代码生成）
-
-            固定列在XAML中定义（序号 ~ 综合判定），共6列。
-            动态列在 LogDataView.xaml.cs 的 GenerateDynamicColumns() 中按 DynamicHeaders 集合运行时生成。
-        -->
         <DataGrid Grid.Row="3"
                   ItemsSource="{Binding LogDataList}"
                   AutoGenerateColumns="False"
@@ -215,7 +259,6 @@
                   BorderThickness="1"
                   x:Name="LogDataGrid">
             <DataGrid.Resources>
-                <!-- 列头样式 — 深色背景、白色文字 -->
                 <Style TargetType="DataGridColumnHeader">
                     <Setter Property="Background" Value="#34495E"/>
                     <Setter Property="Foreground" Value="White"/>
@@ -226,7 +269,6 @@
                     <Setter Property="BorderBrush" Value="#2C3E50"/>
                     <Setter Property="BorderThickness" Value="0,0,0,2"/>
                 </Style>
-                <!-- 行样式 — 悬停高亮、选中高亮 -->
                 <Style TargetType="DataGridRow">
                     <Setter Property="Background" Value="White"/>
                     <Style.Triggers>
@@ -238,7 +280,6 @@
                         </Trigger>
                     </Style.Triggers>
                 </Style>
-                <!-- 单元格样式 — 居中显示 -->
                 <Style TargetType="DataGridCell">
                     <Setter Property="VerticalContentAlignment" Value="Center"/>
                     <Setter Property="HorizontalContentAlignment" Value="Center"/>
@@ -261,15 +302,15 @@
                 </Style>
             </DataGrid.Resources>
 
-            <!-- ===== 固定列定义（6列） ===== -->
+            <!-- ===== 固定列定义 ===== -->
             <DataGrid.Columns>
-                <!-- 序号 -->
-                <DataGridTextColumn Header="序号"
-                                    Binding="{Binding Index}"
-                                    Width="60"/>
+                <!-- 检测时间 -->
+                <DataGridTextColumn Header="检测时间"
+                                    Binding="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                                    Width="160"/>
                 <!-- 机种名称 -->
                 <DataGridTextColumn Header="机种名称"
-                                    Binding="{Binding MachineType}"
+                                    Binding="{Binding Series}"
                                     Width="100"/>
                 <!-- 序列号 -->
                 <DataGridTextColumn Header="序列号"
@@ -279,33 +320,107 @@
                 <DataGridTextColumn Header="方案名称"
                                     Binding="{Binding PlanName}"
                                     Width="120"/>
-                <!-- 检查者 -->
-                <DataGridTextColumn Header="检查者"
-                                    Binding="{Binding Inspector}"
+                <!-- 操作员 -->
+                <DataGridTextColumn Header="操作员"
+                                    Binding="{Binding Operator}"
                                     Width="90"/>
-                <!-- 综合判定 — 带颜色标签（PASS=绿底, FAIL=红底） -->
+                <!-- 综合判定 — 带颜色标签 -->
                 <DataGridTemplateColumn Header="综合判定" Width="90">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <Border CornerRadius="4"
                                     Padding="8,3"
                                     HorizontalAlignment="Center"
-                                    Background="{Binding Judgment, Converter={StaticResource JudgmentToBackgroundConverter}}">
-                                <TextBlock Text="{Binding Judgment}"
+                                    Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
+                                <TextBlock Text="{Binding FinalResult}"
                                            FontWeight="Bold"
                                            FontSize="13"
-                                           Foreground="{Binding Judgment, Converter={StaticResource JudgmentToForegroundConverter}}"
+                                           Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
                                            HorizontalAlignment="Center"/>
                             </Border>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <!-- 注：动态列和日期/时间列由 LogDataView.xaml.cs 在运行时生成 -->
+                <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
             </DataGrid.Columns>
         </DataGrid>
 
-        <!-- ===== ⑤ 底部状态栏 ===== -->
+        <!-- ===== ⑤ 分页控件 ===== -->
         <Border Grid.Row="4"
+                Background="#F8F9FA"
+                CornerRadius="4"
+                BorderBrush="#DEE2E6"
+                BorderThickness="1"
+                Padding="10,8"
+                Margin="0,8,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 左侧：每页显示条数 -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="每页显示：" FontSize="13" Foreground="#495057" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding PageSizeOptions}"
+                              SelectedItem="{Binding PageSize}"
+                              Width="70" Height="30"
+                              FontSize="13"
+                              VerticalContentAlignment="Center"
+                              Margin="6,0,0,0"/>
+                </StackPanel>
+
+                <!-- 中间：页码信息 -->
+                <TextBlock Grid.Column="1"
+                           Text="{Binding PageInfoText}"
+                           FontSize="14" FontWeight="SemiBold"
+                           Foreground="#2C3E50"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+
+                <!-- 右侧：翻页按钮 -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button Content="◀ 上一页"
+                            Command="{Binding PreviousPageCommand}"
+                            IsEnabled="{Binding CanGoPrevious}"
+                            Width="90" Height="32"
+                            FontSize="13" FontWeight="Bold"
+                            Foreground="White" Background="#3498DB"
+                            Cursor="Hand" BorderThickness="0"
+                            Margin="0,0,8,0">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}"
+                                        CornerRadius="4" BorderThickness="0"
+                                        Opacity="{TemplateBinding IsEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <Button Content="下一页 ▶"
+                            Command="{Binding NextPageCommand}"
+                            IsEnabled="{Binding CanGoNext}"
+                            Width="90" Height="32"
+                            FontSize="13" FontWeight="Bold"
+                            Foreground="White" Background="#3498DB"
+                            Cursor="Hand" BorderThickness="0">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}"
+                                        CornerRadius="4" BorderThickness="0">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===== ⑥ 底部状态栏 ===== -->
+        <Border Grid.Row="5"
                 Background="#F8F9FA"
                 CornerRadius="4"
                 BorderBrush="#DEE2E6"
@@ -317,13 +432,11 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <!-- 总记录数 -->
                 <TextBlock Grid.Column="0"
                            Text="{Binding TotalCountText}"
                            FontSize="14" FontWeight="SemiBold"
                            Foreground="#2C3E50"
                            VerticalAlignment="Center"/>
-                <!-- 操作提示 -->
                 <TextBlock Grid.Column="1"
                            Text="提示：输入检索条件后点击「检索」查看数据，支持 Ctrl+C 复制和列排序"
                            FontSize="12" Foreground="#95A5A6"

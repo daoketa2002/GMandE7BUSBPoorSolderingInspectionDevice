@@ -1,4 +1,11 @@
-﻿using System;
+﻿// ============================================================
+// 文件: Views/TestPageView.xaml.cs
+// 修改: 移除开始测试按钮相关代码
+//      终了按钮逻辑已在ViewModel中实现，无需后台代码
+//      保留回车键焦点跳转逻辑
+// ============================================================
+
+using System;
 using System.Windows.Controls;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -10,6 +17,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 {
     /// <summary>
     /// 测试页 - 工业检测工位界面
+    /// 注意：开始测试按钮已移除，测试由PLC启动信号触发
+    /// 终了按钮支持测试中终止（逻辑在ViewModel中处理）
     /// </summary>
     [NavigationViewModel(typeof(TestPageViewModel))]
     public partial class TestPageView : UserControl
@@ -43,6 +52,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
         /// <summary>
         /// 输入框回车键自动跳转焦点
+        /// 机种名称 → 序列号 → 作业员
+        /// 在作业员输入框按回车不做特殊处理（测试由PLC信号触发）
         /// </summary>
         private void InputTextBox_KeyDown(object sender, KeyEventArgs e)
         {
@@ -52,22 +63,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
                 if (sender == ModelNameTextBox)
                 {
+                    // 机种名称 → 跳转到序列号
                     SerialNumberTextBox.Focus();
                     SerialNumberTextBox.SelectAll();
                 }
                 else if (sender == SerialNumberTextBox)
                 {
+                    // 序列号 → 跳转到作业员
                     OperatorTextBox.Focus();
                     OperatorTextBox.SelectAll();
                 }
-                else if (sender == OperatorTextBox)
-                {
-                    // 最后一个输入框，触发开始测试
-                    if (_viewModel.StartTestCommand.CanExecute(null))
-                    {
-                        _viewModel.StartTestCommand.Execute(null);
-                    }
-                }
+                // 作业员输入框按回车不自动触发测试（由PLC信号触发）
             }
         }
     }

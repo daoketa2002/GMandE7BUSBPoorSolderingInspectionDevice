@@ -1,12 +1,25 @@
+// ============================================================
+// 文件: ViewModels/LogDataViewModel.cs
+// 描述: 日志数据页面 ViewModel —— 重构版
+// 改动:
+//   - 数据源从CSV切换为SQLite（通过ILogDatabaseService）
+//   - 新增日期范围筛选（开始日期/结束日期）
+//   - 新增判定结果筛选（OK/NG/全部）
+//   - 新增方案筛选器联动（全部方案=Pin并集，具体方案=该方案列）
+//   - 新增分页功能（每页条数+翻页导航）
+// ============================================================
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Drawing.Printing;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -14,68 +27,144 @@ using System.Windows;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     /// <summary>
-    /// 日志数据页面 ViewModel — 管理CSV日志数据的加载、检索和导出。
+    /// 日志数据页面 ViewModel
+    /// 管理检测日志的查询、筛选、分页和导出
+    /// 数据来源：SQLite（LogRecords + PinResults表）
     /// </summary>
-    /// <remarks>
-    /// <para><b>数据流：</b></para>
-    /// <para>1. 页面导航进入时（OnNavigatedToAsync）→ 仅加载机种下拉列表，不展示任何数据。</para>
-    /// <para>2. 用户点击「检索」→ 解析文件夹下所有CSV文件名，按文件名匹配条件，
-    ///    只加载匹配的CSV文件内容并展示。</para>
-    /// <para>3. 用户点击「重置」→ 清空检索条件，清空表格数据。</para>
-    /// <para>4. 用户点击「导出」→ 将当前 LogDataList 导出为CSV文件。</para>
-    /// <para><b>检索依据：</b>文件名格式为 机种名_序列号_方案名称.csv，
-    /// 从文件名提取三要素与检索条件做 Contains 模糊匹配（AND 关系）。</para>
-    /// <para><b>动态列说明：</b>动态列保持文件中的原始顺序，不同文件的列不合并。</para>
-    /// </remarks>
     public partial class LogDataViewModel : ObservableObject, INavigationAware
     {
-        private readonly ILogDataService _logDataService;
+        #region 服务注入
+
+        private readonly ILogDatabaseService _logDatabaseService;
+        private readonly IPlanStorageService _planStorageService;
         private readonly ICsvExportService _csvExportService;
         private readonly INavigationService _navigationService;
         private readonly ILogger<LogDataViewModel> _logger;
 
-        /// <summary>
-        /// 构造器 — 通过DI注入所需服务。
-        /// </summary>
+        #endregion
+
+        #region 构造函数
+
         public LogDataViewModel(
-            ILogDataService logDataService,
+            ILogDatabaseService logDatabaseService,
+            IPlanStorageService planStorageService,
             ICsvExportService csvExportService,
             INavigationService navigationService,
             ILogger<LogDataViewModel> logger)
         {
-            _logDataService = logDataService ?? throw new ArgumentNullException(nameof(logDataService));
+            _logDatabaseService = logDatabaseService ?? throw new ArgumentNullException(nameof(logDatabaseService));
+            _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
             _csvExportService = csvExportService ?? throw new ArgumentNullException(nameof(csvExportService));
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+            // 初始化每页条数选项
+            PageSizeOptions = new ObservableCollection<int> { 20, 50, 100 };
         }
 
-        #region 属性
+        #endregion
 
-        /// <summary>机种名称下拉框的数据源（如 E78、GM5）</summary>
+        #region 检索条件属性
+
+        /// <summary>机种名称下拉框数据源（从数据库去重获取）</summary>
         [ObservableProperty]
         private ObservableCollection<string> _machineTypes = new();
 
-        /// <summary>用户在下拉框中选择或手动输入的机种名称</summary>
+        /// <summary>用户选择的机种名称</summary>
         [ObservableProperty]
         private string _selectedMachineType = string.Empty;
 
-        /// <summary>用户输入的序列号检索条件</summary>
+        /// <summary>序列号检索条件</summary>
         [ObservableProperty]
         private string _searchSerialNumber = string.Empty;
 
-        /// <summary>用户输入的方案名称检索条件</summary>
+        /// <summary>方案名称下拉框数据源（"全部方案" + 数据库已有方案）</summary>
         [ObservableProperty]
-        private string _searchPlanName = string.Empty;
+        private ObservableCollection<string> _planNames = new();
 
-        /// <summary>当前显示在 DataGrid 中的日志数据列表</summary>
+        /// <summary>用户选择的方案名称（"全部方案"表示不做方案筛选）</summary>
         [ObservableProperty]
-        private ObservableCollection<LogDataModel> _logDataList = new();
+        private string _selectedPlanName = "全部方案";
+
+        /// <summary>开始日期（筛选时间范围的起始）</summary>
+        [ObservableProperty]
+        private DateTime? _startDate = null;
+
+        /// <summary>结束日期（筛选时间范围的结束）</summary>
+        [ObservableProperty]
+        private DateTime? _endDate = null;
+
+        /// <summary>判定结果筛选（"全部" / "OK" / "NG"）</summary>
+        [ObservableProperty]
+        private string _filterFinalResult = "全部";
+
+        /// <summary>判定结果选项列表</summary>
+        public ObservableCollection<string> FinalResultOptions { get; } = new()
+        {
+            "全部", "OK", "NG"
+        };
+
+        #endregion
+
+        #region 分页属性
+
+        /// <summary>当前页码（从1开始）</summary>
+        [ObservableProperty]
+        private int _pageIndex = 1;
+
+        /// <summary>每页显示条数</summary>
+        [ObservableProperty]
+        private int _pageSize = 20;
+
+        /// <summary>符合条件的总记录数</summary>
+        [ObservableProperty]
+        private int _totalCount = 0;
+
+        /// <summary>总页数（根据TotalCount和PageSize计算）</summary>
+        [ObservableProperty]
+        private int _totalPages = 0;
+
+        /// <summary>分页信息文本（如 "第1页/共5页"）</summary>
+        [ObservableProperty]
+        private string _pageInfoText = "第1页/共1页";
+
+        /// <summary>每页条数选项（20/50/100）</summary>
+        public ObservableCollection<int> PageSizeOptions { get; }
+
+        /// <summary>是否可以翻到上一页</summary>
+        [ObservableProperty]
+        private bool _canGoPrevious = false;
+
+        /// <summary>是否可以翻到下一页</summary>
+        [ObservableProperty]
+        private bool _canGoNext = false;
+
+        /// <summary>
+        /// 当PageSize变更时自动重新查询并重置到第1页
+        /// </summary>
+        partial void OnPageSizeChanged(int value)
+        {
+            PageIndex = 1;
+            _ = SearchAsync();
+        }
+
+        #endregion
+
+        #region 数据与显示属性
+
+        /// <summary>当前页的日志数据列表（绑定DataGrid）</summary>
+        [ObservableProperty]
+        private ObservableCollection<LogRecord> _logDataList = new();
 
         /// <summary>当前数据中出现的所有动态列名（用于XAML动态生成列）</summary>
+        /// <remarks>
+        /// 全部方案模式：取所有行的PinResults中PinName的并集
+        /// 具体方案模式：从方案JSON中按定义顺序取Pin名称
+        /// </remarks>
         [ObservableProperty]
         private ObservableCollection<string> _dynamicHeaders = new();
 
-        /// <summary>底部状态栏文字（如 "共 15 条记录"）</summary>
+        /// <summary>底部状态栏文字</summary>
         [ObservableProperty]
         private string _totalCountText = "共 0 条记录";
 
@@ -88,32 +177,47 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 命令
 
         /// <summary>
-        /// 执行基于文件名的组合检索。
-        /// 解析文件夹下所有CSV文件名（格式：机种名_序列号_方案名称.csv），
-        /// 文件名三要素与检索条件做 Contains 模糊匹配（AND 关系），
-        /// 只加载文件名匹配的CSV文件内容。
+        /// 执行检索 —— 多条件AND组合 + 分页
         /// </summary>
         [RelayCommand]
         private async Task SearchAsync()
         {
             try
             {
-                _logger.LogInformation("执行检索 - 机种:{MachineType}, 序列号:{Serial}, 方案:{Plan}",
-                    SelectedMachineType, SearchSerialNumber, SearchPlanName);
+                _logger.LogInformation(
+                    "执行检索 - 机种:{Machine}, 序列号:{Serial}, 方案:{Plan}, " +
+                    "日期:{Start}~{End}, 判定:{Result}, 页码:{Page}/{Size}",
+                    SelectedMachineType, SearchSerialNumber, SelectedPlanName,
+                    StartDate?.ToString("yyyy-MM-dd") ?? "*",
+                    EndDate?.ToString("yyyy-MM-dd") ?? "*",
+                    FilterFinalResult, PageIndex, PageSize);
 
                 IsLoading = true;
 
-                // 直接按文件名过滤加载，不缓存全量数据
-                var matched = await _logDataService.LoadFilteredLogDataAsync(
-                    string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
-                    string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
-                    string.IsNullOrWhiteSpace(SearchPlanName) ? null : SearchPlanName.Trim());
+                // 调用数据库分页查询
+                var (records, total) = await _logDatabaseService.QueryLogsAsync(
+                    series: string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
+                    serialNumber: string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
+                    planName: SelectedPlanName == "全部方案" ? null : SelectedPlanName,
+                    startDate: StartDate,
+                    endDate: EndDate,
+                    finalResult: FilterFinalResult == "全部" ? null : FilterFinalResult,
+                    pageIndex: PageIndex,
+                    pageSize: PageSize);
 
-                LogDataList = new ObservableCollection<LogDataModel>(matched);
-                UpdateDynamicHeaders(matched);
+                TotalCount = total;
+                TotalPages = (int)Math.Ceiling((double)total / PageSize);
+                LogDataList = new ObservableCollection<LogRecord>(records);
+
+                // 更新动态列（方案联动）
+                await UpdateDynamicHeadersAsync(records);
+
+                // 更新UI状态
+                UpdatePageInfo();
+                UpdatePaginationButtons();
                 UpdateTotalCount();
 
-                _logger.LogInformation("检索完成，匹配 {Count} 条记录", matched.Count);
+                _logger.LogInformation("检索完成，共{Total}条，当前页{Count}条", total, records.Count);
             }
             catch (Exception ex)
             {
@@ -127,66 +231,120 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 重置检索条件并清空表格数据。
+        /// 重置所有检索条件并清空表格
         /// </summary>
         [RelayCommand]
         private void Reset()
         {
             SelectedMachineType = string.Empty;
             SearchSerialNumber = string.Empty;
-            SearchPlanName = string.Empty;
+            SelectedPlanName = "全部方案";
+            StartDate = null;
+            EndDate = null;
+            FilterFinalResult = "全部";
+            PageIndex = 1;
 
-            LogDataList = new ObservableCollection<LogDataModel>();
+            LogDataList = new ObservableCollection<LogRecord>();
             DynamicHeaders = new ObservableCollection<string>();
             UpdateTotalCount();
+            UpdatePageInfo();
+            UpdatePaginationButtons();
         }
 
         /// <summary>
-        /// 将当前表格数据导出为CSV文件，弹出保存对话框。
-        /// 列顺：固定列 → 动态列 → 日期 → 时间。
+        /// 翻到上一页
+        /// </summary>
+        [RelayCommand]
+        private async Task PreviousPageAsync()
+        {
+            if (PageIndex > 1)
+            {
+                PageIndex--;
+                await SearchAsync();
+            }
+        }
+
+        /// <summary>
+        /// 翻到下一页
+        /// </summary>
+        [RelayCommand]
+        private async Task NextPageAsync()
+        {
+            if (PageIndex < TotalPages)
+            {
+                PageIndex++;
+                await SearchAsync();
+            }
+        }
+
+        /// <summary>
+        /// 导出当前全部数据（所有页）为CSV文件
         /// </summary>
         [RelayCommand]
         private async Task ExportToCsvAsync()
         {
             try
             {
-                _logger.LogInformation("执行导出，当前数据 {Count} 条", LogDataList.Count);
+                _logger.LogInformation("执行导出，当前筛选共{Total}条", TotalCount);
 
-                var dynamicHeaders = DynamicHeaders.ToList();
+                // 查询全部数据（不分页，最多导出10000条防止内存溢出）
+                var (allRecords, _) = await _logDatabaseService.QueryLogsAsync(
+                    series: string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
+                    serialNumber: string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
+                    planName: SelectedPlanName == "全部方案" ? null : SelectedPlanName,
+                    startDate: StartDate,
+                    endDate: EndDate,
+                    finalResult: FilterFinalResult == "全部" ? null : FilterFinalResult,
+                    pageIndex: 1,
+                    pageSize: 10000);
 
-                var headers = new List<(string Header, Func<LogDataModel, string> ValueSelector)>
+                // 导出数据列表（含行号索引）
+                var exportData = allRecords.Select((record, index) => new
                 {
-                    ("序号",       m => m.Index.ToString()),
-                    ("机种名称",   m => m.MachineType),
-                    ("序列号",     m => m.SerialNumber),
-                    ("方案名称",   m => m.PlanName),
-                    ("检查者",     m => m.Inspector),
-                    ("综合判定",   m => m.Judgment),
-                };
+                    Record = record,
+                    RowIndex = index + 1  // 序号从1开始
+                }).ToList();
 
+                // 构建导出列定义 —— 统一使用 Func<LogRecord, string> 单参数委托
+                var dynamicHeaders = DynamicHeaders.ToList();
+                var headers = new List<(string Header, Func<LogRecord, string> ValueSelector)>
+                                {
+                                    // 固定列
+                                    ("序号",       m => (allRecords.IndexOf(m) + 1).ToString()),
+                                    ("机种名称",   m => m.Series),
+                                    ("序列号",     m => m.SerialNumber),
+                                    ("方案名称",   m => m.PlanName),
+                                    ("操作员",     m => m.Operator),
+                                    ("综合判定",   m => m.FinalResult),
+                                };
+
+                // 动态列（Pin检测项）
                 foreach (var dh in dynamicHeaders)
                 {
                     var capturedHeader = dh;
                     headers.Add((capturedHeader, m =>
-                        m.DynamicItems.TryGetValue(capturedHeader, out var val) ? val : string.Empty));
+                    {
+                        var pinResult = m.PinResults?.FirstOrDefault(p => p.PinName == capturedHeader);
+                        return pinResult?.Result ?? "-";
+                    }
+                    ));
                 }
 
-                headers.Add(("日期", m => m.Date));
-                headers.Add(("时间", m => m.Time));
+                // 检测时间列
+                headers.Add(("检测时间", m => m.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")));
 
                 var defaultFileName = $"日志数据导出_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
-                await _csvExportService.ExportWithDialogAsync(LogDataList, headers, defaultFileName);
+                await _csvExportService.ExportWithDialogAsync(allRecords, headers, defaultFileName);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "导出失败");
-                MessageBox.Show($"导出失败：{ex.Message}", "错误",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"导出失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
         /// <summary>
-        /// 返回主菜单页面。
+        /// 返回主菜单
         /// </summary>
         [RelayCommand]
         private async Task GoBackAsync()
@@ -199,10 +357,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region INavigationAware
 
         /// <summary>
-        /// 页面导航进入时触发 — 仅加载机种下拉列表，不展示数据。
-        /// 数据在用户点击「检索」时才按文件名过滤加载。
+        /// 页面导航进入时触发 —— 加载下拉框选项，不展示数据
+        /// 数据在用户点击"检索"时才加载
         /// </summary>
-        /// <param name="parameter">导航参数（当前未使用）</param>
         public async Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.LogInformation("进入日志数据页面");
@@ -210,22 +367,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             try
             {
-                // 仅加载机种名称列表（供下拉框使用），从文件名提取
-                var types = await _logDataService.GetMachineTypesAsync();
+                // 加载机种下拉列表（从数据库）
+                var types = await _logDatabaseService.GetMachineTypesAsync();
                 MachineTypes = new ObservableCollection<string>(types);
 
-                // 不加载数据 — 表格保持空白，等待用户点击「检索」
-                LogDataList = new ObservableCollection<LogDataModel>();
+                // 加载方案下拉列表（"全部方案" + 数据库已有方案）
+                var plans = await _logDatabaseService.GetPlanNamesAsync();
+                PlanNames = new ObservableCollection<string>(
+                    new[] { "全部方案" }.Concat(plans));
+
+                // 不加载数据 —— 表格保持空白，等待用户点击"检索"
+                LogDataList = new ObservableCollection<LogRecord>();
                 DynamicHeaders = new ObservableCollection<string>();
                 UpdateTotalCount();
+                UpdatePageInfo();
+                UpdatePaginationButtons();
 
-                _logger.LogInformation("日志数据页面就绪，机种数量: {Count}，等待用户检索", types.Count);
+                _logger.LogInformation("日志数据页面就绪，机种数:{Types}, 方案数:{Plans}", types.Count, plans.Count);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "初始化日志数据页面失败");
-                MessageBox.Show($"初始化日志数据页面失败：{ex.Message}", "错误",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"初始化失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -233,18 +396,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
-        /// <summary>
-        /// 页面导航离开时触发。
-        /// </summary>
         public Task OnNavigatedFromAsync()
         {
             _logger.LogInformation("离开日志数据页面");
             return Task.CompletedTask;
         }
 
-        /// <summary>
-        /// 检查是否允许从当前页面导航离开（始终允许）。
-        /// </summary>
         public Task<bool> CanNavigateFromAsync()
         {
             return Task.FromResult(true);
@@ -255,21 +412,62 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 私有方法
 
         /// <summary>
-        /// 根据当前数据更新动态列名集合（触发XAML列生成）。
+        /// 更新动态列名集合（方案联动核心逻辑）
+        /// 全部方案：取所有记录中PinResults的PinName并集
+        /// 具体方案：从方案JSON中按定义顺序取Pin名称
         /// </summary>
-        /// <param name="data">要提取动态列名的数据</param>
-        private void UpdateDynamicHeaders(List<LogDataModel> data)
+        private async Task UpdateDynamicHeadersAsync(List<LogRecord> records)
         {
-            var headers = _logDataService.GetAllDynamicHeaders(data);
+            List<string> headers;
+
+            if (SelectedPlanName == "全部方案")
+            {
+                // 全部方案模式：取Pin名称并集
+                headers = records
+                    .SelectMany(r => r.PinResults ?? new List<PinResult>())
+                    .Select(p => p.PinName)
+                    .Distinct()
+                    .ToList();
+            }
+            else
+            {
+                // 具体方案模式：从方案JSON按定义顺序获取Pin列表
+                var allPlans = await _planStorageService.LoadAllPlansAsync();
+                var plan = allPlans.FirstOrDefault(p => p.PlanName == SelectedPlanName);
+                headers = plan?.Items
+                    .OrderBy(i => i.Index)
+                    .Select(i => i.ItemName)
+                    .ToList() ?? new List<string>();
+            }
+
             DynamicHeaders = new ObservableCollection<string>(headers);
         }
 
         /// <summary>
-        /// 更新底部状态栏的记录数显示。
+        /// 更新底部状态栏记录数显示
         /// </summary>
         private void UpdateTotalCount()
         {
-            TotalCountText = $"共 {LogDataList.Count} 条记录";
+            TotalCountText = $"共 {TotalCount} 条记录";
+        }
+
+        /// <summary>
+        /// 更新分页信息文本
+        /// </summary>
+        private void UpdatePageInfo()
+        {
+            PageInfoText = TotalPages > 0
+                ? $"第 {PageIndex} 页 / 共 {TotalPages} 页"
+                : "第 1 页 / 共 1 页";
+        }
+
+        /// <summary>
+        /// 更新翻页按钮的可用状态
+        /// </summary>
+        private void UpdatePaginationButtons()
+        {
+            CanGoPrevious = PageIndex > 1;
+            CanGoNext = PageIndex < TotalPages;
         }
 
         #endregion
