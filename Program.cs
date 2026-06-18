@@ -1,4 +1,6 @@
-﻿using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.Data;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
@@ -39,6 +41,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             {
                 LoadFluentTheme(app);
                 var host = CreateHostBuilder(args).Build();
+
+                using (var scope = host.Services.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    InitializeDatabase(db);
+                }
 
                 var mainWindow = host.Services.GetRequiredService<MainWindow>();
                 app.Run(mainWindow);
@@ -122,11 +130,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 配置管理服务 ===
             services.AddSingleton<ConfigManagerService>();
 
+            // === 数据库配置 ===
+            services.AddSingleton<DatabaseSettings>();
+
+            // === 数据库初始化服务 ===
+            services.AddScoped<DatabaseInitializer>();
+
             // === 基础设施服务 ===
             services.AddSingleton<INotificationService, NotificationService>();
             services.AddSingleton<IDeviceSettingsService, DeviceSettingsService>();
             services.AddSingleton<IOperatorStorageService, OperatorStorageService>();
             services.AddSingleton<IOperatorStateService, OperatorStateService>();
+
+            // === 数据库上下文 ===
+            services.AddDbContext<AppDbContext>();
 
             // === 导航服务 === 
             services.AddSingleton<INavigationService, NavigationService>();
@@ -190,5 +207,104 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 其他服务 ===
             services.AddLogging();
         }
+
+
+        /// <summary>
+        /// 初始化数据库（智能处理，永不自动删除生产数据）
+        /// </summary>
+        private static void InitializeDatabase(AppDbContext db)
+        {
+            try
+            {
+                Log.Information("开始初始化数据库...");
+
+#if DEBUG
+                // ========== DEBUG 模式：开发环境，可以删库重建 ==========
+                const bool RECREATE_DATABASE_ON_EACH_RUN = true;
+
+                if (RECREATE_DATABASE_ON_EACH_RUN)
+                {
+                    Log.Information("【开发模式】正在删除旧数据库...");
+                    db.Database.EnsureDeleted();
+                    Log.Information("旧数据库已删除");
+                }
+
+                // 创建数据库和表
+                Log.Information("【开发模式】正在创建数据库表结构...");
+                db.Database.EnsureCreated();
+                Log.Information("数据库表结构创建完成");
+
+                // 初始化种子数据
+                InitializeSeedData(db);
+
+                Log.Information("【开发模式】数据库初始化完成");
+#else
+                // ========== RELEASE 模式：生产环境，绝对不能删库 ==========
+
+                // 1. 检查是否有待执行的迁移
+                var pendingMigrations = db.Database.GetPendingMigrations().ToList();
+
+                if (pendingMigrations.Any())
+                {
+                    Log.Information("【生产模式】执行数据库迁移，共 {Count} 个", pendingMigrations.Count);
+                    db.Database.Migrate();
+                    Log.Information("迁移执行完成");
+
+                    // 迁移后初始化种子数据
+                    InitializeSeedData(db);
+                    Log.Information("数据库初始化完成");
+                    return;
+                }
+
+                // 2. 没有迁移时，直接尝试创建表（如果表已存在，EnsureCreated 不会做任何事）
+                Log.Information("【生产模式】检查/创建数据库表结构...");
+                var created = db.Database.EnsureCreated();
+                Log.Information("EnsureCreated 执行结果: {Created}", created);
+
+                // 3. 初始化种子数据
+                InitializeSeedData(db);
+
+                Log.Information("【生产模式】数据库初始化完成");
+#endif
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "数据库初始化失败");
+
+#if DEBUG
+                // DEBUG 模式下抛出异常，让开发者看到问题
+                throw;
+#else
+                // RELEASE 模式下显示友好错误，但不中断启动
+                MessageBox.Show(
+                    $"数据库初始化失败: {ex.Message}\n\n程序将以默认配置运行，请检查数据库设置。",
+                    "数据库错误",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+#endif
+            }
+        }
+
+
+        /// <summary>
+        /// 初始化种子数据
+        /// </summary>
+        private static void InitializeSeedData(AppDbContext db)
+        {
+            try
+            {
+                // 此处添加初始化配置
+             
+
+                db.SaveChanges();
+                Log.Information("种子数据初始化完成");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "种子数据初始化失败");
+            }
+        }
+
+
     }
 }
