@@ -2,9 +2,7 @@
 // 文件: Views/LogDataView.xaml.cs
 // 描述: 日志数据页面的代码隐藏 —— 负责运行时动态生成 DataGrid 列
 // 修改:
-//   - 数据源从 LogDataModel 改为 LogRecord
-//   - 动态列绑定从 Dictionary 索引器改为 PinResults 集合查找
-//   - 方案筛选器联动：全部方案=Pin并集，具体方案=方案定义顺序列
+//   - 日期和时间列改为动态生成，放在动态Pin列之后
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -20,12 +18,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
     /// 日志数据页面的代码隐藏
     /// 负责运行时根据 DynamicHeaders 集合动态生成 DataGrid 列
     /// 
-    /// 列结构：固定列（XAML静态定义）→ 动态列（代码生成）
-    /// 固定列：检测时间、机种名称、序列号、方案名称、操作员、综合判定（共6列）
-    /// 
-    /// 动态列绑定：
-    ///   PinResults 是 List&lt;PinResult&gt; 集合，每个 PinResult 有 PinName 和 Result 属性
-    ///   使用 IValueConverter 根据列名从集合中查找对应的 Result 值
+    /// 列结构：固定列（XAML静态定义）→ 动态Pin列（代码生成）→ 日期列 → 时间列
+    /// 固定列：序号、机种名称、序列号、方案名称、操作员、综合判定（共6列）
     /// </remarks>
     [NavigationViewModel(typeof(LogDataViewModel))]
     public partial class LogDataView : UserControl
@@ -33,9 +27,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         private readonly LogDataViewModel _viewModel;
 
         /// <summary>
-        /// 固定列数量：序号、机种名称、序列号、方案名称、操作员、综合判定、日期、时间 = 8列
+        /// ⭐ 固定列数量改为6：序号、机种名称、序列号、方案名称、操作员、综合判定
+        /// （日期和时间列移到动态生成区域）
         /// </summary>
-        private const int FIXED_COLUMN_COUNT = 8;
+        private const int FIXED_COLUMN_COUNT = 6;
 
         public LogDataView(LogDataViewModel viewModel)
         {
@@ -65,10 +60,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         /// <summary>
         /// 根据 ViewModel.DynamicHeaders 集合动态生成 DataGrid 列
         /// 
-        /// 绑定原理：
-        ///   由于 LogRecord.PinResults 是 List&lt;PinResult&gt; 集合，
-        ///   不能直接用索引器绑定。使用自定义的 PinResultValueConverter 转换器，
-        ///   将列名作为 ConverterParameter 传入，在集合中查找对应的 Result 值。
+        /// 列顺序：动态Pin列 → 日期列 → 时间列
         /// </summary>
         private void GenerateDynamicColumns()
         {
@@ -82,14 +74,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
             // 清除上一次生成的动态列（保留XAML中定义的固定列）
             RemoveDynamicColumns();
 
-            // 为每个动态列名创建一个 DataGridTextColumn
+            // ⭐ 第一步：为每个动态Pin列名创建一个 DataGridTextColumn
             foreach (var header in _viewModel.DynamicHeaders)
             {
                 var column = new DataGridTextColumn
                 {
                     Header = header,
                     Width = 100,
-                    // 使用 Converter 从 PinResults 集合中查找对应 PinName 的 Result
                     Binding = new Binding("PinResults")
                     {
                         Converter = new PinResultValueConverter(),
@@ -99,11 +90,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
                 };
                 LogDataGrid.Columns.Add(column);
             }
+
+            // ⭐ 第二步：添加日期列（放在动态Pin列之后）
+            var dateColumn = new DataGridTextColumn
+            {
+                Header = "日期",
+                Width = 130,
+                Binding = new Binding("Timestamp")
+                {
+                    StringFormat = "yyyy年MM月dd日",
+                    Mode = BindingMode.OneWay
+                }
+            };
+            LogDataGrid.Columns.Add(dateColumn);
+
+            // ⭐ 第三步：添加时间列（放在日期列之后）
+            var timeColumn = new DataGridTextColumn
+            {
+                Header = "时间",
+                Width = 120,
+                Binding = new Binding("Timestamp")
+                {
+                    StringFormat = "HH时mm分ss秒",
+                    Mode = BindingMode.OneWay
+                }
+            };
+            LogDataGrid.Columns.Add(timeColumn);
         }
 
         /// <summary>
         /// 移除运行时生成的动态列，仅保留XAML中定义的固定列
-        /// 固定列 = 检测时间、机种名称、序列号、方案名称、操作员、综合判定（共6列）
+        /// ⭐ 固定列 = 序号、机种名称、序列号、方案名称、操作员、综合判定（共6列）
         /// </summary>
         private void RemoveDynamicColumns()
         {
@@ -121,14 +138,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
     /// </summary>
     public class PinResultValueConverter : IValueConverter
     {
-        /// <summary>
-        /// 从 PinResults 集合中查找指定 PinName 的 Result
-        /// </summary>
-        /// <param name="value">PinResults 集合（List&lt;PinResult&gt;）</param>
-        /// <param name="targetType">目标类型（忽略）</param>
-        /// <param name="parameter">PinName（列名，如 "A4-A5"）</param>
-        /// <param name="culture">区域性信息</param>
-        /// <returns>找到的 Result 值，或 "-"</returns>
         public object Convert(object value, Type targetType, object parameter,
             System.Globalization.CultureInfo culture)
         {
@@ -136,13 +145,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
             if (string.IsNullOrWhiteSpace(pinName))
                 return "-";
 
-            // value 是 List<PinResult> 集合
             if (value is System.Collections.IList pinResults)
             {
                 foreach (var item in pinResults)
                 {
-                    // 使用反射获取 PinName 和 Result 属性
-                    // 这样做是为了避免在 Views 层直接引用 Models 命名空间
                     var itemType = item.GetType();
                     var nameProp = itemType.GetProperty("PinName");
                     var resultProp = itemType.GetProperty("Result");
@@ -161,9 +167,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
             return "-";
         }
 
-        /// <summary>
-        /// 反向转换（不需要）
-        /// </summary>
         public object ConvertBack(object value, Type targetType, object parameter,
             System.Globalization.CultureInfo culture)
         {
