@@ -7,11 +7,10 @@ using System.Text;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
-using GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Generic;
-using static GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs.DeviceSettings;
+using static GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs.DeviceSettings;
 
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus

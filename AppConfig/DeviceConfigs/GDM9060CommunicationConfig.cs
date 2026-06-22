@@ -2,7 +2,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
+namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
 {
     /// <summary>
     /// 固纬 GDM-9060 万用表配置

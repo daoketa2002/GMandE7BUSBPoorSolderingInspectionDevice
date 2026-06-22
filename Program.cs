@@ -138,16 +138,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // === 数据库初始化服务 ===
             services.AddScoped<DatabaseInitializer>();
 
-            // === 基础设施服务 ===
-            services.AddSingleton<INotificationService, NotificationService>();
-            services.AddSingleton<IDeviceSettingsService, DeviceSettingsService>();
-            services.AddSingleton<IOperatorStorageService, OperatorStorageService>();
-            services.AddSingleton<IOperatorStateService, OperatorStateService>();
-
             // === 数据库上下文 ===
             services.AddDbContext<AppDbContext>();
 
-            // === 数据库上下文工厂 ===（替代直接注入 DbContext，避免跨线程问题）
+            // === 数据库上下文工厂 ===（替代直接注入 DbContext，避免跨线程问题）（保留，EF Core 仍需要）
             services.AddDbContextFactory<AppDbContext>((sp, options) =>
             {
                 var dbSettings = sp.GetRequiredService<DatabaseSettings>();
@@ -155,8 +149,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                 options.UseSqlite(connectionString);
             }, ServiceLifetime.Scoped);
 
-            // === 日志数据库服务（EF Core 实现）===
-            services.AddSingleton<ILogDatabaseService, LogDatabaseService>();
+            // === 基础设施服务 ===
+            services.AddSingleton<INotificationService, NotificationService>();
+            services.AddSingleton<IDeviceSettingsService, DeviceSettingsService>();
+            services.AddSingleton<IOperatorStorageService, OperatorStorageService>();
+            services.AddSingleton<IOperatorStateService, OperatorStateService>();
+
+            // ══════════════════════════════════════════════════════════
+            // CSV 存储服务注册 + ITestRecordStorage 注入
+            // ══════════════════════════════════════════════════════════
+
+            // CSV 存储配置
+            services.AddSingleton<CsvStorageSettings>();
+
+            // CSV 路径管理器
+            services.AddSingleton<CsvStoragePathManager>();
+
+            // ⭐ 核心改动：ITestRecordStorage → CSV 实现
+            services.AddSingleton<ITestRecordStorage, CsvTestRecordStorage>();
+
+            //// 保留旧的 SQLite 实现（不注入接口，仅供需要时手动解析）
+            //services.AddSingleton<SqliteTestRecordStorage>();
+
+            // ══════════════════════════════════════════════════════════
 
 
             // === 导航服务 === 
@@ -164,10 +179,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // === 方案设定相关服务 === 
             services.AddSingleton<IPlanStorageService, PlanStorageService>();
-
-            //// === 日志数据相关服务（已弃用） ===
-            //services.AddSingleton<LogDataService>();
-            //services.AddSingleton<ILogDataService, LogDataService>();    // 日志数据服务（接口注入）
 
             // === 内存监控服务 === 
             services.AddSingleton<MemoryMonitorService>();

@@ -1,4 +1,6 @@
-﻿namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+
+namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
 {
     /// <summary>
     /// 系统设备总配置模型

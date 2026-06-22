@@ -35,10 +35,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     {
         #region 服务注入
 
-        private readonly ILogDatabaseService _logDatabaseService;
         private readonly IPlanStorageService _planStorageService;
         private readonly ICsvExportService _csvExportService;
         private readonly INavigationService _navigationService;
+        private readonly ITestRecordStorage _testRecordStorage;
         private readonly ILogger<LogDataViewModel> _logger;
 
         #endregion
@@ -46,16 +46,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 构造函数
 
         public LogDataViewModel(
-            ILogDatabaseService logDatabaseService,
             IPlanStorageService planStorageService,
             ICsvExportService csvExportService,
             INavigationService navigationService,
+            ITestRecordStorage testRecordStorage,
             ILogger<LogDataViewModel> logger)
         {
-            _logDatabaseService = logDatabaseService ?? throw new ArgumentNullException(nameof(logDatabaseService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
             _csvExportService = csvExportService ?? throw new ArgumentNullException(nameof(csvExportService));
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
+            _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             // 初始化每页条数选项
@@ -194,8 +194,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 IsLoading = true;
 
-                // 调用数据库分页查询
-                var (records, total) = await _logDatabaseService.QueryLogsAsync(
+                // 分页查询
+                var (records, total) = await _testRecordStorage.QueryRecordsAsync(
                     series: string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
                     serialNumber: string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
                     planName: SelectedPlanName == "全部方案" ? null : SelectedPlanName,
@@ -222,7 +222,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             catch (Exception ex)
             {
                 _logger.LogError(ex, "检索失败");
-                MessageBox.Show($"检索失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+
+                string message = ex.Message.Contains("being used by another process")
+                    ? "检索失败：日志文件正被其他程序占用（如Excel/记事本），请关闭后重试。"
+                    : $"检索失败：{ex.Message}";
+
+                MessageBox.Show(message, "错误", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             finally
             {
@@ -288,7 +293,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.LogInformation("执行导出，当前筛选共{Total}条", TotalCount);
 
                 // 查询全部数据（不分页，最多导出10000条防止内存溢出）
-                var (allRecords, _) = await _logDatabaseService.QueryLogsAsync(
+                var (allRecords, _) = await _testRecordStorage.QueryRecordsAsync(
                     series: string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
                     serialNumber: string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
                     planName: SelectedPlanName == "全部方案" ? null : SelectedPlanName,
@@ -305,11 +310,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     RowIndex = index + 1  // 序号从1开始
                 }).ToList();
 
-                // 构建导出列定义 —— 统一使用 Func<LogRecord, string> 单参数委托
+                // 构建导出列定义
                 var dynamicHeaders = DynamicHeaders.ToList();
                 var headers = new List<(string Header, Func<LogRecord, string> ValueSelector)>
                                 {
-                                    // 固定列
                                     ("序号",       m => (allRecords.IndexOf(m) + 1).ToString()),
                                     ("机种名称",   m => m.Series),
                                     ("序列号",     m => m.SerialNumber),
@@ -318,7 +322,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                                     ("综合判定",   m => m.FinalResult),
                                 };
 
-                // 动态列（Pin检测项）
+                // 动态列
                 foreach (var dh in dynamicHeaders)
                 {
                     var capturedHeader = dh;
@@ -330,8 +334,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     ));
                 }
 
-                // 检测时间列
-                headers.Add(("检测时间", m => m.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")));
+                // 日期和时间
+                headers.Add(("日期", m => m.Timestamp.ToString("yyyy年MM月dd日")));
+                headers.Add(("时间", m => m.Timestamp.ToString("HH时mm分ss秒")));
 
                 var defaultFileName = $"日志数据导出_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
                 await _csvExportService.ExportWithDialogAsync(allRecords, headers, defaultFileName);
@@ -389,12 +394,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             try
             {
-                // 加载机种下拉列表（从数据库）
-                var types = await _logDatabaseService.GetMachineTypesAsync();
+                // 加载机种下拉列表
+                //var types = await _logDatabaseService.GetMachineTypesAsync();
+                var types = await _testRecordStorage.GetMachineTypesAsync();
                 MachineTypes = new ObservableCollection<string>(types);
 
-                // 加载方案下拉列表（"全部方案" + 数据库已有方案）
-                var plans = await _logDatabaseService.GetPlanNamesAsync();
+                // 加载方案下拉列表
+                //var plans = await _logDatabaseService.GetPlanNamesAsync();
+                var plans = await _testRecordStorage.GetPlanNamesAsync();
                 PlanNames = new ObservableCollection<string>(
                     new[] { "全部方案" }.Concat(plans));
 

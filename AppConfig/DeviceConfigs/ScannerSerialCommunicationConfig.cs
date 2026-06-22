@@ -2,7 +2,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
+namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
 {
     /// <summary>
     /// 霍尼韦尔 H1900 扫描枪配置

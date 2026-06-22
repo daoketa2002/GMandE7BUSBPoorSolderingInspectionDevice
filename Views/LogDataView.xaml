@@ -427,43 +427,53 @@
 
             <!-- ===== 固定列定义 ===== -->
             <DataGrid.Columns>
-                <!-- 检测时间 -->
-                <DataGridTextColumn Header="检测时间"
-                                    Binding="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
-                                    Width="160"/>
+                <!-- ⭐ 序号列（替代原来的检测时间列） -->
+                <DataGridTextColumn Header="序号"
+                        Binding="{Binding Id}"
+                        Width="60"/>
                 <!-- 机种名称 -->
                 <DataGridTextColumn Header="机种名称"
-                                    Binding="{Binding Series}"
-                                    Width="100"/>
+                        Binding="{Binding Series}"
+                        Width="100"/>
                 <!-- 序列号 -->
                 <DataGridTextColumn Header="序列号"
-                                    Binding="{Binding SerialNumber}"
-                                    Width="140"/>
+                        Binding="{Binding SerialNumber}"
+                        Width="140"/>
                 <!-- 方案名称 -->
                 <DataGridTextColumn Header="方案名称"
-                                    Binding="{Binding PlanName}"
-                                    Width="120"/>
+                        Binding="{Binding PlanName}"
+                        Width="120"/>
                 <!-- 操作员 -->
                 <DataGridTextColumn Header="操作员"
-                                    Binding="{Binding Operator}"
-                                    Width="90"/>
+                        Binding="{Binding Operator}"
+                        Width="90"/>
                 <!-- 综合判定 — 带颜色标签 -->
                 <DataGridTemplateColumn Header="综合判定" Width="90">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <Border CornerRadius="4"
-                                    Padding="8,3"
-                                    HorizontalAlignment="Center"
-                                    Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
+                        Padding="8,3"
+                        HorizontalAlignment="Center"
+                        Background="{Binding FinalResult, Converter={StaticResource JudgmentToBackgroundConverter}}">
                                 <TextBlock Text="{Binding FinalResult}"
-                                           FontWeight="Bold"
-                                           FontSize="13"
-                                           Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
-                                           HorizontalAlignment="Center"/>
+                               FontWeight="Bold"
+                               FontSize="13"
+                               Foreground="{Binding FinalResult, Converter={StaticResource JudgmentToForegroundConverter}}"
+                               HorizontalAlignment="Center"/>
                             </Border>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
+
+                <!-- 日期列 -->
+                <DataGridTextColumn Header="日期"
+                        Binding="{Binding Timestamp, StringFormat={}{0:yyyy年MM月dd日}}"
+                        Width="130"/>
+                <!-- 时间列 -->
+                <DataGridTextColumn Header="时间"
+                        Binding="{Binding Timestamp, StringFormat={}{0:HH时mm分ss秒}}"
+                        Width="120"/>
+
                 <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
             </DataGrid.Columns>
         </DataGrid>

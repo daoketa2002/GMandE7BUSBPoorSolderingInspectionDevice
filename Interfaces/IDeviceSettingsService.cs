@@ -1,4 +1,4 @@
-﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using System;
 using System.Collections.Generic;
 using System.Linq;

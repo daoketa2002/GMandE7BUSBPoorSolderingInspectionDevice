@@ -50,9 +50,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INotificationService _notificationService;
         private readonly ILogger<TestPageViewModel> _logger;
         private readonly IPlanStorageService _planStorageService;
-        private readonly ILogDatabaseService _logDatabaseService;
         private readonly IOperatorStateService _operatorStateService;
         private readonly IDeviceSettingsService _settingsService;
+        private readonly ITestRecordStorage _testRecordStorage;
 
         // 硬件服务
         private readonly ITcpClientPLCMotionService _plcService;
@@ -80,8 +80,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             GwInstekGDM9060Driver dmmDriver,
             IDeviceSettingsService settingsService,
             IPlanStorageService planStorageService,
-            ILogDatabaseService logDatabaseService,
             IScannerBarcodeService scannerBarcodeService,
+            ITestRecordStorage testRecordStorage,
             InspectionEngine? inspectionEngine = null)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
@@ -89,11 +89,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-            _logDatabaseService = logDatabaseService ?? throw new ArgumentNullException(nameof(logDatabaseService));
             _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _scannerService = scannerBarcodeService;
+            _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
             _inspectionEngine = inspectionEngine;
 
             InitializeClock();
@@ -526,7 +526,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     }).ToList()
                 };
 
-                await _logDatabaseService.SaveLogRecordAsync(record);
+                //await _logDatabaseService.SaveLogRecordAsync(record);
+                await _testRecordStorage.SaveRecordAsync(record);
                 AddLog($"💾 检测记录已保存 - SN:{SerialNumber}, 结果:{finalResult}");
             }
             catch (Exception ex)

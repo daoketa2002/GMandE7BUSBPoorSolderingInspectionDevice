@@ -2,7 +2,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs
+namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
 {
     /// <summary>
     /// FP0H AFP0HC32ET PLC 设备配置

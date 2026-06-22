@@ -33,9 +33,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         private readonly LogDataViewModel _viewModel;
 
         /// <summary>
-        /// 固定列数量：检测时间、机种名称、序列号、方案名称、操作员、综合判定 = 6列
+        /// 固定列数量：序号、机种名称、序列号、方案名称、操作员、综合判定、日期、时间 = 8列
         /// </summary>
-        private const int FIXED_COLUMN_COUNT = 6;
+        private const int FIXED_COLUMN_COUNT = 8;
 
         public LogDataView(LogDataViewModel viewModel)
         {

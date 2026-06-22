@@ -1,7 +1,8 @@
 ﻿// ============================================================
-// 文件: Interfaces/ILogDatabaseService.cs
-// 描述: 日志数据库服务接口 —— 定义SQLite检测结果的存取契约
-//      遵循接口隔离原则，所有数据库操作通过此接口解耦
+// 文件: Interfaces/ITestRecordStorage.cs
+// 描述: 测试记录持久化接口 —— 定义检测结果的存取契约
+//      遵循接口隔离原则，所有持久化操作通过此接口解耦
+//      替代原有的 ILogDatabaseService（标记为 Obsolete）
 // ============================================================
 
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
@@ -12,19 +13,18 @@ using System.Threading.Tasks;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
     /// <summary>
-    /// 日志数据库服务接口
-    /// 封装 SQLite 中检测结果（LogRecords + PinResults）的所有存取操作
-    /// 实现类使用 EF Core 进行事务写入和 LINQ 查询
+    /// 测试记录存储接口
+    /// 封装检测结果（LogRecord + PinResults）的持久化存取操作
+    /// 实现类可以是 SQLite、CSV 文件、JSON 文件等任意存储介质
     /// </summary>
-    public interface ILogDatabaseService
+    public interface ITestRecordStorage
     {
         /// <summary>
         /// 事务保存一条完整的检测记录
-        /// 包括主记录（LogRecord）和所有Pin明细（PinResults）
-        /// 使用 EF Core 事务确保原子性写入，防止断电产生孤儿数据
+        /// 包括主记录（LogRecord）和所有 Pin 明细（PinResults）
         /// </summary>
-        /// <param name="record">待保存的主记录（含PinResults列表）</param>
-        Task SaveLogRecordAsync(LogRecord record);
+        /// <param name="record">待保存的主记录（含 PinResults 列表）</param>
+        Task SaveRecordAsync(LogRecord record);
 
         /// <summary>
         /// 分页查询检测记录，支持多条件组合筛选
@@ -39,7 +39,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// <param name="pageIndex">页码（从1开始）</param>
         /// <param name="pageSize">每页条数</param>
         /// <returns>(本页记录列表, 符合条件的总记录数)</returns>
-        Task<(List<LogRecord> Records, int TotalCount)> QueryLogsAsync(
+        Task<(List<LogRecord> Records, int TotalCount)> QueryRecordsAsync(
             string? series = null,
             string? serialNumber = null,
             string? planName = null,
@@ -51,13 +51,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 
         /// <summary>
         /// 获取所有机种名称（去重）
-        /// 从 LogRecords 表的 Series 字段提取
         /// </summary>
         Task<List<string>> GetMachineTypesAsync();
 
         /// <summary>
         /// 获取所有方案名称（去重）
-        /// 从 LogRecords 表的 PlanName 字段提取
         /// </summary>
         Task<List<string>> GetPlanNamesAsync();
     }

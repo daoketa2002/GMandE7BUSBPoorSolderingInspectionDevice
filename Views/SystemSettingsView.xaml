@@ -160,25 +160,203 @@
                 <!-- ============================================================ -->
                 <!-- Tab 0：常规设置（PLC通信测试勾选框放在此处） -->
                 <!-- ============================================================ -->
+                <!-- Tab 0：常规设置 -->
                 <TabItem Header="⚙ 常规设置">
-                    <!-- 
-                        ScrollViewer 包裹整个Tab内容区域
-                        VerticalScrollBarVisibility="Auto"：内容超出时自动显示滚动条
-                        HorizontalScrollBarVisibility="Disabled"：禁用水平滚动，避免内容被截断
-                    -->
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  Padding="10">
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="10">
                         <StackPanel Margin="5">
-                            <TextBlock Text="系统常规设置"
-                                       Style="{StaticResource SectionTitleStyle}"
-                                       Margin="0,0,0,15"/>
 
-                            <!-- PLC通信测试勾选框区域 -->
+                            <!-- ============================================ -->
+                            <!-- 存储路径设置 -->
+                            <!-- ============================================ -->
+                            <TextBlock Text="📁 CSV 日志存储路径设置"
+                       Style="{StaticResource SectionTitleStyle}"
+                       Margin="0,0,0,15"/>
+
+                            <Border Background="#F8F9FA"
+                    CornerRadius="8"
+                    Padding="20"
+                    Margin="0,0,0,15">
+                                <StackPanel>
+
+                                    <!-- 使用默认路径复选框 -->
+                                    <CheckBox x:Name="UseDefaultPathCheckBox"
+                              IsChecked="{Binding UseDefaultStoragePath}"
+                              VerticalAlignment="Center"
+                              Margin="0,0,0,12">
+                                        <CheckBox.Content>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="使用默认存储路径（程序目录）"
+                                           FontSize="15"
+                                           FontWeight="SemiBold"
+                                           Foreground="#2C3E50"/>
+                                                <TextBlock Text=" — 推荐"
+                                           FontSize="13"
+                                           Foreground="#27AE60"
+                                           FontWeight="SemiBold"
+                                           Margin="6,0,0,0"
+                                           VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </CheckBox.Content>
+                                    </CheckBox>
+
+                                    <TextBlock Text="默认路径下，CSV 日志将保存在程序所在目录的「数据\TestLog」文件夹中。"
+                                                FontSize="12"
+                                                Foreground="#95A5A6"
+                                                Margin="20,0,0,12"
+                                                TextWrapping="Wrap"/>    
+
+                                    <!-- 分隔线 -->
+                                    <Separator Margin="0,4,0,12" Background="#DEE2E6"/>
+
+                                    <!-- 自定义路径 -->
+                                    <TextBlock Text="自定义存储路径："
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="#495057"
+                                               Margin="0,0,0,8"/>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 路径输入框 -->
+                                        <TextBox Grid.Column="0"
+                                                 Text="{Binding CustomStoragePath, UpdateSourceTrigger=PropertyChanged}"
+                                                 IsEnabled="{Binding CanCustomizePath}"
+                                                 FontSize="14"
+                                                 Height="36"
+                                                 VerticalContentAlignment="Center"
+                                                 Padding="8,0"
+                                                 BorderBrush="#CED4DA"
+                                                 ToolTip="输入自定义存储根目录路径，CSV 文件将保存在此路径下的「数据\TestLog」文件夹中">
+                                            <TextBox.Style>
+                                                <Style TargetType="TextBox">
+                                                    <Setter Property="Background" Value="White"/>
+                                                    <Setter Property="Foreground" Value="#2C3E50"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding CanCustomizePath}" Value="False">
+                                                            <Setter Property="Background" Value="#E9ECEF"/>
+                                                            <Setter Property="Foreground" Value="#95A5A6"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBox.Style>
+                                        </TextBox>
+
+                                        <!-- 浏览按钮 -->
+                                        <Button Grid.Column="1"
+                                                Content="📂 浏览"
+                                                Command="{Binding BrowseStoragePathCommand}"
+                                                IsEnabled="{Binding CanCustomizePath}"
+                                                Width="80" Height="36"
+                                                FontSize="14" FontWeight="SemiBold"
+                                                Foreground="White" Background="#3498DB"
+                                                Cursor="Hand" BorderThickness="0"
+                                                Margin="8,0,0,0">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="border"
+                                                            Background="{TemplateBinding Background}"
+                                                            CornerRadius="6"
+                                                            BorderThickness="0">
+                                                        <ContentPresenter HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="border" Property="Background" Value="#2980B9"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter TargetName="border" Property="Opacity" Value="0.5"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Grid>
+
+                                    <TextBlock Text="例如：D:\产线数据   →   CSV 将保存在 D:\产线数据\数据\TestLog\"
+                                               FontSize="12"
+                                               Foreground="#95A5A6"
+                                               Margin="0,6,0,0"
+                                               TextWrapping="Wrap"/>
+
+                                    <!-- 当前实际路径预览 -->
+                                    <Border Background="#EBF5FB"
+                                            CornerRadius="6"
+                                            Padding="12,10"
+                                            Margin="0,12,0,0">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0"
+                                                       Text="📌 当前 TestLog 路径："
+                                                       FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#2980B9"
+                                                       VerticalAlignment="Center"/>
+
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding CurrentTestLogPath}"
+                                                       FontSize="13"
+                                                       Foreground="#2C3E50"
+                                                       Margin="8,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       TextWrapping="Wrap"/>
+
+                                            <Button Grid.Column="2"
+                                                    Content="📂 打开文件夹"
+                                                    Command="{Binding OpenTestLogFolderCommand}"
+                                                    Width="110" Height="30"
+                                                    FontSize="12" FontWeight="SemiBold"
+                                                    Foreground="White" Background="#27AE60"
+                                                    Cursor="Hand" BorderThickness="0"
+                                                    Margin="12,0,0,0">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border x:Name="border"
+                                                                Background="{TemplateBinding Background}"
+                                                                CornerRadius="4"
+                                                                BorderThickness="0">
+                                                            <ContentPresenter HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center"/>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="border" Property="Background" Value="#219A52"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- 提示信息 -->
+                                    <TextBlock Text="💡 提示：修改存储路径后需点击底部「保存所有配置」生效。"
+                                               FontSize="12"
+                                               Foreground="#E67E22"
+                                               Margin="0,10,0,0"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================================ -->
+                            <!-- PLC 通信测试开关（移到最底部） -->
+                            <!-- ============================================ -->
                             <Border Background="#F8F9FA"
                                     CornerRadius="8"
                                     Padding="20"
-                                    Margin="0,10,0,0">
+                                    Margin="0,0,0,0">
                                 <StackPanel>
                                     <CheckBox x:Name="PlcTestCheckBox"
                                               IsChecked="{Binding IsPlcCommunicationTestEnabled}"
@@ -192,18 +370,13 @@
                                         </CheckBox.Content>
                                     </CheckBox>
                                     <TextBlock Text="勾选后，主菜单将在「系统设置」按钮上方显示「PLC通信测试」按钮"
-                                               FontSize="12"
-                                               Foreground="#95A5A6"
-                                               Margin="20,0,0,0"
-                                               TextWrapping="Wrap"/>
+                               FontSize="12"
+                               Foreground="#95A5A6"
+                               Margin="20,0,0,0"
+                               TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
 
-                            <!-- 预留其他常规设置的位置 -->
-                            <TextBlock Text="更多常规设置将在后续版本中添加..."
-                                       FontSize="12"
-                                       Foreground="#BDC3C7"
-                                       Margin="0,30,0,0"/>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

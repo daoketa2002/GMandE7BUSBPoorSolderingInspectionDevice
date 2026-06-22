@@ -1,5 +1,5 @@
-﻿using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
-using GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceConfigs;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
