@@ -442,31 +442,51 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 更新动态列名集合（方案联动核心逻辑）
-        /// 全部方案：取所有记录中PinResults的PinName并集
-        /// 具体方案：从方案JSON中按定义顺序取Pin名称
+        /// 统一从实际数据中提取Pin列名，确保始终有列显示
+        /// 方案JSON存在时，按JSON顺序排列（体验优化）
+        /// JSON不存在时，使用CSV中出现的顺序（功能兜底）
+        /// 追加CSV中有但JSON中缺失的Pin列，防止遗漏
         /// </summary>
         private async Task UpdateDynamicHeadersAsync(List<LogRecord> records)
         {
             List<string> headers;
 
-            if (SelectedPlanName == "全部方案")
+            headers = records
+                .SelectMany(r => r.PinResults ?? new List<PinResult>())
+                .Select(p => p.PinName)
+                .Distinct()
+                .ToList();
+
+            // 如果数据中有具体方案名，且方案JSON存在，则按JSON定义顺序排序
+            if (SelectedPlanName != "全部方案" && !string.IsNullOrWhiteSpace(SelectedPlanName))
             {
-                // 全部方案模式：取Pin名称并集
-                headers = records
-                    .SelectMany(r => r.PinResults ?? new List<PinResult>())
-                    .Select(p => p.PinName)
-                    .Distinct()
-                    .ToList();
-            }
-            else
-            {
-                // 具体方案模式：从方案JSON按定义顺序获取Pin列表
-                var allPlans = await _planStorageService.LoadAllPlansAsync();
-                var plan = allPlans.FirstOrDefault(p => p.PlanName == SelectedPlanName);
-                headers = plan?.Items
-                    .OrderBy(i => i.Index)
-                    .Select(i => i.ItemName)
-                    .ToList() ?? new List<string>();
+                try
+                {
+                    var allPlans = await _planStorageService.LoadAllPlansAsync();
+                    var plan = allPlans.FirstOrDefault(p => p.PlanName == SelectedPlanName);
+                    if (plan != null && plan.Items.Count > 0)
+                    {
+                        // 按方案JSON定义的顺序排列Pin列
+                        var orderedNames = plan.Items
+                            .OrderBy(i => i.Index)
+                            .Select(i => i.ItemName)
+                            .ToList();
+
+                        // 保留JSON中定义的顺序，同时追加CSV中有但JSON中没有的Pin（去重）
+                        var csvOnlyHeaders = headers
+                            .Where(h => !orderedNames.Contains(h, StringComparer.OrdinalIgnoreCase))
+                            .ToList();
+
+                        headers = orderedNames
+                            .Where(o => headers.Contains(o, StringComparer.OrdinalIgnoreCase))
+                            .Concat(csvOnlyHeaders)
+                            .ToList();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "从方案JSON获取Pin顺序失败，使用CSV原始顺序");
+                }
             }
 
             DynamicHeaders = new ObservableCollection<string>(headers);

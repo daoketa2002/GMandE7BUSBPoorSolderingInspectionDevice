@@ -1,6 +1,7 @@
 ﻿// ============================================================
 // 文件: Services/CsvStoragePathManager.cs
 // 修改: 支持运行时动态切换存储路径
+// 修复: 移除 SanitizeFileName 中对下划线的替换，解决方案名含下划线时查询失败的问题
 // ============================================================
 
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
@@ -336,6 +337,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 对文件名进行安全处理
+        /// 仅过滤非法文件名字符，保留下划线以便文件名解析
         /// </summary>
         public string SanitizeFileName(string input)
         {
@@ -348,8 +350,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 if (Array.IndexOf(invalidChars, c) >= 0)
                     sanitized.Append('-');
-                else if (c == '_')
-                    sanitized.Append('-');
+                // ⭐ 修复：移除对下划线的替换，保留下划线
+                // 原因：方案名可能包含下划线（如 Scheme_V1），替换为短横线会导致搜索模式与文件名不匹配
                 else
                     sanitized.Append(c);
             }
