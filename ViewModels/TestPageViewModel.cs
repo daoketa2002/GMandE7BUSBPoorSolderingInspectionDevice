@@ -393,8 +393,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
 
             SchemeName = currentPlan.PlanName;
-            ModelName = currentPlan.Model;
-            AddLog($"📋 已加载方案: {currentPlan.Series} - {currentPlan.Model} - {currentPlan.PlanName}");
+            AddLog($"📋 已加载方案: {currentPlan.MachineType} - {currentPlan.PlanName}");
 
             foreach (var item in currentPlan.Items.OrderBy(i => i.Index))
             {
@@ -463,7 +462,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 获取当前方案信息
             var allPlans = await _planStorageService.LoadAllPlansAsync();
             var currentPlan = allPlans.FirstOrDefault();
-            var series = currentPlan?.Series ?? "Unknown";
+            var machineType = currentPlan?.MachineType ?? "Unknown";    // 该部分要修改，因方案model已经修改
             var planName = currentPlan?.PlanName ?? "Unknown";
 
             // 构建NG项目明细（供弹窗展示）
@@ -483,7 +482,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (confirmed)
             {
                 // 事务保存到SQLite
-                await SaveLogToDatabaseAsync(series, finalResult);
+                await SaveLogToDatabaseAsync(machineType, finalResult);             // 该代码要修改，因方案model已经修改
                 await _notificationService.ShowInfoAsync("检测记录已保存！", "保存成功");
                 ResetToReadyState();
             }

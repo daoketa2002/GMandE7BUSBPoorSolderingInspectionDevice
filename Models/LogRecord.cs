@@ -3,6 +3,7 @@
 // 描述: EF Core 实体 —— 检测主记录表（LogRecords）
 //      每次完整检测流程产生一条记录
 // 数据库: SQLite
+// 改动说明: 新增 MachineType 字段，保留原有 Series 字段兼容旧数据
 // ============================================================
 
 using System;
@@ -14,7 +15,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
 {
     /// <summary>
     /// 检测主记录表 —— 对应 SQLite LogRecords 表
-    /// 存储每次完整检测流程的元数据（系列、序列号、方案、操作员、综合判定等）
+    /// 存储每次完整检测流程的元数据（系列、机种、序列号、方案、操作员、综合判定等）
     /// </summary>
     [Table("LogRecords")]
     public class LogRecord
@@ -36,11 +37,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
 
         /// <summary>
         /// 系列名称（如 "GM5"、"E78"）
-        /// 来源于方案JSON中的 Series 字段
+        /// 来源于旧方案JSON中的 Series 字段
+        /// 保留用于兼容旧数据，新数据可为空
         /// </summary>
         [Required]
         [MaxLength(50)]
         public string Series { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 机种名称（如 "T998248391"、"998245664NNHB"）
+        /// 新方案结构中的机种标识，对应方案文件夹名
+        /// 新增字段，兼容旧数据可为空字符串
+        /// </summary>
+        [MaxLength(100)]
+        public string MachineType { get; set; } = string.Empty;
 
         /// <summary>
         /// 产品序列号（如 "SN20261001"）

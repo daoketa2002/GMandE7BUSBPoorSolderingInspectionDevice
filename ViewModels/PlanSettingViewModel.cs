@@ -2,8 +2,9 @@
 // 文件: ViewModels/PlanSettingViewModel.cs
 // 描述: 方案设定页面 ViewModel
 // 改动:
-//   - 统一使用 ILogger<PlanSettingViewModel>（替代 Serilog.ILogger）
-//   - 使用 ScannerIntegrationHelper 替代内联扫描枪代码，降低耦合
+//   - 去除"系列"概念，改为"机种→方案"两级结构
+//   - 方案下拉框与机种下拉框联动
+//   - 使用 ScannerIntegrationHelper 降低扫描枪耦合
 // ============================================================
 
 using System.Windows;
@@ -25,7 +26,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     /// <summary>
     /// 方案设定页面 ViewModel
     /// 管理检测方案的检索、新增、编辑、删除
-    /// 集成扫描枪：扫码自动填充机种名称并推断系列
+    /// 机种下拉框与方案下拉框联动：切换机种自动刷新方案列表
+    /// 集成扫描枪：扫码自动填充机种名称
     /// </summary>
     public partial class PlanSettingViewModel : ObservableObject, INavigationAware
     {
@@ -36,35 +38,40 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly IPlanStorageService _planStorageService;
         private readonly ILogger<PlanSettingViewModel> _logger;
 
-        // ⭐ 扫描枪集成帮助类（替代原有内联代码）
+        /// <summary>
+        /// 扫描枪集成帮助类（封装扫描枪事件的订阅/取消，降低耦合）
+        /// </summary>
         private readonly ScannerIntegrationHelper _scannerHelper;
 
         #endregion
 
         #region 字段
 
-        /// <summary>全部方案列表（原始数据，用于本地过滤）</summary>
+        /// <summary>
+        /// 全部方案列表（原始数据，用于本地过滤检索）
+        /// </summary>
         private List<PlanModel> _allPlans = new List<PlanModel>();
+
+        /// <summary>
+        /// 标记：是否正在程序化更新机种下拉框（防止联动时重复触发检索）
+        /// </summary>
+        private bool _isUpdatingMachineTypeProgrammatically = false;
 
         #endregion
 
-        #region 扫描枪相关属性（通过 Helper 暴露）
+        #region 扫描枪相关属性（通过 ScannerIntegrationHelper 暴露给UI）
 
-        /// <summary>扫描枪是否已连接</summary>
         [ObservableProperty]
         private bool _isScannerConnected;
 
-        /// <summary>扫描枪状态文本</summary>
         [ObservableProperty]
         private string _scannerStatusText = "扫描枪未连接";
 
-        /// <summary>最近扫描的原始条码</summary>
         [ObservableProperty]
         private string _scannedBarcode = string.Empty;
 
-        /// <summary>扫描枪端口名</summary>
         [ObservableProperty]
-        private string _scannerPortName = "COM9";
+        private string _scannerPortName = "COM8";
 
         #endregion
 
@@ -82,61 +89,106 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            // ⭐ 初始化扫描枪帮助类
+            // 初始化扫描枪帮助类
             _scannerHelper = new ScannerIntegrationHelper(scannerService, _logger);
 
-            // ⭐ 同步初始状态
+            // 同步扫描枪初始状态到UI属性
             IsScannerConnected = _scannerHelper.IsScannerConnected;
             ScannerStatusText = _scannerHelper.ScannerStatusText;
             ScannerPortName = _scannerHelper.PortName;
 
-            // ⭐ 订阅扫描枪事件（通过 Helper 转发）
+            // 订阅扫描枪事件
             _scannerHelper.ScannerConnected += OnScannerConnected;
             _scannerHelper.ScannerDisconnected += OnScannerDisconnected;
             _scannerHelper.BarcodeScanned += OnScannerBarcodeScanned;
 
-            // 初始化下拉选项
-            SeriesOptions = new ObservableCollection<string>(PlanStorageService.DefaultSeries);
-            ModelOptions = new ObservableCollection<string>(PlanStorageService.DefaultModels);
+            // 初始化下拉选项集合
+            MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
+            PlanNameOptions = new ObservableCollection<string>();
 
             _logger.LogDebug("PlanSettingViewModel 构造完成，扫描枪: {HasScanner}", scannerService != null);
         }
 
         #endregion
 
-        #region 检索条件
+        #region 检索条件属性
 
+        /// <summary>
+        /// 当前选中的机种（用户在下拉框中选择或手动输入）
+        /// 变更时自动联动刷新方案下拉选项
+        /// </summary>
         [ObservableProperty]
-        private string _filterSeries = string.Empty;
+        private string _selectedMachineType = string.Empty;
 
+        /// <summary>
+        /// 当前选中的方案名称（用户在下拉框中选择或手动输入）
+        /// </summary>
         [ObservableProperty]
-        private string _filterModel = string.Empty;
+        private string _selectedPlanName = string.Empty;
 
-        [ObservableProperty]
-        private string _filterPlanName = string.Empty;
+        /// <summary>
+        /// 机种下拉选项列表
+        /// 从所有方案文件夹中提取，合并默认机种
+        /// </summary>
+        public ObservableCollection<string> MachineTypeOptions { get; }
 
-        /// <summary>系列下拉选项</summary>
-        public ObservableCollection<string> SeriesOptions { get; }
+        /// <summary>
+        /// 方案下拉选项列表
+        /// 与机种联动：选择机种后自动刷新为该机种下的所有方案
+        /// </summary>
+        public ObservableCollection<string> PlanNameOptions { get; }
 
-        /// <summary>型号下拉选项</summary>
-        public ObservableCollection<string> ModelOptions { get; }
+        /// <summary>
+        /// 机种选择变更时触发（MVVM CommunityToolkit 自动生成的 partial 方法）
+        /// 联动刷新方案下拉列表
+        /// </summary>
+        partial void OnSelectedMachineTypeChanged(string value)
+        {
+            // 如果是程序化更新（扫码等），不重复触发检索
+            if (_isUpdatingMachineTypeProgrammatically)
+                return;
+
+            // 联动刷新方案下拉选项
+            _ = RefreshPlanNameOptionsAsync(value);
+
+            // 如果机种被清空，方案也清空
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                SelectedPlanName = string.Empty;
+            }
+        }
 
         #endregion
 
-        #region 方案列表
+        #region 方案列表属性
 
+        /// <summary>
+        /// 当前展示的方案列表（经过检索过滤后的结果）
+        /// </summary>
         [ObservableProperty]
-        private ObservableCollection<PlanModel> _plans = new ObservableCollection<PlanModel>();
+        private ObservableCollection<PlanModel> _filteredPlans = new ObservableCollection<PlanModel>();
 
+        /// <summary>
+        /// 当前选中的方案行
+        /// </summary>
         [ObservableProperty]
         private PlanModel? _selectedPlan;
 
+        /// <summary>
+        /// 统计文本（如 "共 5 个方案"）
+        /// </summary>
         [ObservableProperty]
         private string _totalCountText = "共 0 个方案";
 
+        /// <summary>
+        /// 是否有选中的方案行（用于控制编辑/删除按钮的可用状态）
+        /// </summary>
         [ObservableProperty]
         private bool _hasSelection;
 
+        /// <summary>
+        /// 选中方案变更时自动更新 HasSelection 状态
+        /// </summary>
         partial void OnSelectedPlanChanged(PlanModel? value)
         {
             HasSelection = value != null;
@@ -146,58 +198,79 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 检索命令
 
+        /// <summary>
+        /// 执行检索：根据机种和方案名过滤方案列表
+        /// </summary>
         [RelayCommand]
         private void Search()
         {
             ApplyFilter();
         }
 
+        /// <summary>
+        /// 清空所有检索条件，展示全部方案
+        /// </summary>
         [RelayCommand]
         private void ClearFilter()
         {
-            FilterSeries = string.Empty;
-            FilterModel = string.Empty;
-            FilterPlanName = string.Empty;
+            _isUpdatingMachineTypeProgrammatically = true;
+            SelectedMachineType = string.Empty;
+            _isUpdatingMachineTypeProgrammatically = false;
+
+            SelectedPlanName = string.Empty;
             ApplyFilter();
         }
 
         /// <summary>
-        /// 应用过滤条件（AND组合，空条件跳过，全空返回全部方案）
+        /// 应用过滤条件到方案列表
+        /// 机种为空时展示全部方案，方案名为空时不限制方案名
         /// </summary>
         private void ApplyFilter()
         {
             var filtered = _allPlans.AsEnumerable();
 
-            var series = FilterSeries?.Trim();
-            var model = FilterModel?.Trim();
-            var planName = FilterPlanName?.Trim();
+            var machineType = SelectedMachineType?.Trim();
+            var planName = SelectedPlanName?.Trim();
 
-            if (!string.IsNullOrWhiteSpace(series))
-                filtered = filtered.Where(p => p.Series.Contains(series, StringComparison.OrdinalIgnoreCase));
-
-            if (!string.IsNullOrWhiteSpace(model))
-                filtered = filtered.Where(p => p.Model.Contains(model, StringComparison.OrdinalIgnoreCase));
-
-            if (!string.IsNullOrWhiteSpace(planName))
-                filtered = filtered.Where(p => p.PlanName.Contains(planName, StringComparison.OrdinalIgnoreCase));
-
-            var result = filtered.OrderBy(p => p.Series)
-                                 .ThenBy(p => p.Model)
-                                 .ThenBy(p => p.PlanName)
-                                 .ToList();
-
-            Plans.Clear();
-            foreach (var p in result)
+            // 按机种过滤
+            if (!string.IsNullOrWhiteSpace(machineType))
             {
-                Plans.Add(p);
+                filtered = filtered.Where(p =>
+                    p.MachineType.Contains(machineType, StringComparison.OrdinalIgnoreCase));
             }
-            TotalCountText = $"共 {Plans.Count} 个方案";
+
+            // 按方案名过滤
+            if (!string.IsNullOrWhiteSpace(planName))
+            {
+                filtered = filtered.Where(p =>
+                    p.PlanName.Contains(planName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            // 排序：按机种→方案名
+            var result = filtered
+                .OrderBy(p => p.MachineType)
+                .ThenBy(p => p.PlanName)
+                .ToList();
+
+            // 更新UI列表
+            FilteredPlans.Clear();
+            foreach (var plan in result)
+            {
+                FilteredPlans.Add(plan);
+            }
+
+            TotalCountText = $"共 {FilteredPlans.Count} 个方案";
+            _logger.LogDebug("检索完成: 机种={MachineType}, 方案名={PlanName}, 结果数={Count}",
+                machineType ?? "(全部)", planName ?? "(全部)", FilteredPlans.Count);
         }
 
         #endregion
 
         #region 方案操作命令
 
+        /// <summary>
+        /// 导航到新增方案页面
+        /// </summary>
         [RelayCommand]
         private async Task AddPlanAsync()
         {
@@ -213,6 +286,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 导航到编辑方案页面（携带当前选中的方案数据）
+        /// </summary>
         [RelayCommand]
         private async Task EditPlanAsync()
         {
@@ -225,9 +301,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 }
 
                 _logger.LogInformation("用户点击编辑方案: {Plan}", SelectedPlan.PlanName);
-                var clone = System.Text.Json.JsonSerializer.Deserialize<PlanModel>(
+
+                // 深拷贝方案对象，避免编辑过程中影响原数据
+                var planCopy = System.Text.Json.JsonSerializer.Deserialize<PlanModel>(
                     System.Text.Json.JsonSerializer.Serialize(SelectedPlan));
-                await _navigationService.NavigateToAsync<PlanEditView>("Main", clone);
+
+                await _navigationService.NavigateToAsync<PlanEditView>("Main", planCopy);
             }
             catch (Exception ex)
             {
@@ -236,6 +315,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 删除选中的方案（需用户确认）
+        /// </summary>
         [RelayCommand]
         private async Task DeletePlanAsync()
         {
@@ -249,15 +331,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 var plan = SelectedPlan;
                 var confirmed = await _notificationService.ConfirmAsync(
-                    $"确定要删除方案 \"{plan.PlanName}\"（{plan.Series} - {plan.Model}）吗？\n\n此操作不可恢复！",
+                    $"确定要删除方案 \"{plan.PlanName}\"（机种：{plan.MachineType}）吗？\n\n此操作不可恢复！",
                     "确认删除");
 
                 if (!confirmed) return;
 
-                await _planStorageService.DeletePlanAsync(plan.Series, plan.Model, plan.PlanName);
-                await RefreshPlansAsync();
+                await _planStorageService.DeletePlanAsync(plan.MachineType, plan.PlanName);
+                await RefreshAllDataAsync();
 
-                _logger.LogInformation("方案已删除: {Plan}", plan.PlanName);
+                _logger.LogInformation("方案已删除: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
                 await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 已删除", "删除成功");
             }
             catch (Exception ex)
@@ -273,7 +355,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 扫描枪连接成功回调
-        /// 更新连接状态并同步 UI 属性
         /// </summary>
         private void OnScannerConnected()
         {
@@ -287,7 +368,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 扫描枪断开连接回调
-        /// 更新连接状态并同步 UI 属性
         /// </summary>
         private void OnScannerDisconnected()
         {
@@ -301,7 +381,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 扫描枪条码接收回调
-        /// 自动填充机种名称（FilterModel）并推断系列（FilterSeries），然后触发检索
+        /// 自动填充机种名称，并触发方案联动和检索
         /// </summary>
         private void OnScannerBarcodeScanned(BarcodeParsedEventArgs e)
         {
@@ -311,13 +391,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.LogInformation("扫描枪收到条码: {Barcode}, 机种={Model}", e.RawBarcode, e.ModelName);
 
                 // 自动填充机种名称
-                FilterModel = e.ModelName;
-
-                // 自动推断系列
-                if (string.IsNullOrWhiteSpace(FilterSeries))
-                {
-                    InferSeriesFromModel(e.ModelName);
-                }
+                _isUpdatingMachineTypeProgrammatically = true;
+                SelectedMachineType = e.ModelName;
+                _isUpdatingMachineTypeProgrammatically = false;
 
                 // 触发检索
                 Search();
@@ -325,32 +401,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 从机种名称推断系列
-        /// 规则：T998开头→GM5，998开头→E78，否则从已加载方案中查找
-        /// </summary>
-        private void InferSeriesFromModel(string modelName)
-        {
-            if (modelName.StartsWith("T998", StringComparison.OrdinalIgnoreCase))
-            {
-                FilterSeries = "GM5";
-            }
-            else if (modelName.StartsWith("998", StringComparison.OrdinalIgnoreCase))
-            {
-                FilterSeries = "E78";
-            }
-            else
-            {
-                var matchedPlan = _allPlans.FirstOrDefault(p =>
-                    p.Model.Equals(modelName, StringComparison.OrdinalIgnoreCase));
-                if (matchedPlan != null)
-                {
-                    FilterSeries = matchedPlan.Series;
-                }
-            }
-        }
-
-        /// <summary>
-        /// 手动连接扫描枪命令
+        /// 手动连接扫描枪
         /// </summary>
         [RelayCommand]
         private void ConnectScanner()
@@ -386,7 +437,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 断开扫描枪连接命令
+        /// 断开扫描枪连接
         /// </summary>
         [RelayCommand]
         private void DisconnectScanner()
@@ -405,6 +456,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 返回命令
 
+        /// <summary>
+        /// 返回主菜单页面
+        /// </summary>
         [RelayCommand]
         private async Task GoBackAsync()
         {
@@ -425,33 +479,63 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 辅助方法
 
         /// <summary>
-        /// 刷新方案列表及下拉选项
+        /// 刷新所有数据：方案列表、机种下拉选项、方案下拉选项
         /// </summary>
-        private async Task RefreshPlansAsync()
+        private async Task RefreshAllDataAsync()
         {
+            // 加载全部方案
             _allPlans = await _planStorageService.LoadAllPlansAsync();
+
+            // 刷新机种下拉选项
+            await RefreshMachineTypeOptionsAsync();
+
+            // 刷新方案下拉选项（根据当前选中的机种）
+            await RefreshPlanNameOptionsAsync(SelectedMachineType);
+
+            // 应用过滤条件
             ApplyFilter();
+        }
 
-            // 刷新系列下拉选项
-            var allSeries = await _planStorageService.GetAllSeriesAsync();
-            SeriesOptions.Clear();
-            foreach (var s in allSeries)
-                SeriesOptions.Add(s);
+        /// <summary>
+        /// 刷新机种下拉选项列表
+        /// </summary>
+        private async Task RefreshMachineTypeOptionsAsync()
+        {
+            var allMachineTypes = await _planStorageService.GetAllMachineTypesAsync();
 
-            // 刷新型号下拉选项
-            var allModels = await _planStorageService.GetModelsBySeriesAsync(FilterSeries);
-            if (!string.IsNullOrWhiteSpace(FilterSeries))
+            MachineTypeOptions.Clear();
+            foreach (var mt in allMachineTypes)
             {
-                ModelOptions.Clear();
-                foreach (var m in allModels)
-                    ModelOptions.Add(m);
+                MachineTypeOptions.Add(mt);
             }
-            else
+
+            _logger.LogDebug("机种下拉选项已刷新，共 {Count} 个", MachineTypeOptions.Count);
+        }
+
+        /// <summary>
+        /// 根据机种刷新方案下拉选项列表
+        /// 机种为空时方案列表也为空
+        /// </summary>
+        /// <param name="machineType">机种名称</param>
+        private async Task RefreshPlanNameOptionsAsync(string machineType)
+        {
+            PlanNameOptions.Clear();
+
+            if (string.IsNullOrWhiteSpace(machineType))
             {
-                ModelOptions.Clear();
-                foreach (var m in PlanStorageService.DefaultModels)
-                    ModelOptions.Add(m);
+                _logger.LogDebug("机种为空，方案下拉选项已清空");
+                return;
             }
+
+            var planNames = await _planStorageService.GetPlanNamesByMachineTypeAsync(machineType);
+
+            foreach (var name in planNames)
+            {
+                PlanNameOptions.Add(name);
+            }
+
+            _logger.LogDebug("方案下拉选项已刷新，机种={MachineType}，共 {Count} 个方案",
+                machineType, PlanNameOptions.Count);
         }
 
         #endregion
@@ -460,23 +544,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 页面导航进入时触发
-        /// 刷新方案列表，订阅并自动连接扫描枪
+        /// 刷新全部数据，订阅扫描枪事件，自动连接扫描枪
         /// </summary>
         public async Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.LogDebug("进入方案设定页面");
 
-            // 刷新列表
-            await RefreshPlansAsync();
+            // 刷新全部数据
+            await RefreshAllDataAsync();
 
-            // ⭐ 订阅扫描枪事件
+            // 订阅扫描枪事件
             _scannerHelper.Subscribe();
 
-            // 同步连接状态
+            // 同步扫描枪连接状态
             IsScannerConnected = _scannerHelper.IsScannerConnected;
             ScannerStatusText = _scannerHelper.ScannerStatusText;
 
-            // ⭐ 自动连接扫描枪（如果尚未连接）
+            // 自动连接扫描枪（如果尚未连接）
             if (_scannerHelper != null && !_scannerHelper.IsScannerConnected)
             {
                 await Task.Run(() => _scannerHelper.Connect(ScannerPortName));
@@ -485,7 +569,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 页面导航离开时触发
-        /// ⭐ 必须取消订阅，防止在其他页面扫码时误触发本页检索逻辑
+        /// 必须取消订阅扫描枪事件，防止在其他页面扫码时误触发本页逻辑
         /// </summary>
         public Task OnNavigatedFromAsync()
         {

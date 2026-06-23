@@ -12,7 +12,6 @@
              Background="White">
 
     <UserControl.Resources>
-        <!-- Bool转Visibility转换器 -->
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
 
         <Style x:Key="ActionButtonStyle" TargetType="Button">
@@ -82,7 +81,6 @@
             <!-- 0: 顶部标题栏 -->
             <RowDefinition Height="Auto"/>
             <!-- 1: 基本信息区 -->
-            <!-- ⭐ 新增行：扫描枪状态栏 -->
             <RowDefinition Height="Auto"/>
             <!-- 2: 扫描枪状态栏 -->
             <RowDefinition Height="*"/>
@@ -112,32 +110,40 @@
         </Border>
 
         <!-- ===== 基本信息区 ===== -->
+        <!-- 改动说明：标签从"★ 系列"改为"★ 机种"，从"机种名称"改为"方案名称" -->
         <Border Grid.Row="1" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12" Margin="0,0,0,12">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="180"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="180"/>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Column="0" Text="★ 系列：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding Series, UpdateSourceTrigger=PropertyChanged}"
-                          ItemsSource="{Binding SeriesOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <!-- 机种输入（必填，带★标记） -->
+                <TextBlock Grid.Column="0" Text="★ 机种：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding MachineType, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding MachineTypeOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
 
-                <TextBlock Grid.Column="2" Text="机种名称：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <ComboBox Grid.Column="3" IsEditable="True" Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}"
-                          ItemsSource="{Binding ModelOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
-
-                <TextBlock Grid.Column="4" Text="★ 方案名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <TextBox Grid.Column="5" Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
+                <!-- 方案名称（必填，带★标记） -->
+                <TextBlock Grid.Column="2" Text="★ 方案名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <TextBox Grid.Column="3" Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
                          FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA"/>
+
+                <!-- 时间戳信息（只读展示） -->
+                <TextBlock Grid.Column="4" Text="创建：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="12,0,4,0"/>
+                <TextBlock Grid.Column="5" Text="{Binding CreatedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Width="150"/>
+
+                <TextBlock Grid.Column="6" Text="修改：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                <TextBlock Grid.Column="7" Text="{Binding LastModifiedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center"/>
             </Grid>
         </Border>
 
-        <!-- ⭐ ===== 扫描枪状态栏 ===== -->
+        <!-- ===== 扫描枪状态栏 ===== -->
         <Border Grid.Row="2" CornerRadius="6" BorderThickness="1" Padding="10,6" Margin="0,0,0,8">
             <Border.Style>
                 <Style TargetType="Border">
@@ -159,7 +165,6 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 连接状态图标+文本 -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock FontSize="16" VerticalAlignment="Center">
                         <TextBlock.Style>
@@ -193,7 +198,6 @@
                     </TextBlock>
                 </StackPanel>
 
-                <!-- 最近扫描条码 -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0"
                     Visibility="{Binding IsScannerConnected, Converter={StaticResource BoolToVisibilityConverter}}">
                     <TextBlock Text="最近扫描: " FontSize="13" Foreground="#856404" VerticalAlignment="Center"/>
@@ -235,7 +239,6 @@
             <DataGrid Grid.Row="1" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}"
                       Style="{StaticResource ItemDataGridStyle}" ColumnHeaderStyle="{StaticResource ItemColumnHeaderStyle}">
                 <DataGrid.Columns>
-                    <!-- 序号 -->
                     <DataGridTextColumn Header="序号" Binding="{Binding Index}" Width="70">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
@@ -247,7 +250,6 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <!-- 引脚左（可编辑ComboBox） -->
                     <DataGridTemplateColumn Header="引脚(左)" Width="150">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
@@ -263,7 +265,6 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <!-- 连接符 -->
                     <DataGridTextColumn Header="" Width="30" IsReadOnly="True">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
@@ -277,7 +278,6 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <!-- 引脚右（可编辑ComboBox） -->
                     <DataGridTemplateColumn Header="引脚(右)" Width="150">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
@@ -293,7 +293,6 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <!-- 完整名称预览 -->
                     <DataGridTextColumn Header="项目名称" Width="180">
                         <DataGridTextColumn.Binding>
                             <MultiBinding StringFormat="{}{0}-{1}">
@@ -312,7 +311,6 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <!-- 检查条件 -->
                     <DataGridTemplateColumn Header="检查条件" Width="150">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>

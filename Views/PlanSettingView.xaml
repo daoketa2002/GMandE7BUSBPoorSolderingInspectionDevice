@@ -123,6 +123,7 @@
         </Border>
 
         <!-- ===== 检索区域 ===== -->
+        <!-- 改动说明：第一列标签从"系列"改为"机种" -->
         <Border Grid.Row="1" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12" Margin="0,0,0,8">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -136,21 +137,19 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Column="0" Text="系列：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding FilterSeries, UpdateSourceTrigger=PropertyChanged}"
-                          ItemsSource="{Binding SeriesOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <!-- 机种选择（ComboBox可编辑，支持手动输入和下拉选择） -->
+                <TextBlock Grid.Column="0" Text="机种：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding SelectedMachineType, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding MachineTypeOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
 
-                <TextBlock Grid.Column="2" Text="机种名称：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <ComboBox Grid.Column="3" IsEditable="True" Text="{Binding FilterModel, UpdateSourceTrigger=PropertyChanged}"
-                          ItemsSource="{Binding ModelOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <!-- 方案选择（ComboBox可编辑，与机种联动） -->
+                <TextBlock Grid.Column="2" Text="方案名：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <ComboBox Grid.Column="3" IsEditable="True" Text="{Binding SelectedPlanName, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding PlanNameOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
 
-                <TextBlock Grid.Column="4" Text="方案名：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <TextBox Grid.Column="5" Text="{Binding FilterPlanName, UpdateSourceTrigger=PropertyChanged}"
-                         FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA"/>
-
-                <Button Grid.Column="6" Style="{StaticResource ActionButtonStyle}" Width="80" Background="#3498DB"
-                        Content="🔍 检索" Command="{Binding SearchCommand}" Margin="12,0,6,0"/>
-                <Button Grid.Column="7" Style="{StaticResource ActionButtonStyle}" Width="80" Background="#95A5A6"
+                <Button Grid.Column="4" Style="{StaticResource ActionButtonStyle}" Width="80" Background="#3498DB"
+                        Content="🔍 检索" Command="{Binding SearchCommand}" Margin="12,0,6,0" HorizontalAlignment="Left"/>
+                <Button Grid.Column="5" Style="{StaticResource ActionButtonStyle}" Width="80" Background="#95A5A6"
                         Content="清空" Command="{Binding ClearFilterCommand}" HorizontalAlignment="Left"/>
             </Grid>
         </Border>
@@ -215,18 +214,20 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0"
                     Visibility="{Binding IsScannerConnected, Converter={StaticResource BoolToVisibilityConverter}}">
                     <TextBlock Text="最近扫描: " FontSize="13" Foreground="#856404" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding ScannedBarcode}" FontSize="13" FontWeight="Bold" 
+                    <TextBlock Text="{Binding ScannedBarcode}" FontSize="13" FontWeight="Bold"
                        Foreground="#856404" VerticalAlignment="Center"/>
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- ===== 方案列表表格 ===== -->
-        <DataGrid Grid.Row="3" ItemsSource="{Binding Plans}" SelectedItem="{Binding SelectedPlan}"
+        <!-- 改动说明：表头从"系列"改为"机种" -->
+        <DataGrid Grid.Row="3" ItemsSource="{Binding FilteredPlans}" SelectedItem="{Binding SelectedPlan}"
                   Style="{StaticResource PlanDataGridStyle}" ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
                   Margin="0,0,0,12">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="系列" Binding="{Binding Series}" Width="120">
+                <!-- 机种列 -->
+                <DataGridTextColumn Header="机种" Binding="{Binding MachineType}" Width="180">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
                             <Setter Property="HorizontalAlignment" Value="Center"/>
@@ -237,17 +238,7 @@
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
 
-                <DataGridTextColumn Header="机种名称" Binding="{Binding Model}" Width="200">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                            <Setter Property="HorizontalAlignment" Value="Center"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="FontSize" Value="15"/>
-                            <Setter Property="FontWeight" Value="SemiBold"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
-
+                <!-- 方案名称列 -->
                 <DataGridTextColumn Header="方案名称" Binding="{Binding PlanName}" Width="*">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -259,12 +250,24 @@
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
 
+                <!-- 项目数列 -->
                 <DataGridTextColumn Header="项目数" Binding="{Binding Items.Count}" Width="100">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
                             <Setter Property="HorizontalAlignment" Value="Center"/>
                             <Setter Property="VerticalAlignment" Value="Center"/>
                             <Setter Property="FontSize" Value="14"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <!-- 最后修改时间列 -->
+                <DataGridTextColumn Header="最后修改时间" Binding="{Binding LastModifiedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" Width="180">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="FontSize" Value="13"/>
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
@@ -287,7 +290,7 @@
             </Border>
 
             <!-- 操作按钮 -->
-            <UniformGrid Grid.Column="2" Rows="1" Columns="5" HorizontalAlignment="Right">
+            <UniformGrid Grid.Column="2" Rows="1" Columns="3" HorizontalAlignment="Right">
                 <Button Style="{StaticResource ActionButtonStyle}" Background="#3498DB" Content="➕ 新增"
                         Command="{Binding AddPlanCommand}" Margin="4,0"/>
                 <Button Style="{StaticResource ActionButtonStyle}" Background="#F39C12" Content="✏️ 编辑"
