@@ -1,8 +1,15 @@
-﻿using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
+﻿// ============================================================
+// 文件: Services/ScannerBarcodeService.cs
+// 描述: 扫描枪条码服务（修正版）
+// 修正: Disconnect() 改为异步，调用 DisconnectAsync()
+// ============================================================
+
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
@@ -49,7 +56,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         private void OnScannerConnectionChanged(object? sender, bool isConnected)
         {
-            // 切换到UI线程触发
             if (Application.Current?.Dispatcher != null)
             {
                 Application.Current.Dispatcher.Invoke(() =>
@@ -65,10 +71,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         private void OnScannerBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
         {
-            // 解析条码
             var parsed = ParseBarcode(e.Barcode);
 
-            // 切换到UI线程触发
             if (Application.Current?.Dispatcher != null)
             {
                 Application.Current.Dispatcher.Invoke(() =>
@@ -129,9 +133,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return _scanner.Connect(portName);
         }
 
+        // ⭐ 修正：改为异步方法，调用 DisconnectAsync()
+        public async Task DisconnectAsync()
+        {
+            if (_scanner != null)
+            {
+                await _scanner.DisconnectAsync().ConfigureAwait(false);
+            }
+        }
+
+        // ⭐ 保留同步兼容方法（内部调用异步， fire-and-forget 用于 Dispose 场景）
         public void Disconnect()
         {
-            _scanner?.Disconnect();
+            if (_scanner != null)
+            {
+                // Dispose 场景下的同步断开，直接关闭串口不等待
+                _scanner.Dispose();
+            }
         }
 
         public void Dispose()

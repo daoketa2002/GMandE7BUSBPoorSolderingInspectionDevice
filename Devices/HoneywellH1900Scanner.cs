@@ -1,4 +1,5 @@
-﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+﻿using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO.Ports;
@@ -19,17 +20,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
     /// - 不依赖条码结束符（\r\n），兼容扫描枪有/无结束符两种模式
     /// - 采用100ms数据停顿超时判定条码完整，响应速度无感知
     /// </summary>
-    public class HoneywellH1900Scanner : IDisposable
+    public class HoneywellH1900Scanner : IScannerDevice, IDisposable
     {
         #region 常量
 
-        private const int BAUD_RATE = 115200;
+        private const int DEFAULT_BAUD_RATE = 115200;
         private const int DATA_BITS = 8;
         private const Parity PARITY = Parity.None;
         private const StopBits STOP_BITS = StopBits.One;
         private const int READ_TIMEOUT_MS = 100;
         private const int WRITE_TIMEOUT_MS = 100;
-        private const int RECONNECT_CHECK_INTERVAL_MS = 3000;
 
         /// <summary>
         /// 条码完整判定超时（毫秒）
@@ -56,6 +56,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private System.Timers.Timer? _barcodeCompleteTimer;
 
         private string _portName = "COM9";
+        private int _baudRate = DEFAULT_BAUD_RATE;
+
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
         private volatile bool _isMonitoring;
@@ -65,12 +67,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         #region 事件
 
         /// <summary>
-        /// 条码扫描成功事件
+        /// 条码扫描成功事件（IScannerDevice 接口实现）
         /// </summary>
         public event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
 
         /// <summary>
-        /// 连接状态变更事件
+        /// 连接状态变更事件（ICommunicationDevice 接口实现）
         /// </summary>
         public event EventHandler<bool>? ConnectionStateChanged;
 
@@ -86,10 +88,40 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         #endregion
 
-        #region 属性
+        #region 属性（⭐新增：供 DeviceConnectionManager 注入配置）
 
+        /// <summary>
+        /// 串口号（如 COM9）
+        /// 由 DeviceConnectionManager 从 DeviceSettings.json 读取并设置
+        /// </summary>
+        public string PortName
+        {
+            get => _portName;
+            set
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                    _portName = value;
+            }
+        }
+
+        /// <summary>
+        /// 波特率（默认115200）
+        /// 由 DeviceConnectionManager 从 DeviceSettings.json 读取并设置
+        /// </summary>
+        public int BaudRate
+        {
+            get => _baudRate;
+            set
+            {
+                if (value > 0)
+                    _baudRate = value;
+            }
+        }
+
+        /// <summary>
+        /// 设备是否已连接（ICommunicationDevice 接口实现）
+        /// </summary>
         public bool IsConnected => _isConnected && _serialPort?.IsOpen == true;
-        public string PortName => _portName;
 
         #endregion
 
@@ -102,12 +134,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         #endregion
 
-        #region 连接管理
+        #region 连接管理（⭐接口实现 + 内部保留原有逻辑）
 
         /// <summary>
-        /// 打开扫描枪串口并开始监听
+        /// 异步连接设备（IScannerDevice 接口实现）
+        /// 使用已注入的 PortName/BaudRate 属性值进行连接
+        /// 由 DeviceConnectionManager 调用
         /// </summary>
-        public bool Connect(string portName = "COM9", int baudRate = BAUD_RATE)
+        public async Task<bool> ConnectAsync(CancellationToken ct = default)
+        {
+            // 串口连接本身是同步的，包装为 Task.Run 满足异步接口
+            return await Task.Run(() => ConnectInternal(_portName, _baudRate), ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 内部连接实现（保留原有逻辑，参数化）
+        /// </summary>
+        private bool ConnectInternal(string portName, int baudRate)
         {
             if (_isDisposed)
                 throw new ObjectDisposedException(nameof(HoneywellH1900Scanner));
@@ -146,7 +189,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                     ConnectionStateChanged?.Invoke(this, true);
                     Notify(NotificationType.Success, $"扫描枪已连接: {portName}");
 
-                    // 启动数据监听
                     StartMonitoring();
 
                     return true;
@@ -166,19 +208,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         }
 
         /// <summary>
-        /// 断开扫描枪连接
+        /// 断开连接（ICommunicationDevice 接口实现）
         /// </summary>
-        public void Disconnect()
+        public async Task DisconnectAsync()
         {
-            lock (_lockObject)
+            await Task.Run(() =>
             {
-                StopMonitoring();
-                CloseSerialPort();
+                lock (_lockObject)
+                {
+                    StopMonitoring();
+                    CloseSerialPort();
+                    _isConnected = false;
+                    ConnectionStateChanged?.Invoke(this, false);
+                    _logger.LogInformation("扫描枪已断开连接");
+                }
+            }).ConfigureAwait(false);
+        }
 
-                _isConnected = false;
-                ConnectionStateChanged?.Invoke(this, false);
-                _logger.LogInformation("扫描枪已断开连接");
-            }
+        // 保留原有 Connect(portName, baudRate) 方法作为兼容重载
+        /// <summary>
+        /// 打开扫描枪串口并开始监听（同步版本，保留兼容）
+        /// </summary>
+        public bool Connect(string portName = "COM9", int baudRate = DEFAULT_BAUD_RATE)
+        {
+            return ConnectInternal(portName, baudRate);
         }
 
         private void CloseSerialPort()
@@ -439,7 +492,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             if (_isDisposed) return;
             _isDisposed = true;
 
-            Disconnect();
+            // ⭐ 同步清理连接资源（不能调用异步 DisconnectAsync）
+            lock (_lockObject)
+            {
+                StopMonitoring();
+                CloseSerialPort();
+                _isConnected = false;
+                ConnectionStateChanged?.Invoke(this, false);
+            }
+
             _readLoopCts?.Dispose();
             _barcodeCompleteTimer?.Stop();
             _barcodeCompleteTimer?.Dispose();

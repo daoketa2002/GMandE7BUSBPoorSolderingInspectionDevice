@@ -1,4 +1,6 @@
 ﻿// 📁 Devices/Multimeter/GwInstekGDM9060Driver.cs
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
@@ -6,7 +8,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 {
@@ -15,7 +16,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
     /// 通讯方式：TCP Socket (LAN口)，SCPI指令集
     /// 默认端口：5025
     /// </summary>
-    public class GwInstekGDM9060Driver : IAsyncDisposable, IDisposable
+    public class GwInstekGDM9060Driver : IMultimeterDevice, IAsyncDisposable, IDisposable
     {
         #region 常量
 
@@ -45,6 +46,62 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
+        #region 属性（⭐新增：供 DeviceConnectionManager 注入配置）
+
+        /// <summary>
+        /// 万用表IP地址
+        /// 由 DeviceConnectionManager 从 DeviceSettings.json 读取并设置
+        /// </summary>
+        public string Host
+        {
+            get => _host;
+            set
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                    _host = value;
+            }
+        }
+
+        /// <summary>
+        /// SCPI端口号（默认5025）
+        /// 由 DeviceConnectionManager 从 DeviceSettings.json 读取并设置
+        /// </summary>
+        public int Port
+        {
+            get => _port;
+            set
+            {
+                if (value > 0 && value <= 65535)
+                    _port = value;
+            }
+        }
+
+        /// <summary>
+        /// 通信超时时间（毫秒）
+        /// 由 DeviceConnectionManager 从 DeviceSettings.json 读取并设置
+        /// </summary>
+        public int TimeoutMs
+        {
+            get => _timeoutMs;
+            set
+            {
+                if (value > 0)
+                    _timeoutMs = value;
+            }
+        }
+
+        /// <summary>
+        /// 设备是否已连接（ICommunicationDevice 接口实现）
+        /// </summary>
+        public bool IsConnected => _isConnected && _tcpClient?.Connected == true;
+
+        /// <summary>
+        /// 连接信息文本（IP:端口）
+        /// </summary>
+        public string ConnectionInfo => $"{_host}:{_port}";
+
+        #endregion
+
         #region 事件
 
         /// <summary>
@@ -64,13 +121,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
-        #region 属性
-
-        public bool IsConnected => _isConnected && _tcpClient?.Connected == true;
-        public string ConnectionInfo => $"{_host}:{_port}";
-
-        #endregion
-
         #region 构造函数
 
         public GwInstekGDM9060Driver(ILogger<GwInstekGDM9060Driver> logger)
@@ -80,20 +130,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
-        #region 连接管理
+        #region 连接管理（⭐接口实现 + 内部重载）
 
         /// <summary>
         /// 连接到万用表（使用配置中的地址和端口）
         /// </summary>
-        public async Task<bool> ConnectAsync(string host, int port = DEFAULT_PORT,
-            int timeoutMs = DEFAULT_TIMEOUT_MS, CancellationToken ct = default)
+        /// <summary>
+        /// 异步连接设备（ICommunicationDevice 接口实现）
+        /// 使用已注入的 Host/Port/TimeoutMs 属性值进行连接
+        /// 由 DeviceConnectionManager 调用
+        /// </summary>
+        public async Task<bool> ConnectAsync(CancellationToken ct = default)
+        {
+            return await ConnectInternalAsync(_host, _port, _timeoutMs, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 内部连接实现（保留原有逻辑，仅改为 private）
+        /// </summary>
+        private async Task<bool> ConnectInternalAsync(string host, int port,
+            int timeoutMs, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(host))
                 throw new ArgumentNullException(nameof(host));
-
-            _host = host;
-            _port = port;
-            _timeoutMs = timeoutMs;
 
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
@@ -104,20 +163,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     return true;
                 }
 
-                _logger.LogInformation("正在连接万用表 {Host}:{Port}...", _host, _port);
+                _logger.LogInformation("正在连接万用表 {Host}:{Port}...", host, port);
 
                 await CleanupConnectionAsync().ConfigureAwait(false);
 
                 _tcpClient = new TcpClient
                 {
-                    ReceiveTimeout = _timeoutMs,
-                    SendTimeout = _timeoutMs
+                    ReceiveTimeout = timeoutMs,
+                    SendTimeout = timeoutMs
                 };
 
-                using var timeoutCts = new CancellationTokenSource(_timeoutMs);
+                using var timeoutCts = new CancellationTokenSource(timeoutMs);
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
-                await _tcpClient.ConnectAsync(_host, _port, linkedCts.Token).ConfigureAwait(false);
+                await _tcpClient.ConnectAsync(host, port, linkedCts.Token).ConfigureAwait(false);
                 _networkStream = _tcpClient.GetStream();
 
                 // 发送 *IDN? 验证连接
@@ -130,6 +189,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 _isConnected = true;
                 _logger.LogInformation("万用表连接成功！设备信息: {IDN}", idn);
 
+                // ⭐ 通过统一接口事件通知状态变更
                 ConnectionStateChanged?.Invoke(this, true);
                 Notify(NotificationType.Success, $"万用表已连接: {idn}");
                 return true;
@@ -148,7 +208,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 断开连接
+        /// 断开连接（ICommunicationDevice 接口实现）
         /// </summary>
         public async Task DisconnectAsync()
         {
@@ -194,6 +254,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
+        // ============================================================
+        // 以下 SCPI 指令、测量功能、断线重连、通知辅助、
+        // IDisposable / IAsyncDisposable 实现
+        // ⭐ 完全保留原有代码，此处省略以节省篇幅
+        // 仅修改 HandleConnectionLossAsync 中的重连调用
+        // ============================================================
         #region SCPI 核心指令
 
         /// <summary>
@@ -438,7 +504,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
-        #region 断线重连
+        #region 断线重连（修改：使用属性而非硬编码）
 
         private async Task HandleConnectionLossAsync()
         {
@@ -466,7 +532,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
                     try
                     {
-                        if (await ConnectAsync(_host, _port, _timeoutMs, _reconnectCts.Token).ConfigureAwait(false))
+                        // ⭐ 使用内部方法重连（使用已注入的属性值）
+                        if (await ConnectInternalAsync(_host, _port, _timeoutMs, _reconnectCts.Token).ConfigureAwait(false))
                         {
                             _logger.LogInformation("万用表重连成功！");
                             Notify(NotificationType.ConnectionRestored, "万用表已恢复连接");

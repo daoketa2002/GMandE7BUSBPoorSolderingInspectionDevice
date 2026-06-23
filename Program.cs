@@ -3,6 +3,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Data;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
@@ -151,7 +152,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // === 基础设施服务 ===
             services.AddSingleton<INotificationService, NotificationService>();
-            services.AddSingleton<IDeviceSettingsService, DeviceSettingsService>();
+
+            // 作业员服务
             services.AddSingleton<IOperatorStorageService, OperatorStorageService>();
             services.AddSingleton<IOperatorStateService, OperatorStateService>();
 
@@ -171,6 +173,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             //// 保留旧的 SQLite 实现（不注入接口，仅供需要时手动解析）
             //services.AddSingleton<SqliteTestRecordStorage>();
 
+            // CSV导出服务
+            services.AddSingleton<ICsvExportService, CsvExportService>(); 
+
             // ══════════════════════════════════════════════════════════
 
 
@@ -182,28 +187,44 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // === 内存监控服务 === 
             services.AddSingleton<MemoryMonitorService>();
-            
-            services.AddSingleton<ICsvExportService, CsvExportService>(); // CSV导出服务（接口注入）
-            services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>(); // 扫描枪条码接收和解析
+
 
             // ⭐⭐⭐ ====== 新增：硬件驱动服务注册 ====== ⭐⭐⭐
 
+            services.AddSingleton<IDeviceSettingsService, DeviceSettingsService>();
+
             // 1. Modbus TCP PLC 服务（动作控制）
-            // 同时注册具体类型和接口，确保两者可解析到同一实例
             services.AddSingleton<TcpClientPLCMotionService>();
             services.AddSingleton<ITcpClientPLCMotionService>(sp =>
                 sp.GetRequiredService<TcpClientPLCMotionService>());
+            // ⭐ PLC 适配器（将 TcpClientPLCMotionService 适配为 IPlcDevice）
+            services.AddSingleton<PlcCommunicationAdapter>();
+            services.AddSingleton<IPlcDevice>(sp =>
+                sp.GetRequiredService<PlcCommunicationAdapter>());
+
             // UI层封装
             services.AddSingleton<TcpPLCMotionWPFUIModbusService>();
 
             // 2. 固纬 GDM-9060 万用表驱动
             services.AddSingleton<GwInstekGDM9060Driver>();
+            // ⭐ 注册为 IMultimeterDevice（不冲突，因为接口不同）
+            services.AddSingleton<IMultimeterDevice>(sp =>
+                sp.GetRequiredService<GwInstekGDM9060Driver>());
 
             // 3. 霍尼韦尔 H1900 扫描枪驱动
             services.AddSingleton<HoneywellH1900Scanner>();
+            // ⭐ 注册为 IScannerDevice（不冲突，因为接口不同）
+            services.AddSingleton<IScannerDevice>(sp =>
+                sp.GetRequiredService<HoneywellH1900Scanner>());
 
             // 4. 检测流程引擎
             services.AddSingleton<InspectionEngine>();
+
+            // 5. 设备连接管理器（依赖三个不同接口，DI自动区分）
+            services.AddSingleton<IDeviceConnectionManager, DeviceConnectionManager>();
+
+            // ⭐ 扫描枪条码服务（保留，因为 DeviceConnectionManager 依赖它转发扫码事件）
+            services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>();
 
             // ⭐⭐⭐ ====== 硬件驱动服务注册结束 ====== ⭐⭐⭐
 

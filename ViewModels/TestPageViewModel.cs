@@ -1,12 +1,12 @@
 ﻿// ============================================================
 // 文件: ViewModels/TestPageViewModel.cs
-// 描述: 运行界面 ViewModel —— 实现三态锁定机制、日志保存、
-//      设备连接检查、传感器模拟
-// 重构内容:
-//   - 三态枚举: Ready / CanStart / Testing / PendingSave
-//   - 移除开始测试按钮，改为PLC信号触发
-//   - 终了按钮支持测试中终止
-//   - 待保存态弹窗确认 → 事务保存 / 取消清空结果
+// 描述: 运行界面 ViewModel（修改部分）
+// 改动说明:
+//   - 移除 ScannerIntegrationHelper 字段
+//   - 注入 IDeviceConnectionManager 替代手动连接硬件
+//   - 移除 AutoConnectHardwareAsync() 方法
+//   - 移除手动 ReconnectPlc/Scanner/Dmm 中的连接逻辑
+//   - 统一订阅 DeviceConnectionManager 的状态事件
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -57,7 +57,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         // 硬件服务
         private readonly ITcpClientPLCMotionService _plcService;
         private readonly GwInstekGDM9060Driver _dmmDriver;
-        private readonly IScannerBarcodeService? _scannerService;
+        // private readonly IScannerBarcodeService? _scannerService;
+        private readonly IDeviceConnectionManager _deviceManager;
         private readonly InspectionEngine? _inspectionEngine;
 
         #endregion
@@ -80,6 +81,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             GwInstekGDM9060Driver dmmDriver,
             IDeviceSettingsService settingsService,
             IPlanStorageService planStorageService,
+            IDeviceConnectionManager deviceManager,
             IScannerBarcodeService scannerBarcodeService,
             ITestRecordStorage testRecordStorage,
             InspectionEngine? inspectionEngine = null)
@@ -92,12 +94,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
-            _scannerService = scannerBarcodeService;
+            _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
+            //_scannerService = scannerBarcodeService;
             _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
             _inspectionEngine = inspectionEngine;
 
             InitializeClock();
             SubscribeToHardwareEvents();
+
+            // ⭐ 启动时同步设备连接状态
+            SyncDeviceStates();
         }
 
         #endregion
@@ -186,27 +192,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private async Task ReconnectPlcAsync()
         {
             PlcStatusText = "连接中...";
-            try
-            {
-                if (_plcService.IsConnected)
-                    await _plcService.StopAsync();
-
-                await _plcService.StartAsync();
-
-                IsPlcConnected = _plcService.IsConnected;
-                PlcStatusText = _plcService.IsConnected ? "已连接" : "断开";
-
-                AddLog(_plcService.IsConnected ? "✅ PLC 连接成功" : "❌ PLC 连接失败");
-                UpdateUIState();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "PLC连接失败");
-                IsPlcConnected = false;
-                PlcStatusText = "连接失败";
-                AddLog($"❌ PLC连接失败: {ex.Message}");
-                UpdateUIState();
-            }
+            await _deviceManager.ReconnectDeviceAsync("PLC");
+            // 状态由事件回调自动更新，无需手动设置
         }
 
         /// <summary>
@@ -218,31 +205,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             ScannerStatusText = "连接中...";
             try
             {
-                if (_scannerService != null)
-                {
-                    _scannerService.Disconnect();
-                    var settings = _settingsService.LoadSettings();
-                    var portName = settings.ScannerSerialCommunication?.SerialNumber ?? "COM9";
-                    var result = _scannerService.Connect(portName);
-
-                    IsScannerConnected = result;
-                    ScannerStatusText = result ? "已连接" : "断开";
-                    AddLog(result ? $"✅ 扫描枪已连接 ({portName})" : $"❌ 扫描枪连接失败 ({portName})");
-                }
-                else
-                {
-                    ScannerStatusText = "未配置";
-                    AddLog("⚠️ 扫描枪服务未注册");
-                }
+                await _deviceManager.ReconnectDeviceAsync("Scanner");
             }
             catch (Exception ex)
             {
-                IsScannerConnected = false;
-                ScannerStatusText = "连接失败";
-                AddLog($"❌ 扫描枪连接失败: {ex.Message}");
+                _logger.LogError(ex, "扫描仪重连失败");
             }
-            UpdateUIState();
-            await Task.CompletedTask;
+            // 状态由事件回调自动更新
         }
 
         /// <summary>
@@ -252,28 +221,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private async Task ReconnectDmmAsync()
         {
             DmmStatusText = "连接中...";
-            try
-            {
-                var settings = _settingsService.LoadSettings();
-                var host = settings.TcpClientGWInstek?.Host ?? "192.168.1.4";
-                var port = settings.TcpClientGWInstek?.Port ?? 5025;
-
-                if (_dmmDriver.IsConnected)
-                    await _dmmDriver.DisconnectAsync();
-
-                var result = await _dmmDriver.ConnectAsync(host, port);
-
-                IsDmmConnected = result;
-                DmmStatusText = result ? "已连接" : "断开";
-                AddLog(result ? $"✅ 万用表已连接 ({host}:{port})" : $"❌ 万用表连接失败 ({host}:{port})");
-            }
-            catch (Exception ex)
-            {
-                IsDmmConnected = false;
-                DmmStatusText = "连接失败";
-                AddLog($"❌ 万用表连接失败: {ex.Message}");
-            }
-            UpdateUIState();
+            await _deviceManager.ReconnectDeviceAsync("DMM");
+            // 状态由事件回调自动更新
         }
 
         #endregion
@@ -618,48 +567,43 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         private void SubscribeToHardwareEvents()
         {
-            _plcService.OnNotification += (s, e) =>
+            // ❌ 删除原有的 PLC/DMM/Scanner 事件订阅代码
+
+            // ⭐ 订阅全局设备连接管理器的状态变更事件
+            _deviceManager.PlcConnectionStateChanged += (s, e) =>
             {
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    if (e.Type == NotificationType.Success || e.Type == NotificationType.ConnectionRestored)
-                    {
-                        IsPlcConnected = true;
-                        PlcStatusText = "已连接";
-                    }
-                    else if (e.Type == NotificationType.Error || e.Type == NotificationType.Critical)
-                    {
-                        IsPlcConnected = false;
-                        PlcStatusText = "断开";
-                    }
+                    IsPlcConnected = e.IsConnected;
+                    PlcStatusText = e.StatusText;
                     UpdateUIState();
                 });
             };
 
-            _dmmDriver.ConnectionStateChanged += (s, connected) =>
+            _deviceManager.DmmConnectionStateChanged += (s, e) =>
             {
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    IsDmmConnected = connected;
-                    DmmStatusText = connected ? "已连接" : "断开";
+                    IsDmmConnected = e.IsConnected;
+                    DmmStatusText = e.StatusText;
                     UpdateUIState();
                 });
             };
 
-            if (_scannerService != null)
+            _deviceManager.ScannerConnectionStateChanged += (s, e) =>
             {
-                _scannerService.BarcodeParsed += OnScannerBarcodeParsed;
-                _scannerService.ConnectionStateChanged += (s, connected) =>
+                Application.Current.Dispatcher.Invoke(() =>
                 {
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        IsScannerConnected = connected;
-                        ScannerStatusText = connected ? "已连接" : "断开";
-                        UpdateUIState();
-                    });
-                };
-            }
+                    IsScannerConnected = e.IsConnected;
+                    ScannerStatusText = e.StatusText;
+                    UpdateUIState();
+                });
+            };
 
+            // ⭐ 订阅扫码事件（由 DeviceConnectionManager 统一转发）
+            _deviceManager.BarcodeScanned += OnScannerBarcodeParsed;
+
+            // InspectionEngine 事件保持不变
             if (_inspectionEngine != null)
             {
                 _inspectionEngine.StateChanged += OnInspectionStateChanged;
@@ -746,8 +690,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             await LoadPlanItemsAsync();
 
-            // 自动连接硬件
-            _ = AutoConnectHardwareAsync();
+            // ⭐ 同步设备连接状态（不再手动连接）
+            SyncDeviceStates();
 
             // 启动传感器模拟（TODO: 替换为真实PLC轮询）
             StartSensorSimulation();
@@ -757,6 +701,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _logger.LogInformation("离开运行界面");
             _sensorSimTimer?.Stop();
+
+            // ⭐ 取消订阅扫码事件
+            if (_deviceManager != null)
+            {
+                _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
+            }
+
             return Task.CompletedTask;
         }
 
@@ -772,12 +723,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 自动连接硬件
 
-        private async Task AutoConnectHardwareAsync()
+        // ⭐ 新增：同步设备状态方法
+        private void SyncDeviceStates()
         {
-            AddLog("正在自动连接硬件设备...");
-            await ReconnectPlcAsync();
-            await ReconnectDmmAsync();
-            await ReconnectScannerAsync();
+            IsPlcConnected = _deviceManager.IsPlcConnected;
+            PlcStatusText = _deviceManager.PlcStatusText;
+            IsDmmConnected = _deviceManager.IsDmmConnected;
+            DmmStatusText = _deviceManager.DmmStatusText;
+            IsScannerConnected = _deviceManager.IsScannerConnected;
+            ScannerStatusText = _deviceManager.ScannerStatusText;
+            UpdateUIState();
         }
 
         #endregion
@@ -791,8 +746,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _sensorSimTimer?.Stop();
             _sensorSimTimer = null;
 
-            if (_scannerService != null)
-                _scannerService.BarcodeParsed -= OnScannerBarcodeParsed;
+            // ⭐ 取消订阅全局设备管理器事件
+            if (_deviceManager != null)
+            {
+                _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
+                // 注意：连接状态事件不需要取消订阅，因为 DeviceConnectionManager 是全局单例
+                // 但扫码事件需要取消，避免在页面销毁后仍然触发
+            }
 
             if (_inspectionEngine != null)
             {

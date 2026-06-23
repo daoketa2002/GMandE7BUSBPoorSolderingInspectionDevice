@@ -41,7 +41,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// <summary>
         /// 断开扫描枪
         /// </summary>
-        void Disconnect();
+        void Disconnect();                   // 保留同步版本（兼容）
+        Task DisconnectAsync();                 // ⭐ 新增异步版本
     }
 
     /// <summary>

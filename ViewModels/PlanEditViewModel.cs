@@ -35,12 +35,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
+        private readonly IDeviceConnectionManager _deviceManager;
         private readonly ILogger<PlanEditViewModel> _logger;
-
-        /// <summary>
-        /// 扫描枪集成帮助类（封装扫描枪事件，降低ViewModel与硬件的耦合）
-        /// </summary>
-        private readonly ScannerIntegrationHelper _scannerHelper;
 
         #endregion
 
@@ -80,33 +76,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
-            IScannerBarcodeService? scannerService,
+            IDeviceConnectionManager deviceManager,
             ILogger<PlanEditViewModel> logger)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
+            _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            // 初始化扫描枪帮助类
-            _scannerHelper = new ScannerIntegrationHelper(scannerService, _logger);
+            // ⭐ 同步扫描枪初始状态
+            IsScannerConnected = _deviceManager.IsScannerConnected;
+            ScannerStatusText = _deviceManager.ScannerStatusText;
+            ScannerPortName = _deviceManager.IsScannerConnected ? "COM8" : "COM8";  // 从配置读取或使用默认值
 
-            // 同步扫描枪初始状态
-            IsScannerConnected = _scannerHelper.IsScannerConnected;
-            ScannerStatusText = _scannerHelper.ScannerStatusText;
-            ScannerPortName = _scannerHelper.PortName;
-
-            // 订阅扫描枪事件
-            _scannerHelper.ScannerConnected += OnScannerConnected;
-            _scannerHelper.ScannerDisconnected += OnScannerDisconnected;
-            _scannerHelper.BarcodeScanned += OnScannerBarcodeScanned;
+            // ⭐ 订阅全局设备管理器事件
+            _deviceManager.ScannerConnectionStateChanged += OnScannerConnectionStateChanged;
+            _deviceManager.BarcodeScanned += OnScannerBarcodeScanned;
 
             // 初始化下拉选项
             MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
             PinOptions = new ObservableCollection<string>(PlanStorageService.PinList);
             CheckConditionOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
 
-            _logger.LogDebug("PlanEditViewModel 构造完成，扫描枪: {HasScanner}", scannerService != null);
+            _logger.LogDebug("PlanEditViewModel 构造完成");
         }
 
         #endregion
@@ -260,29 +253,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 扫描枪事件处理
 
-        /// <summary>
-        /// 扫描枪连接成功回调
-        /// </summary>
-        private void OnScannerConnected()
+        // ⭐ 新增：扫描枪连接状态变更回调
+        private void OnScannerConnectionStateChanged(object? sender, DeviceConnectionStateChangedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
-                IsScannerConnected = true;
-                ScannerStatusText = _scannerHelper.ScannerStatusText;
-                _logger.LogInformation("扫描枪已连接: {Port}", ScannerPortName);
-            });
-        }
-
-        /// <summary>
-        /// 扫描枪断开连接回调
-        /// </summary>
-        private void OnScannerDisconnected()
-        {
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                IsScannerConnected = false;
-                ScannerStatusText = _scannerHelper.ScannerStatusText;
-                _logger.LogInformation("扫描枪已断开");
+                IsScannerConnected = e.IsConnected;
+                ScannerStatusText = e.StatusText;
             });
         }
 
@@ -290,7 +267,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 扫描枪条码接收回调
         /// 自动填充机种名称（MachineType）
         /// </summary>
-        private void OnScannerBarcodeScanned(BarcodeParsedEventArgs e)
+        private void OnScannerBarcodeScanned(object? sender, BarcodeParsedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
@@ -303,58 +280,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     MachineType = e.ModelName;
                 }
             });
-        }
-
-        /// <summary>
-        /// 手动连接扫描枪
-        /// </summary>
-        [RelayCommand]
-        private void ConnectScanner()
-        {
-            try
-            {
-                if (_scannerHelper == null)
-                {
-                    _logger.LogWarning("扫描枪帮助类未初始化");
-                    _ = _notificationService.ShowWarningAsync("扫描枪服务未初始化", "提示");
-                    return;
-                }
-
-                var connected = _scannerHelper.Connect(ScannerPortName);
-                if (connected)
-                {
-                    IsScannerConnected = true;
-                    ScannerStatusText = _scannerHelper.ScannerStatusText;
-                    _ = _notificationService.ShowInfoAsync($"扫描枪连接成功: {ScannerPortName}", "连接成功");
-                }
-                else
-                {
-                    _ = _notificationService.ShowWarningAsync(
-                        $"扫描枪连接失败，请检查:\n1. 端口 {ScannerPortName} 是否存在\n2. 扫描枪是否已切换为USB串口模式",
-                        "连接失败");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "连接扫描枪失败");
-                _ = _notificationService.ShowErrorAsync($"扫描枪连接失败: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 断开扫描枪连接
-        /// </summary>
-        [RelayCommand]
-        private void DisconnectScanner()
-        {
-            try
-            {
-                _scannerHelper?.Disconnect();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "断开扫描枪失败");
-            }
         }
 
         #endregion
@@ -560,18 +485,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.LogInformation("新增模式");
             }
 
-            // 订阅扫描枪事件
-            _scannerHelper.Subscribe();
-
-            // 同步连接状态
-            IsScannerConnected = _scannerHelper.IsScannerConnected;
-            ScannerStatusText = _scannerHelper.ScannerStatusText;
-
-            // 自动连接扫描枪（如果尚未连接）
-            if (_scannerHelper != null && !_scannerHelper.IsScannerConnected)
-            {
-                Task.Run(() => _scannerHelper.Connect(ScannerPortName));
-            }
+            // ⭐ 同步扫描枪连接状态（不再手动连接）
+            IsScannerConnected = _deviceManager.IsScannerConnected;
+            ScannerStatusText = _deviceManager.ScannerStatusText;
 
             return Task.CompletedTask;
         }
@@ -584,7 +500,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _logger.LogDebug("离开方案编辑页面");
 
-            _scannerHelper.Unsubscribe();
+            // ⭐ 页面离开时取消订阅扫码事件，避免在其他页面触发
+            if (_deviceManager != null)
+            {
+                _deviceManager.BarcodeScanned -= OnScannerBarcodeScanned;
+            }
 
             return Task.CompletedTask;
         }
