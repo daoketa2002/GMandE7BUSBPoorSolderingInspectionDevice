@@ -2,24 +2,26 @@
 // 文件: ViewModels/LogDataViewModel.cs
 // 描述: 日志数据页面 ViewModel —— 重构版
 // 改动:
-//   - 数据源从CSV切换为SQLite（通过ILogDatabaseService）
+//   - 数据源从CSV切换为SQLite（通过ITestRecordStorage）
 //   - 新增日期范围筛选（开始日期/结束日期）
 //   - 新增判定结果筛选（OK/NG/全部）
 //   - 新增方案筛选器联动（全部方案=Pin并集，具体方案=该方案列）
 //   - 新增分页功能（每页条数+翻页导航）
+//   ⭐ 新增扫描枪集成：扫码自动填充机种名称和序列号
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using Microsoft.Extensions.Logging;
+using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Drawing.Printing;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -29,7 +31,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     /// <summary>
     /// 日志数据页面 ViewModel
     /// 管理检测日志的查询、筛选、分页和导出
-    /// 数据来源：SQLite（LogRecords + PinResults表）
+    /// 数据来源：CSV（通过ITestRecordStorage）
+    /// 集成扫描枪：扫码自动填充机种名称和序列号
     /// </summary>
     public partial class LogDataViewModel : ObservableObject, INavigationAware
     {
@@ -41,6 +44,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly ITestRecordStorage _testRecordStorage;
         private readonly ILogger<LogDataViewModel> _logger;
 
+        // ⭐ 扫描枪集成帮助类
+        private readonly ScannerIntegrationHelper _scannerHelper;
+
         #endregion
 
         #region 构造函数
@@ -50,6 +56,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             ICsvExportService csvExportService,
             INavigationService navigationService,
             ITestRecordStorage testRecordStorage,
+            IScannerBarcodeService? scannerService,
             ILogger<LogDataViewModel> logger)
         {
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
@@ -58,9 +65,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+            // ⭐ 初始化扫描枪帮助类（Microsoft.Extensions.Logging.ILogger 重载）
+            _scannerHelper = new ScannerIntegrationHelper(scannerService, _logger);
+
+            // ⭐ 同步初始状态
+            IsScannerConnected = _scannerHelper.IsScannerConnected;
+            ScannerStatusText = _scannerHelper.ScannerStatusText;
+
+            // ⭐ 订阅扫描枪事件
+            _scannerHelper.ScannerConnected += OnScannerConnected;
+            _scannerHelper.ScannerDisconnected += OnScannerDisconnected;
+            _scannerHelper.BarcodeScanned += OnScannerBarcodeScanned;
+
             // 初始化每页条数选项
             PageSizeOptions = new ObservableCollection<int> { 20, 50, 100 };
         }
+
+        #endregion
+
+        #region 扫描枪相关属性（通过 Helper 暴露）
+
+        /// <summary>扫描枪是否已连接</summary>
+        [ObservableProperty]
+        private bool _isScannerConnected;
+
+        /// <summary>扫描枪状态文本</summary>
+        [ObservableProperty]
+        private string _scannerStatusText = "扫描枪未连接";
+
+        /// <summary>最近扫描的原始条码</summary>
+        [ObservableProperty]
+        private string _scannedBarcode = string.Empty;
 
         #endregion
 
@@ -157,10 +192,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private ObservableCollection<LogRecord> _logDataList = new();
 
         /// <summary>当前数据中出现的所有动态列名（用于XAML动态生成列）</summary>
-        /// <remarks>
-        /// 全部方案模式：取所有行的PinResults中PinName的并集
-        /// 具体方案模式：从方案JSON中按定义顺序取Pin名称
-        /// </remarks>
         [ObservableProperty]
         private ObservableCollection<string> _dynamicHeaders = new();
 
@@ -171,6 +202,68 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>是否正在加载数据（控制加载提示的显示）</summary>
         [ObservableProperty]
         private bool _isLoading;
+
+        #endregion
+
+        #region 扫描枪事件处理
+
+        /// <summary>
+        /// 扫描枪连接成功回调
+        /// 更新连接状态并同步 UI 属性
+        /// </summary>
+        private void OnScannerConnected()
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                IsScannerConnected = true;
+                ScannerStatusText = _scannerHelper.ScannerStatusText;
+                _logger.LogInformation("扫描枪已连接");
+            });
+        }
+
+        /// <summary>
+        /// 扫描枪断开连接回调
+        /// 更新连接状态并同步 UI 属性
+        /// </summary>
+        private void OnScannerDisconnected()
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                IsScannerConnected = false;
+                ScannerStatusText = _scannerHelper.ScannerStatusText;
+                _logger.LogInformation("扫描枪已断开");
+            });
+        }
+
+        /// <summary>
+        /// 扫描枪条码接收回调
+        /// 自动填充机种名称（SelectedMachineType）和序列号（SearchSerialNumber）
+        /// 
+        /// 条码格式："T998248391,250919,00004Z"
+        ///   第1段 → 机种名称
+        ///   第3段 → 序列号
+        /// </summary>
+        private void OnScannerBarcodeScanned(BarcodeParsedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                ScannedBarcode = e.RawBarcode;
+                _logger.LogInformation("扫描枪收到条码: {Barcode}, 机种={Model}, 序列号={Serial}",
+                    e.RawBarcode, e.ModelName, e.SerialPart);
+
+                // 自动填充机种名称
+                if (!string.IsNullOrWhiteSpace(e.ModelName))
+                {
+                    SelectedMachineType = e.ModelName;
+                }
+
+                // 自动填充序列号
+                if (!string.IsNullOrWhiteSpace(e.SerialPart))
+                {
+                    SearchSerialNumber = e.SerialPart;
+                }
+            });
+        }
 
         #endregion
 
@@ -303,13 +396,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     pageIndex: 1,
                     pageSize: 10000);
 
-                // 导出数据列表（含行号索引）
-                var exportData = allRecords.Select((record, index) => new
-                {
-                    Record = record,
-                    RowIndex = index + 1  // 序号从1开始
-                }).ToList();
-
                 // 构建导出列定义
                 var dynamicHeaders = DynamicHeaders.ToList();
                 var headers = new List<(string Header, Func<LogRecord, string> ValueSelector)>
@@ -350,8 +436,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 清空所有检索条件输入框（不清空表格数据）
-        /// 与「重置」的区别：重置会清空表格并恢复默认值；
-        /// 清空条件只清空输入框，方便用户快速重新输入
         /// </summary>
         [RelayCommand]
         private void ClearConditions()
@@ -365,9 +449,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             EndDate = null;
             FilterFinalResult = "全部";
             PageIndex = 1;
-
-            // 不清空表格数据，不触发重新检索
-            // 用户可修改条件后手动点击「检索」
         }
 
         /// <summary>
@@ -384,7 +465,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region INavigationAware
 
         /// <summary>
-        /// 页面导航进入时触发 —— 加载下拉框选项，不展示数据
+        /// 页面导航进入时触发
+        /// 加载下拉框选项，订阅并自动连接扫描枪
         /// 数据在用户点击"检索"时才加载
         /// </summary>
         public async Task OnNavigatedToAsync(object? parameter = null)
@@ -395,12 +477,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             try
             {
                 // 加载机种下拉列表
-                //var types = await _logDatabaseService.GetMachineTypesAsync();
                 var types = await _testRecordStorage.GetMachineTypesAsync();
                 MachineTypes = new ObservableCollection<string>(types);
 
                 // 加载方案下拉列表
-                //var plans = await _logDatabaseService.GetPlanNamesAsync();
                 var plans = await _testRecordStorage.GetPlanNamesAsync();
                 PlanNames = new ObservableCollection<string>(
                     new[] { "全部方案" }.Concat(plans));
@@ -413,6 +493,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 UpdatePaginationButtons();
 
                 _logger.LogInformation("日志数据页面就绪，机种数:{Types}, 方案数:{Plans}", types.Count, plans.Count);
+
+                // ⭐ 订阅扫描枪事件
+                _scannerHelper.Subscribe();
+
+                // 同步连接状态
+                IsScannerConnected = _scannerHelper.IsScannerConnected;
+                ScannerStatusText = _scannerHelper.ScannerStatusText;
             }
             catch (Exception ex)
             {
@@ -425,9 +512,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 页面导航离开时触发
+        /// ⭐ 必须取消订阅，防止在其他页面扫码时误触发本页检索逻辑
+        /// </summary>
         public Task OnNavigatedFromAsync()
         {
             _logger.LogInformation("离开日志数据页面");
+
+            _scannerHelper.Unsubscribe();
+
             return Task.CompletedTask;
         }
 
@@ -443,9 +537,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 更新动态列名集合（方案联动核心逻辑）
         /// 统一从实际数据中提取Pin列名，确保始终有列显示
-        /// 方案JSON存在时，按JSON顺序排列（体验优化）
-        /// JSON不存在时，使用CSV中出现的顺序（功能兜底）
-        /// 追加CSV中有但JSON中缺失的Pin列，防止遗漏
         /// </summary>
         private async Task UpdateDynamicHeadersAsync(List<LogRecord> records)
         {
@@ -466,13 +557,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     var plan = allPlans.FirstOrDefault(p => p.PlanName == SelectedPlanName);
                     if (plan != null && plan.Items.Count > 0)
                     {
-                        // 按方案JSON定义的顺序排列Pin列
                         var orderedNames = plan.Items
                             .OrderBy(i => i.Index)
                             .Select(i => i.ItemName)
                             .ToList();
 
-                        // 保留JSON中定义的顺序，同时追加CSV中有但JSON中没有的Pin（去重）
                         var csvOnlyHeaders = headers
                             .Where(h => !orderedNames.Contains(h, StringComparer.OrdinalIgnoreCase))
                             .ToList();

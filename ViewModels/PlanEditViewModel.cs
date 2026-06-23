@@ -1,10 +1,21 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+﻿// ============================================================
+// 文件: ViewModels/PlanEditViewModel.cs
+// 描述: 方案编辑/新增页面 ViewModel
+// 改动:
+//   - 统一使用 ILogger<PlanEditViewModel>（替代 Serilog.ILogger）
+//   - 使用 ScannerIntegrationHelper 替代内联扫描枪代码
+//   - 新增扫描枪连接状态属性和状态显示
+//   - 新增手动连接/断开扫描枪命令
+// ============================================================
+
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
-using Serilog;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -13,38 +24,94 @@ using System.Windows;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
+    /// <summary>
+    /// 方案编辑/新增页面 ViewModel
+    /// 管理检测方案的创建和编辑，包含检测项目列表的增删改和排序
+    /// 集成扫描枪：扫码自动填充机种名称（Model）并推断系列（Series）
+    /// </summary>
     public partial class PlanEditViewModel : ObservableObject, INavigationAware
     {
+        #region 服务注入
+
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
-        private readonly IScannerBarcodeService? _scannerService;
-        private readonly Serilog.ILogger _logger;
+        private readonly ILogger<PlanEditViewModel> _logger;
 
+        // ⭐ 扫描枪集成帮助类
+        private readonly ScannerIntegrationHelper _scannerHelper;
+
+        #endregion
+
+        #region 字段
+
+        /// <summary>是否为编辑模式（true=编辑已有方案，false=新增方案）</summary>
         private bool _isEditMode = false;
+
+        /// <summary>编辑模式下的原始方案（用于系列变更处理）</summary>
         private PlanModel? _originalPlan;
+
+        #endregion
+
+        #region 扫描枪相关属性（通过 Helper 暴露）
+
+        /// <summary>扫描枪是否已连接</summary>
+        [ObservableProperty]
+        private bool _isScannerConnected;
+
+        /// <summary>扫描枪状态文本</summary>
+        [ObservableProperty]
+        private string _scannerStatusText = "扫描枪未连接";
+
+        /// <summary>最近扫描的原始条码</summary>
+        [ObservableProperty]
+        private string _scannedBarcode = string.Empty;
+
+        /// <summary>扫描枪端口名</summary>
+        [ObservableProperty]
+        private string _scannerPortName = "COM9";
+
+        #endregion
+
+        #region 构造函数
 
         public PlanEditViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
-            IScannerBarcodeService? scannerService = null)
+            IScannerBarcodeService? scannerService,
+            ILogger<PlanEditViewModel> logger)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-            _scannerService = scannerService;
-            _logger = Log.ForContext<PlanEditViewModel>();
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+            // ⭐ 初始化扫描枪帮助类
+            _scannerHelper = new ScannerIntegrationHelper(scannerService, _logger);
+
+            // ⭐ 同步初始状态
+            IsScannerConnected = _scannerHelper.IsScannerConnected;
+            ScannerStatusText = _scannerHelper.ScannerStatusText;
+            ScannerPortName = _scannerHelper.PortName;
+
+            // ⭐ 订阅扫描枪事件
+            _scannerHelper.ScannerConnected += OnScannerConnected;
+            _scannerHelper.ScannerDisconnected += OnScannerDisconnected;
+            _scannerHelper.BarcodeScanned += OnScannerBarcodeScanned;
+
+            // 初始化下拉选项
             SeriesOptions = new ObservableCollection<string>(PlanStorageService.DefaultSeries);
             ModelOptions = new ObservableCollection<string>(PlanStorageService.DefaultModels);
             PinOptions = new ObservableCollection<string>(PlanStorageService.PinList);
             CheckConditionOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
 
-            _logger.Debug("PlanEditViewModel 构造完成");
+            _logger.LogDebug("PlanEditViewModel 构造完成，扫描枪: {HasScanner}", scannerService != null);
         }
 
-        #region 基本信息
+        #endregion
+
+        #region 基本信息属性
 
         [ObservableProperty]
         private string _series = string.Empty;
@@ -55,14 +122,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private string _planName = string.Empty;
 
+        /// <summary>系列下拉选项</summary>
         public ObservableCollection<string> SeriesOptions { get; }
+
+        /// <summary>型号下拉选项</summary>
         public ObservableCollection<string> ModelOptions { get; }
+
+        /// <summary>引脚下拉选项（A1~A20, B1~B20）</summary>
         public ObservableCollection<string> PinOptions { get; }
+
+        /// <summary>检查条件下拉选项（OPEN / SHORT）</summary>
         public ObservableCollection<string> CheckConditionOptions { get; }
 
         #endregion
 
-        #region 项目列表
+        #region 项目列表属性
 
         [ObservableProperty]
         private ObservableCollection<PlanItemViewModel> _items = new ObservableCollection<PlanItemViewModel>();
@@ -82,6 +156,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 项目操作命令
 
+        /// <summary>
+        /// 新增一个检测项目（默认条件为 OPEN）
+        /// </summary>
         [RelayCommand]
         private void AddItem()
         {
@@ -94,18 +171,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             };
             Items.Add(newItem);
             ReindexItems();
-            _logger.Debug("新增项目，当前共 {Count} 项", Items.Count);
+            _logger.LogDebug("新增项目，当前共 {Count} 项", Items.Count);
         }
 
+        /// <summary>
+        /// 删除选中的检测项目
+        /// </summary>
         [RelayCommand]
         private void DeleteItem()
         {
             if (SelectedItem == null) return;
             Items.Remove(SelectedItem);
             ReindexItems();
-            _logger.Debug("删除项目，当前共 {Count} 项", Items.Count);
+            _logger.LogDebug("删除项目，当前共 {Count} 项", Items.Count);
         }
 
+        /// <summary>
+        /// 将选中的检测项目上移一位
+        /// </summary>
         [RelayCommand]
         private void MoveItemUp()
         {
@@ -118,6 +201,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 将选中的检测项目下移一位
+        /// </summary>
         [RelayCommand]
         private void MoveItemDown()
         {
@@ -130,6 +216,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 重新编排检测项目的序号（从1开始连续）
+        /// </summary>
         private void ReindexItems()
         {
             for (int i = 0; i < Items.Count; i++)
@@ -140,24 +229,144 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #endregion
 
-        #region 保存与返回
+        #region 扫描枪事件处理
 
+        /// <summary>
+        /// 扫描枪连接成功回调
+        /// 更新连接状态并同步 UI 属性
+        /// </summary>
+        private void OnScannerConnected()
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                IsScannerConnected = true;
+                ScannerStatusText = _scannerHelper.ScannerStatusText;
+                _logger.LogInformation("扫描枪已连接: {Port}", ScannerPortName);
+            });
+        }
+
+        /// <summary>
+        /// 扫描枪断开连接回调
+        /// 更新连接状态并同步 UI 属性
+        /// </summary>
+        private void OnScannerDisconnected()
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                IsScannerConnected = false;
+                ScannerStatusText = _scannerHelper.ScannerStatusText;
+                _logger.LogInformation("扫描枪已断开");
+            });
+        }
+
+        /// <summary>
+        /// 扫描枪条码接收回调
+        /// 自动填充机种名称（Model）并推断系列（Series）
+        /// </summary>
+        private void OnScannerBarcodeScanned(BarcodeParsedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                ScannedBarcode = e.RawBarcode;
+                _logger.LogInformation("扫描枪收到条码: {Barcode}, 机种={Model}", e.RawBarcode, e.ModelName);
+
+                // 自动填充机种名称（如果当前为空）
+                if (string.IsNullOrWhiteSpace(Model))
+                {
+                    Model = e.ModelName;
+                }
+
+                // 自动推断系列（如果当前为空）
+                if (string.IsNullOrWhiteSpace(Series))
+                {
+                    InferSeriesFromModel(e.ModelName);
+                }
+            });
+        }
+
+        /// <summary>
+        /// 从机种名称推断系列
+        /// 规则：T998开头→GM5，998开头→E78
+        /// </summary>
+        private void InferSeriesFromModel(string modelName)
+        {
+            if (modelName.StartsWith("T998", StringComparison.OrdinalIgnoreCase))
+                Series = "GM5";
+            else if (modelName.StartsWith("998", StringComparison.OrdinalIgnoreCase))
+                Series = "E78";
+        }
+
+        /// <summary>
+        /// 手动连接扫描枪命令
+        /// </summary>
+        [RelayCommand]
+        private void ConnectScanner()
+        {
+            try
+            {
+                if (_scannerHelper == null)
+                {
+                    _logger.LogWarning("扫描枪帮助类未初始化");
+                    _ = _notificationService.ShowWarningAsync("扫描枪服务未初始化", "提示");
+                    return;
+                }
+
+                var connected = _scannerHelper.Connect(ScannerPortName);
+                if (connected)
+                {
+                    IsScannerConnected = true;
+                    ScannerStatusText = _scannerHelper.ScannerStatusText;
+                    _ = _notificationService.ShowInfoAsync($"扫描枪连接成功: {ScannerPortName}", "连接成功");
+                }
+                else
+                {
+                    _ = _notificationService.ShowWarningAsync(
+                        $"扫描枪连接失败，请检查:\n1. 端口 {ScannerPortName} 是否存在\n2. 扫描枪是否已切换为USB串口模式",
+                        "连接失败");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "连接扫描枪失败");
+                _ = _notificationService.ShowErrorAsync($"扫描枪连接失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 断开扫描枪连接命令
+        /// </summary>
+        [RelayCommand]
+        private void DisconnectScanner()
+        {
+            try
+            {
+                _scannerHelper?.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "断开扫描枪失败");
+            }
+        }
+
+        #endregion
+
+        #region 保存与返回命令
+
+        /// <summary>
+        /// 保存方案
+        /// 校验必填项 → 构建方案对象 → 调用存储服务保存 → 返回方案列表
+        /// </summary>
         [RelayCommand]
         private async Task SavePlanAsync()
         {
             try
             {
-                // 验证
+                // 验证必填项
                 if (string.IsNullOrWhiteSpace(Series))
                 {
                     await _notificationService.ShowWarningAsync("请输入/选择系列！", "校验失败");
                     return;
                 }
-                //if (string.IsNullOrWhiteSpace(Model))
-                //{
-                //    await _notificationService.ShowWarningAsync("请输入/选择型号！", "校验失败");
-                //    return;
-                //}
                 if (string.IsNullOrWhiteSpace(PlanName))
                 {
                     await _notificationService.ShowWarningAsync("请输入方案名称！", "校验失败");
@@ -182,7 +391,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var plan = new PlanModel
                 {
                     Series = Series.Trim(),
-                    Model = Model?.Trim() ?? string.Empty,  // ← 允许为空
+                    Model = Model?.Trim() ?? string.Empty,
                     PlanName = PlanName.Trim(),
                     Items = Items.Select(item => new PlanItem
                     {
@@ -195,18 +404,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 // 保存：传入原始系列名以处理系列变更
                 await _planStorageService.SavePlanAsync(plan, _originalPlan?.Series);
 
-                _logger.Information("方案保存成功: {Plan}", plan.PlanName);
+                _logger.LogInformation("方案保存成功: {Plan}", plan.PlanName);
                 await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 保存成功！", "保存成功");
 
                 await _navigationService.NavigateToAsync<PlanSettingView>();
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "保存方案失败");
+                _logger.LogError(ex, "保存方案失败");
                 await _notificationService.ShowErrorAsync($"保存失败：{ex.Message}");
             }
         }
 
+        /// <summary>
+        /// 返回方案设定页面
+        /// 如有未保存修改，弹窗确认
+        /// </summary>
         [RelayCommand]
         private async Task GoBackAsync()
         {
@@ -219,16 +432,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         "确认返回");
                     if (!result) return;
                 }
-                _logger.Information("用户返回方案设定页面");
+                _logger.LogInformation("用户返回方案设定页面");
                 await _navigationService.NavigateToAsync<PlanSettingView>();
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "返回方案设定页面失败");
+                _logger.LogError(ex, "返回方案设定页面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
 
+        /// <summary>
+        /// 判断是否有未保存的修改
+        /// </summary>
         private bool HasUnsavedChanges()
         {
             if (!string.IsNullOrWhiteSpace(Series)) return true;
@@ -240,12 +456,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #endregion
 
-        #region INavigationAware
+        #region INavigationAware 实现
 
+        /// <summary>
+        /// 页面导航进入时触发
+        /// 根据参数判断新增/编辑模式，加载已有方案数据
+        /// 订阅并自动连接扫描枪
+        /// </summary>
         public Task OnNavigatedToAsync(object? parameter = null)
         {
-            _logger.Debug("进入方案编辑页面");
+            _logger.LogDebug("进入方案编辑页面");
 
+            // 判断新增/编辑模式
             if (parameter is PlanModel existingPlan)
             {
                 _isEditMode = true;
@@ -268,7 +490,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     });
                 }
 
-                _logger.Information("编辑模式，加载方案: {Plan}", existingPlan.PlanName);
+                _logger.LogInformation("编辑模式，加载方案: {Plan}", existingPlan.PlanName);
             }
             else
             {
@@ -280,25 +502,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 PlanName = string.Empty;
                 Items.Clear();
 
-                _logger.Information("新增模式");
+                _logger.LogInformation("新增模式");
             }
 
-            // 订阅扫描枪（用于自动填充机种名称）
-            if (_scannerService != null)
+            // ⭐ 订阅扫描枪事件
+            _scannerHelper.Subscribe();
+
+            // 同步连接状态
+            IsScannerConnected = _scannerHelper.IsScannerConnected;
+            ScannerStatusText = _scannerHelper.ScannerStatusText;
+
+            // ⭐ 自动连接扫描枪（如果尚未连接）
+            if (_scannerHelper != null && !_scannerHelper.IsScannerConnected)
             {
-                _scannerService.BarcodeParsed += OnBarcodeParsed;
+                Task.Run(() => _scannerHelper.Connect(ScannerPortName));
             }
 
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        /// 页面导航离开时触发
+        /// ⭐ 必须取消订阅，防止在其他页面扫码时误触发本页逻辑
+        /// </summary>
         public Task OnNavigatedFromAsync()
         {
-            if (_scannerService != null)
-            {
-                _scannerService.BarcodeParsed -= OnBarcodeParsed;
-            }
-            _logger.Debug("离开方案编辑页面");
+            _logger.LogDebug("离开方案编辑页面");
+
+            _scannerHelper.Unsubscribe();
+
             return Task.CompletedTask;
         }
 
@@ -308,46 +540,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         #endregion
-
-        private void OnBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
-        {
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                // 自动填充机种名称
-                if (string.IsNullOrWhiteSpace(Model))
-                {
-                    Model = e.ModelName;
-                }
-
-                // 自动推断系列
-                if (string.IsNullOrWhiteSpace(Series))
-                {
-                    if (e.ModelName.StartsWith("T998", StringComparison.OrdinalIgnoreCase))
-                        Series = "GM5";
-                    else if (e.ModelName.StartsWith("998", StringComparison.OrdinalIgnoreCase))
-                        Series = "E78";
-                }
-            });
-        }
     }
 
     /// <summary>
-    /// 项目ViewModel（用于表格绑定）
+    /// 检测项目 ViewModel（用于表格行绑定）
     /// </summary>
     public partial class PlanItemViewModel : ObservableObject
     {
+        /// <summary>序号</summary>
         [ObservableProperty]
         private int _index;
 
+        /// <summary>左引脚（如 A1）</summary>
         [ObservableProperty]
         private string _pinLeft = string.Empty;
 
+        /// <summary>右引脚（如 A2）</summary>
         [ObservableProperty]
         private string _pinRight = string.Empty;
 
+        /// <summary>检查条件（OPEN / SHORT）</summary>
         [ObservableProperty]
         private string _checkCondition = "OPEN";
 
+        /// <summary>完整的检测项目名称（如 A1-A2）</summary>
         public string FullItemName => $"{PinLeft}-{PinRight}";
     }
 }

@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
+             xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:PlanEditViewModel}"
              d:DesignWidth="1100" d:DesignHeight="700"
@@ -11,6 +12,9 @@
              Background="White">
 
     <UserControl.Resources>
+        <!-- Bool转Visibility转换器 -->
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+
         <Style x:Key="ActionButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="100"/>
             <Setter Property="Height" Value="34"/>
@@ -75,9 +79,16 @@
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <!-- 0: 顶部标题栏 -->
             <RowDefinition Height="Auto"/>
+            <!-- 1: 基本信息区 -->
+            <!-- ⭐ 新增行：扫描枪状态栏 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 2: 扫描枪状态栏 -->
             <RowDefinition Height="*"/>
+            <!-- 3: 项目列表区 -->
             <RowDefinition Height="Auto"/>
+            <!-- 4: 底部按钮区 -->
         </Grid.RowDefinitions>
 
         <!-- ===== 顶部标题栏 ===== -->
@@ -126,8 +137,74 @@
             </Grid>
         </Border>
 
+        <!-- ⭐ ===== 扫描枪状态栏 ===== -->
+        <Border Grid.Row="2" CornerRadius="6" BorderThickness="1" Padding="10,6" Margin="0,0,0,8">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
+                            <Setter Property="Background" Value="#FFF3CD"/>
+                            <Setter Property="BorderBrush" Value="#FFEAA7"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
+                            <Setter Property="Background" Value="#E9ECEF"/>
+                            <Setter Property="BorderBrush" Value="#CED4DA"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 连接状态图标+文本 -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock FontSize="16" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
+                                        <Setter Property="Text" Value="📷"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
+                                        <Setter Property="Text" Value="📴"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="Bold" Margin="4,0,0,0">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
+                                        <Setter Property="Text" Value="扫描枪已连接 — 扫码自动填充机种名称"/>
+                                        <Setter Property="Foreground" Value="#856404"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
+                                        <Setter Property="Text" Value="扫描枪未连接"/>
+                                        <Setter Property="Foreground" Value="#6C757D"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+
+                <!-- 最近扫描条码 -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0"
+                    Visibility="{Binding IsScannerConnected, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Text="最近扫描: " FontSize="13" Foreground="#856404" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ScannedBarcode}" FontSize="13" FontWeight="Bold"
+                       Foreground="#856404" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- ===== 项目列表区 ===== -->
-        <Grid Grid.Row="2" Margin="0,0,0,12">
+        <Grid Grid.Row="3" Margin="0,0,0,12">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -256,8 +333,8 @@
         </Grid>
 
         <!-- ===== 底部按钮区 ===== -->
-        <Border Grid.Row="3" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12">
-            <UniformGrid Rows="1" Columns="3" HorizontalAlignment="Center">
+        <Border Grid.Row="4" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12">
+            <UniformGrid Rows="1" Columns="2" HorizontalAlignment="Center">
                 <Button Style="{StaticResource ActionButtonStyle}" Width="160" Height="44" Background="#27AE60"
                         Content="💾 保存方案" FontSize="17" Command="{Binding SavePlanCommand}" Margin="8,0"/>
                 <Button Style="{StaticResource ActionButtonStyle}" Width="160" Height="44" Background="#95A5A6"

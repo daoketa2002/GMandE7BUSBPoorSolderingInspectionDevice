@@ -7,6 +7,7 @@
     3. DatePicker 增加清除"小x"样式
     4. 修复分页按钮悬停/点击变白问题
     5. 导出按钮与检索/重置同行，节省垂直空间
+    ⭐ 6. 新增扫描枪状态栏（扫码自动填充机种名称和序列号）
   ============================================================
 -->
 <UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.LogDataView"
@@ -30,29 +31,34 @@
         <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
         <!-- bool → Visibility 转换器 -->
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <!-- bool → Visibility（通用版） -->
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <!-- bool → Opacity 转换器（分页按钮禁用态） -->
         <converters:BoolToOpacityConverter x:Key="BoolToOpacityConverter"
                                            EnabledOpacity="1.0"
                                            DisabledOpacity="0.5"/>
-        
-        <!-- ⭐ 新增：AlternationIndex + 1 转换器 -->
+
+        <!-- ⭐ AlternationIndex + 1 转换器 -->
         <converters:IntPlusOneConverter x:Key="AlternationIndexConverter"/>
     </UserControl.Resources>
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <!-- ① 标题栏 -->
+            <!-- 0: 标题栏 -->
             <RowDefinition Height="Auto"/>
-            <!-- ② 检索条件区 -->
+            <!-- 1: 检索条件区 -->
+            <!-- ⭐ 新增行：扫描枪状态栏 -->
             <RowDefinition Height="Auto"/>
-            <!-- ③ 加载提示 -->
+            <!-- 2: 扫描枪状态栏 -->
+            <RowDefinition Height="Auto"/>
+            <!-- 3: 加载提示 -->
             <RowDefinition Height="*"/>
-            <!-- ④ 数据表格 -->
+            <!-- 4: 数据表格 -->
             <RowDefinition Height="Auto"/>
-            <!-- ⑤ 分页控件 -->
+            <!-- 5: 分页控件 -->
             <RowDefinition Height="Auto"/>
-            <!-- ⑥ 底部状态栏 -->
+            <!-- 6: 底部状态栏 -->
         </Grid.RowDefinitions>
 
         <!-- ===== ① 标题栏 ===== -->
@@ -96,7 +102,7 @@
             </Grid>
         </Border>
 
-        <!-- ===== ② 检索条件区（重构版） ===== -->
+        <!-- ===== ② 检索条件区 ===== -->
         <Border Grid.Row="1"
                 Background="#F8F9FA"
                 CornerRadius="8"
@@ -139,7 +145,7 @@
                               ItemsSource="{Binding MachineTypes}"
                               Height="36" FontSize="14"
                               VerticalContentAlignment="Center"
-                              ToolTip="可选择预设值或手动输入"/>
+                              ToolTip="可选择预设值或手动输入（扫码自动填充）"/>
 
                     <!-- 序列号 -->
                     <TextBlock Grid.Column="3" Text="序列号：" VerticalAlignment="Center"
@@ -148,7 +154,7 @@
                              Text="{Binding SearchSerialNumber, UpdateSourceTrigger=PropertyChanged}"
                              Height="36" FontSize="14"
                              VerticalContentAlignment="Center"
-                             ToolTip="输入序列号进行检索（支持模糊匹配）"/>
+                             ToolTip="输入序列号进行检索（支持模糊匹配，扫码自动填充）"/>
 
                     <!-- 方案名称 -->
                     <TextBlock Grid.Column="6" Text="方案名称：" VerticalAlignment="Center"
@@ -171,7 +177,7 @@
                               VerticalContentAlignment="Center"/>
                 </Grid>
 
-                <!-- 第二行：开始日期 / 结束日期（带清除"小x"） -->
+                <!-- 第二行：开始日期 / 结束日期 -->
                 <Grid Grid.Row="1" Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -349,8 +355,74 @@
             </Grid>
         </Border>
 
+        <!-- ⭐ ===== 扫描枪状态栏 ===== -->
+        <Border Grid.Row="2" CornerRadius="6" BorderThickness="1" Padding="10,6" Margin="0,0,0,8">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
+                            <Setter Property="Background" Value="#FFF3CD"/>
+                            <Setter Property="BorderBrush" Value="#FFEAA7"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
+                            <Setter Property="Background" Value="#E9ECEF"/>
+                            <Setter Property="BorderBrush" Value="#CED4DA"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 连接状态图标+文本 -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock FontSize="16" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
+                                        <Setter Property="Text" Value="📷"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
+                                        <Setter Property="Text" Value="📴"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="Bold" Margin="4,0,0,0">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
+                                        <Setter Property="Text" Value="扫描枪已连接 — 扫码自动填充机种名称和序列号"/>
+                                        <Setter Property="Foreground" Value="#856404"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
+                                        <Setter Property="Text" Value="扫描枪未连接"/>
+                                        <Setter Property="Foreground" Value="#6C757D"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+
+                <!-- 最近扫描条码 -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0"
+                    Visibility="{Binding IsScannerConnected, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Text="最近扫描: " FontSize="13" Foreground="#856404" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ScannedBarcode}" FontSize="13" FontWeight="Bold"
+                       Foreground="#856404" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- ===== ③ 加载提示 ===== -->
-        <Border Grid.Row="2"
+        <Border Grid.Row="3"
                 Background="#EBF5FB"
                 CornerRadius="4"
                 Padding="10,6"
@@ -362,9 +434,9 @@
         </Border>
 
         <!-- ===== ④ 数据表格 ===== -->
-        <DataGrid Grid.Row="3"
+        <DataGrid Grid.Row="4"
                   ItemsSource="{Binding LogDataList}"
-                  AlternationCount="100000"   
+                  AlternationCount="100000"
                   AutoGenerateColumns="False"
                   IsReadOnly="True"
                   CanUserAddRows="False"
@@ -431,8 +503,7 @@
 
             <!-- ===== 固定列定义 ===== -->
             <DataGrid.Columns>
-                <!-- ⭐ 序号列（替代原来的检测时间列） -->
-                <!-- ⭐ 序号列（使用 AlternationIndex，从1开始） -->
+                <!-- 序号列（使用 AlternationIndex，从1开始） -->
                 <DataGridTextColumn Header="序号"
                     Binding="{Binding RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=DataGridRow}, Path=(ItemsControl.AlternationIndex), Converter={StaticResource AlternationIndexConverter}}"
                     Width="60"/>
@@ -474,8 +545,8 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <!-- ===== ⑤ 分页控件（修复按钮样式） ===== -->
-        <Border Grid.Row="4"
+        <!-- ===== ⑤ 分页控件 ===== -->
+        <Border Grid.Row="5"
                 Background="#F8F9FA"
                 CornerRadius="4"
                 BorderBrush="#DEE2E6"
@@ -508,7 +579,7 @@
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"/>
 
-                <!-- 右侧：翻页按钮（修复悬停/点击变白 + 禁用态半透明） -->
+                <!-- 右侧：翻页按钮 -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <!-- ◀ 上一页 -->
                     <Button Content="◀ 上一页"
@@ -585,7 +656,7 @@
         </Border>
 
         <!-- ===== ⑥ 底部状态栏 ===== -->
-        <Border Grid.Row="5"
+        <Border Grid.Row="6"
                 Background="#F8F9FA"
                 CornerRadius="4"
                 BorderBrush="#DEE2E6"
@@ -603,7 +674,7 @@
                            Foreground="#2C3E50"
                            VerticalAlignment="Center"/>
                 <TextBlock Grid.Column="1"
-                           Text="提示：输入检索条件后点击「检索」查看数据，支持 Ctrl+C 复制和列排序"
+                           Text="提示：输入检索条件后点击「检索」查看数据，扫描枪扫码可自动填充机种名称和序列号"
                            FontSize="12" Foreground="#95A5A6"
                            VerticalAlignment="Center"/>
             </Grid>
