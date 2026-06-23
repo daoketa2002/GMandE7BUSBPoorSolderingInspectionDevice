@@ -387,15 +387,32 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // 校验每个检测项目的引脚是否完整
-                foreach (var item in Items)
+                // ========== 校验检测项目引脚（逐个检查，精确定位错误项） ==========
+                var pinErrors = new List<string>();
+
+                for (int i = 0; i < Items.Count; i++)
                 {
-                    if (string.IsNullOrWhiteSpace(item.PinLeft) || string.IsNullOrWhiteSpace(item.PinRight))
-                    {
-                        await _notificationService.ShowWarningAsync(
-                            $"项目 {item.Index} 的引脚不能为空，请完善后再保存！", "校验失败");
-                        return;
-                    }
+                    var item = Items[i];
+                    int displayIndex = item.Index;
+
+                    // 校验左引脚
+                    string? leftError = ValidateSinglePin(item.PinLeft, "左引脚");
+                    if (leftError != null)
+                        pinErrors.Add($"第{displayIndex}项 {leftError}");
+
+                    // 校验右引脚
+                    string? rightError = ValidateSinglePin(item.PinRight, "右引脚");
+                    if (rightError != null)
+                        pinErrors.Add($"第{displayIndex}项 {rightError}");
+                }
+
+                // 如果有任何引脚错误，一次性汇总提示
+                if (pinErrors.Count > 0)
+                {
+                    string errorMessage = "以下检测项目引脚有问题，请修正后再保存：\n\n"
+                                        + string.Join("\n", pinErrors);
+                    await _notificationService.ShowWarningAsync(errorMessage, "引脚校验失败");
+                    return;
                 }
 
                 // 构建方案对象
@@ -454,6 +471,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.LogError(ex, "返回方案设定页面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 校验单个引脚格式是否合法
+        /// 合法格式：大写字母 A 或 B 开头，后接至少一位数字（如 A1、A20、B5、B15）
+        /// </summary>
+        /// <param name="pin">引脚字符串</param>
+        /// <param name="side">引脚位置描述（左引脚/右引脚），用于错误提示</param>
+        /// <returns>null 表示合法，否则返回具体错误描述</returns>
+        private static string? ValidateSinglePin(string pin, string side)
+        {
+            if (string.IsNullOrWhiteSpace(pin))
+                return $"{side}不能为空";
+
+            // 正则：^[AB]\d+$  —— 必须以大写A或B开头，后接至少一位数字，不含其他字符
+            if (!System.Text.RegularExpressions.Regex.IsMatch(pin.Trim(), @"^[AB]\d+$"))
+                return $"{side} \"{pin.Trim()}\" 格式错误：必须以大写A或B开头+数字（如A1、B20）";
+
+            return null; // 校验通过
         }
 
         /// <summary>
