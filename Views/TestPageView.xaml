@@ -457,10 +457,10 @@
                 <StackPanel Orientation="Horizontal" 
                             VerticalAlignment="Center"
                             HorizontalAlignment="Center">
-                    <TextBlock Text="★ 序列号：" 
+                    <TextBlock Text="序列号：" 
                                FontSize="16" 
                                FontWeight="Bold"
-                               Foreground="#E74C3C"
+                               Foreground="#495057"
                                VerticalAlignment="Center"
                                Margin="0,0,8,0"/>
                     <TextBox Text="{Binding SerialNumber, UpdateSourceTrigger=PropertyChanged}"
@@ -468,11 +468,12 @@
                              Width="220"
                              Height="36"
                              VerticalContentAlignment="Center"
-                             BorderBrush="#E74C3C"
-                             BorderThickness="2"
+                             BorderBrush="#CED4DA"
+                             BorderThickness="1"
                              x:Name="SerialNumberTextBox"
                              KeyDown="InputTextBox_KeyDown"/>
                 </StackPanel>
+
 
                 <!-- 作业员（从全局状态获取，默认只读） -->
                 <StackPanel Orientation="Horizontal" 

@@ -144,45 +144,48 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 方案名称变更时触发（MVVM CommunityToolkit 自动生成）
         /// 用户手动输入或下拉选择时：
-        /// 1. 尝试匹配下拉列表项
-        /// 2. 匹配成功 → 自动选中 + 清除无效标记 + 加载方案检测项目到DataGrid
-        /// 3. 匹配失败 → 取消选中 + 等待外部验证
-        /// 4. 清空 → 清空检测项目列表
+        /// 1. 清空 → 清空检测项目列表 + 界面日志
+        /// 2. 匹配成功 → 自动选中 + 清除无效标记 + 加载方案检测项目
+        /// 3. 匹配失败 → 取消选中 + 界面日志提示
         /// </summary>
         partial void OnSchemeNameChanged(string value)
         {
+            // 场景1：用户清空了方案名称
             if (string.IsNullOrWhiteSpace(value))
             {
                 SelectedPlanName = null;
                 IsSchemeNameInvalid = false;
-                // 方案名为空 → 清空检测项目列表
                 TestItems.Clear();
-                _logger.LogDebug("方案名已清空，检测项目列表已清空");
+                AddLog("方案名称已清空，检测项目列表已清空");
                 return;
             }
 
-            // 尝试在方案下拉列表中精确匹配用户输入（忽略大小写）
-            var matched = PlanNameOptions.FirstOrDefault(
-                p => string.Equals(p, value, StringComparison.OrdinalIgnoreCase));
+            // 场景2&3：尝试在方案下拉列表中精确匹配（忽略大小写）
+            string? matched = PlanNameOptions.FirstOrDefault(
+                planName => string.Equals(planName, value, StringComparison.OrdinalIgnoreCase));
 
             if (matched != null)
             {
-                // 匹配成功 → 自动选中列表项，清除无效标记
+                // 场景2：匹配成功 → 自动选中列表项 + 清除无效标记 + 加载检测项目
                 SelectedPlanName = matched;
                 IsSchemeNameInvalid = false;
-
-                // ⭐ 方案匹配成功 → 加载该方案的检测项目列表到DataGrid
                 _ = LoadPlanItemsAsync();
-                _logger.LogDebug("方案名匹配成功: {SchemeName}，正在加载检测项目", matched);
             }
             else
             {
-                // 匹配失败 → 取消选中（保持手动输入文本在ComboBox中）
+                // 场景3：匹配失败 → 取消选中 + 验证有效性(驱动红色边框+ToolTip) + 清空检测列表 + 日志
                 SelectedPlanName = null;
-                // 无效标记由外部 ValidateCurrentSchemeName 统一判断
-                _logger.LogDebug("方案名未匹配到列表项: {SchemeName}", value);
+
+                // 调用验证方法设置 IsSchemeNameInvalid = true，驱动红色边框和ToolTip
+                ValidateCurrentSchemeName();
+
+                // 无效方案清空检测项目列表，避免展示旧数据误导操作员
+                TestItems.Clear();
+
+                AddLog($"⚠️ 方案 [{value}] 不在当前机种 [{ModelName}] 的方案列表中，检测列表已清空");
             }
         }
+
 
         /// <summary>检查总数（不清零，累计）</summary>
         [ObservableProperty]
@@ -392,27 +395,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private string _modelName = string.Empty;
 
-        /// <summary>
-        /// 机种名称变更时触发（MVVM CommunityToolkit 自动生成）
-        /// 联动刷新方案下拉列表 + 验证当前方案名有效性
-        /// 若方案名变为无效，清空检测项目列表
-        /// </summary>
-        partial void OnModelNameChanged(string value)
-        {
-            // 机种名称变化 → 异步刷新方案下拉选项
-            _ = RefreshPlanNameOptionsAsync(value);
-
-            // 机种变更后验证当前方案名是否有效
-            ValidateCurrentSchemeName();
-
-            // ⭐ 如果方案名变为无效，清空检测项目列表
-            if (IsSchemeNameInvalid)
-            {
-                TestItems.Clear();
-                _logger.LogDebug("机种变更导致方案名无效，检测项目列表已清空");
-            }
-        }
-
         [ObservableProperty]
         private string _serialNumber = string.Empty;
 
@@ -421,6 +403,44 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         [ObservableProperty]
         private bool _isOperatorEditable = true;
+
+        /// <summary>
+        /// 机种名称变更时触发（MVVM CommunityToolkit 自动生成）
+        /// 委托给异步处理方法，确保方案列表刷新完成后再验证
+        /// </summary>
+        partial void OnModelNameChanged(string value)
+        {
+            // 机种名称变化 → 异步处理：刷新方案列表 → 验证方案有效性 → 必要时清空检测列表
+            _ = HandleModelNameChangedAsync(value);
+        }
+
+        /// <summary>
+        /// 机种名称变更的异步处理（由 OnModelNameChanged 委托调用）
+        /// 执行顺序：
+        /// 1. 刷新方案下拉列表（等待异步IO完成）
+        /// 2. 用新列表验证当前方案名是否有效
+        /// 3. 若无效 → 清空检测项目列表 + 输出界面日志提示操作员
+        /// 
+        /// 设计说明：
+        /// - 必须 await 异步刷新，否则验证时列表还是旧的，导致误判
+        /// - 验证和清空逻辑抽离为独立方法，保持单一职责
+        /// </summary>
+        /// <param name="newMachineType">新的机种名称</param>
+        private async Task HandleModelNameChangedAsync(string newMachineType)
+        {
+            // 步骤1：等待方案下拉列表刷新完成（关键：必须等待，避免时序问题）
+            await RefreshPlanNameOptionsAsync(newMachineType);
+
+            // 步骤2：用刷新后的方案列表验证当前方案名
+            ValidateCurrentSchemeName();
+
+            // 步骤3：方案名无效 → 清空检测项目列表并提示操作员
+            if (IsSchemeNameInvalid)
+            {
+                TestItems.Clear();
+                AddLog($"⚠️ 机种已切换为 [{newMachineType}]，方案 [{SchemeName}] 不属于该机种，检测列表已清空，请重新选择方案");
+            }
+        }
 
         #endregion
 
@@ -852,37 +872,42 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 验证当前方案名称是否属于当前机种
-        /// 更新 IsSchemeNameInvalid 属性，驱动UI红色边框提示
+        /// 更新 IsSchemeNameInvalid 属性（驱动UI红色边框提示）
+        /// 无效时同步输出界面日志（方便操作员在日志区看到警告原因）
         /// 
-        /// 规则：
-        /// - 机种为空 → 始终有效（无需验证）
-        /// - 方案名为空 → 有效（用户尚未输入，允许）
-        /// - 方案名非空且机种非空 → 检查方案名是否在该机种的方案列表中
+        /// 验证规则：
+        /// - 机种为空 → 无需验证，始终有效
+        /// - 方案名为空 → 用户尚未输入，允许通过
+        /// - 两者均非空 → 检查方案名是否在当前机种的方案列表中
         /// </summary>
         private void ValidateCurrentSchemeName()
         {
-            // 机种为空 → 无需验证
+            // 规则1：机种为空 → 无需验证
             if (string.IsNullOrWhiteSpace(ModelName))
             {
                 IsSchemeNameInvalid = false;
                 return;
             }
 
-            // 方案名为空 → 用户尚未输入，允许
+            // 规则2：方案名为空 → 用户尚未输入，允许通过
             if (string.IsNullOrWhiteSpace(SchemeName))
             {
                 IsSchemeNameInvalid = false;
                 return;
             }
 
-            // 检查方案名是否在当前机种的方案列表中
-            var isValid = PlanNameOptions.Any(
-                p => string.Equals(p, SchemeName, StringComparison.OrdinalIgnoreCase));
+            // 规则3：检查方案名是否存在于当前机种的方案列表中（忽略大小写）
+            bool isValid = PlanNameOptions.Any(
+                planName => string.Equals(planName, SchemeName, StringComparison.OrdinalIgnoreCase));
 
+            // 更新UI绑定属性（驱动ComboBox红色边框 + ToolTip）
             IsSchemeNameInvalid = !isValid;
 
+            // 无效时输出日志：系统日志 + 界面日志（双通道，方便排查和提示操作员）
             if (!isValid)
             {
+                string warningMessage = $"⚠️ 方案无效: 机种=[{ModelName}]，方案=[{SchemeName}]，该方案不属于当前机种，请重新选择方案";
+                AddLog(warningMessage);
                 _logger.LogWarning("方案名无效: 机种={ModelName}, 方案名={SchemeName}", ModelName, SchemeName);
             }
         }
