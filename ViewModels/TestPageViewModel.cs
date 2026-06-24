@@ -9,6 +9,7 @@
 //   - 统一订阅 DeviceConnectionManager 的状态事件
 //   - 方案名称改为可编辑ComboBox，与机种联动过滤
 //   - 移除默认方案加载逻辑
+//   - 修复方案选择后检测项目列表不联动加载的问题
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -112,7 +113,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 当前方案名称（绑定ComboBox.Text，支持手动输入）
-        /// 变更时自动尝试匹配下拉列表项
+        /// 变更时自动尝试匹配下拉列表项，匹配成功则加载检测项目
         /// </summary>
         [ObservableProperty]
         private string _schemeName = string.Empty;
@@ -142,9 +143,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 方案名称变更时触发（MVVM CommunityToolkit 自动生成）
-        /// 用户手动输入时自动尝试匹配下拉列表项
-        /// 匹配成功 → 自动选中该项，清除无效标记
-        /// 匹配失败 → 取消选中，交由 ValidateCurrentSchemeName 判断是否无效
+        /// 用户手动输入或下拉选择时：
+        /// 1. 尝试匹配下拉列表项
+        /// 2. 匹配成功 → 自动选中 + 清除无效标记 + 加载方案检测项目到DataGrid
+        /// 3. 匹配失败 → 取消选中 + 等待外部验证
+        /// 4. 清空 → 清空检测项目列表
         /// </summary>
         partial void OnSchemeNameChanged(string value)
         {
@@ -152,10 +155,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 SelectedPlanName = null;
                 IsSchemeNameInvalid = false;
+                // 方案名为空 → 清空检测项目列表
+                TestItems.Clear();
+                _logger.LogDebug("方案名已清空，检测项目列表已清空");
                 return;
             }
 
-            // 尝试在方案下拉列表中精确匹配用户输入
+            // 尝试在方案下拉列表中精确匹配用户输入（忽略大小写）
             var matched = PlanNameOptions.FirstOrDefault(
                 p => string.Equals(p, value, StringComparison.OrdinalIgnoreCase));
 
@@ -164,12 +170,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 // 匹配成功 → 自动选中列表项，清除无效标记
                 SelectedPlanName = matched;
                 IsSchemeNameInvalid = false;
+
+                // ⭐ 方案匹配成功 → 加载该方案的检测项目列表到DataGrid
+                _ = LoadPlanItemsAsync();
+                _logger.LogDebug("方案名匹配成功: {SchemeName}，正在加载检测项目", matched);
             }
             else
             {
-                // 匹配失败 → 取消选中（保持手动输入文本）
+                // 匹配失败 → 取消选中（保持手动输入文本在ComboBox中）
                 SelectedPlanName = null;
-                // 无效标记由外部调用 ValidateCurrentSchemeName 统一判断
+                // 无效标记由外部 ValidateCurrentSchemeName 统一判断
+                _logger.LogDebug("方案名未匹配到列表项: {SchemeName}", value);
             }
         }
 
@@ -376,6 +387,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 机种名称
         /// 变更时联动刷新方案下拉列表 + 验证当前方案名有效性
+        /// 若方案名变为无效，清空检测项目列表
         /// </summary>
         [ObservableProperty]
         private string _modelName = string.Empty;
@@ -383,6 +395,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 机种名称变更时触发（MVVM CommunityToolkit 自动生成）
         /// 联动刷新方案下拉列表 + 验证当前方案名有效性
+        /// 若方案名变为无效，清空检测项目列表
         /// </summary>
         partial void OnModelNameChanged(string value)
         {
@@ -391,6 +404,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             // 机种变更后验证当前方案名是否有效
             ValidateCurrentSchemeName();
+
+            // ⭐ 如果方案名变为无效，清空检测项目列表
+            if (IsSchemeNameInvalid)
+            {
+                TestItems.Clear();
+                _logger.LogDebug("机种变更导致方案名无效，检测项目列表已清空");
+            }
         }
 
         [ObservableProperty]
@@ -663,6 +683,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+        /// <summary>
+        /// 扫码枪条码解析回调
+        /// 自动填充机种名称和序列号，触发方案联动
+        /// </summary>
         private void OnScannerBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -673,11 +697,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // ⭐ 填充机种名称（OnModelNameChanged会自动触发方案联动+验证）
+                // ⭐ 填充机种名称（OnModelNameChanged会自动触发方案下拉刷新+验证）
                 ModelName = e.ModelName;
                 SerialNumber = e.SerialPart ?? string.Empty;
 
-                // ⭐ 扫码后验证方案名有效性
+                // ⭐ 扫码后验证方案名有效性（OnModelNameChanged已调用Validate，此处冗余但安全）
                 ValidateCurrentSchemeName();
 
                 AddLog($"📷 扫描到条码: 机种={e.ModelName}, 序列号={e.SerialPart}");
@@ -731,6 +755,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region INavigationAware
 
+        /// <summary>
+        /// 页面导航进入时触发
+        /// 初始化方案下拉列表、验证方案有效性、加载检测项目
+        /// </summary>
         public async Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.LogInformation("进入运行界面");
@@ -861,7 +889,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 自动连接硬件
 
-        // ⭐ 新增：同步设备状态方法
+        /// <summary>
+        /// 同步设备连接状态（从DeviceConnectionManager读取当前状态）
+        /// </summary>
         private void SyncDeviceStates()
         {
             IsPlcConnected = _deviceManager.IsPlcConnected;
