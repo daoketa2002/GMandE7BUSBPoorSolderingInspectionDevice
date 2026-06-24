@@ -5,6 +5,7 @@
     1. 移除"开始测试"按钮（改为PLC信号触发）
     2. 输入控件绑定 IsEnabled/IsReadOnly（由UiState控制）
     3. 右上角状态显示区绑定物检传感器状态
+    4. 方案名称从只读TextBox改为可编辑ComboBox（与机种联动）
   ============================================================
 -->
 <UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.TestPageView"
@@ -156,34 +157,34 @@
                                    Foreground="#495057"
                                    VerticalAlignment="Center"/>
                         <ComboBox IsEditable="True"
-                                Text="{Binding SchemeName, UpdateSourceTrigger=PropertyChanged}"
-                                ItemsSource="{Binding PlanNameOptions}"
-                                SelectedItem="{Binding SelectedPlanName}"
-                                FontSize="14"
-                                FontWeight="Bold"
-                                Height="32"
-                                VerticalContentAlignment="Center"
-                                x:Name="SchemeNameComboBox">
-                                            <!--
+                                  Text="{Binding SchemeName, UpdateSourceTrigger=PropertyChanged}"
+                                  ItemsSource="{Binding PlanNameOptions}"
+                                  SelectedItem="{Binding SelectedPlanName}"
+                                  FontSize="14"
+                                  FontWeight="Bold"
+                                  Height="32"
+                                  VerticalContentAlignment="Center"
+                                  x:Name="SchemeNameComboBox">
+                            <!--
                                 样式说明：
                                 - 正常状态：灰色边框 #CED4DA，无ToolTip
                                 - 无效状态：红色边框 #E74C3C，加粗，ToolTip提示用户重新选择
                                 由 ViewModel.IsSchemeNameInvalid 属性驱动
-                                         -->
-                                <ComboBox.Style>
-                                    <Style TargetType="ComboBox">
-                                        <Setter Property="BorderBrush" Value="#CED4DA"/>
-                                        <Setter Property="BorderThickness" Value="1"/>
-                                        <Setter Property="ToolTip" Value=""/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsSchemeNameInvalid}" Value="True">
-                                                <Setter Property="BorderBrush" Value="#E74C3C"/>
-                                                <Setter Property="BorderThickness" Value="2"/>
-                                                <Setter Property="ToolTip" Value="当前方案无效，请重新选择"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ComboBox.Style>
+                            -->
+                            <ComboBox.Style>
+                                <Style TargetType="ComboBox">
+                                    <Setter Property="BorderBrush" Value="#CED4DA"/>
+                                    <Setter Property="BorderThickness" Value="1"/>
+                                    <Setter Property="ToolTip" Value=""/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSchemeNameInvalid}" Value="True">
+                                            <Setter Property="BorderBrush" Value="#E74C3C"/>
+                                            <Setter Property="BorderThickness" Value="2"/>
+                                            <Setter Property="ToolTip" Value="当前方案无效，请重新选择"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ComboBox.Style>
                         </ComboBox>
                     </DockPanel>
 

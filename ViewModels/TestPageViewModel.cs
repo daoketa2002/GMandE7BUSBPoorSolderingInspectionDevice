@@ -1,12 +1,14 @@
 ﻿// ============================================================
 // 文件: ViewModels/TestPageViewModel.cs
-// 描述: 运行界面 ViewModel（修改部分）
+// 描述: 运行界面 ViewModel
 // 改动说明:
 //   - 移除 ScannerIntegrationHelper 字段
 //   - 注入 IDeviceConnectionManager 替代手动连接硬件
 //   - 移除 AutoConnectHardwareAsync() 方法
 //   - 移除手动 ReconnectPlc/Scanner/Dmm 中的连接逻辑
 //   - 统一订阅 DeviceConnectionManager 的状态事件
+//   - 方案名称改为可编辑ComboBox，与机种联动过滤
+//   - 移除默认方案加载逻辑
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -57,7 +59,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         // 硬件服务
         private readonly ITcpClientPLCMotionService _plcService;
         private readonly GwInstekGDM9060Driver _dmmDriver;
-        // private readonly IScannerBarcodeService? _scannerService;
         private readonly IDeviceConnectionManager _deviceManager;
         private readonly InspectionEngine? _inspectionEngine;
 
@@ -95,7 +96,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
-            //_scannerService = scannerBarcodeService;
             _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
             _inspectionEngine = inspectionEngine;
 
@@ -110,6 +110,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 顶部左侧 - 生产统计面板
 
+        /// <summary>
+        /// 当前方案名称（绑定ComboBox.Text，支持手动输入）
+        /// 变更时自动尝试匹配下拉列表项
+        /// </summary>
         [ObservableProperty]
         private string _schemeName = string.Empty;
 
@@ -131,7 +135,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 方案名称是否无效
         /// 当机种非空、方案名非空、但方案名不属于当前机种时为True
-        /// 驱动 ComboBox 红色边框 + ToolTip 提示
+        /// 驱动 ComboBox 红色边框 + ToolTip 提示"当前方案无效，请重新选择"
         /// </summary>
         [ObservableProperty]
         private bool _isSchemeNameInvalid;
@@ -249,7 +253,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             PlcStatusText = "连接中...";
             await _deviceManager.ReconnectDeviceAsync("PLC");
-            // 状态由事件回调自动更新，无需手动设置
         }
 
         /// <summary>
@@ -268,7 +271,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 await _deviceManager.ReconnectDeviceAsync("Scanner");
 
-                // 状态由事件回调自动更新，但增加日志确保用户看到结果
                 if (IsScannerConnected)
                 {
                     AddLog($"✅ 扫描仪重连成功");
@@ -297,7 +299,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             DmmStatusText = "连接中...";
             await _deviceManager.ReconnectDeviceAsync("DMM");
-            // 状态由事件回调自动更新
         }
 
         #endregion
@@ -330,14 +331,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _sensorSimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             _sensorSimTimer.Tick += (s, e) =>
             {
-                // TODO: 替换为真实PLC读取代码
-                // var coilState = await _plcService.ExecuteReadOperationAsync(0x01, 1, 0, 1, 1000);
-                // IsSensorReady = coilState?.Data?[0] == 1;
-
-                // 模拟：首次进入页面3秒后传感器检测到基板
                 IsSensorReady = true;
                 UpdateUIState();
-                _sensorSimTimer?.Stop(); // 模拟只需一次
+                _sensorSimTimer?.Stop();
             };
             _sensorSimTimer.Start();
         }
@@ -349,7 +345,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// </summary>
         private void UpdateUIState()
         {
-            // 测试中或待保存态不允许状态回退
             if (UiState == TestUIState.Testing || UiState == TestUIState.PendingSave)
                 return;
 
@@ -363,7 +358,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 检查所有设备是否就绪，返回未就绪设备列表
-        /// 用于按下启动按钮时的前置检查
         /// </summary>
         private List<string> GetNotReadyDevices()
         {
@@ -379,6 +373,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 中部 - 信息录入区
 
+        /// <summary>
+        /// 机种名称
+        /// 变更时联动刷新方案下拉列表 + 验证当前方案名有效性
+        /// </summary>
         [ObservableProperty]
         private string _modelName = string.Empty;
 
@@ -412,24 +410,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public ObservableCollection<TestItemModel> TestItems { get; } = new();
 
         /// <summary>
-        /// 从方案文件中加载默认检测项目
+        /// 从方案文件中加载检测项目
+        /// 根据当前机种名称和方案名称精确匹配方案，无匹配时清空检测列表
         /// </summary>
         private async Task LoadPlanItemsAsync()
         {
             TestItems.Clear();
 
-            var allPlans = await _planStorageService.LoadAllPlansAsync();
-            var currentPlan = allPlans.FirstOrDefault();
-
-            if (currentPlan == null || currentPlan.Items.Count == 0)
+            // 机种名称或方案名称为空 → 清空检测列表
+            if (string.IsNullOrWhiteSpace(ModelName) || string.IsNullOrWhiteSpace(SchemeName))
             {
-                SchemeName = "无方案 - 使用默认项目";
-                AddLog("⚠️ 未找到任何方案，使用默认检测项目");
-                LoadDefaultTestItems();
+                AddLog("⚠️ 未指定机种或方案，检测列表为空");
                 return;
             }
 
-            SchemeName = currentPlan.PlanName;
+            var allPlans = await _planStorageService.LoadAllPlansAsync();
+
+            // 精确匹配机种和方案名
+            var currentPlan = allPlans.FirstOrDefault(p =>
+                string.Equals(p.MachineType, ModelName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(p.PlanName, SchemeName, StringComparison.OrdinalIgnoreCase));
+
+            if (currentPlan == null)
+            {
+                AddLog($"⚠️ 未找到匹配方案: 机种={ModelName}, 方案={SchemeName}，检测列表为空");
+                return;
+            }
+
+            if (currentPlan.Items.Count == 0)
+            {
+                AddLog($"⚠️ 方案 [{currentPlan.PlanName}] 无检测项目，检测列表为空");
+                return;
+            }
+
             AddLog($"📋 已加载方案: {currentPlan.MachineType} - {currentPlan.PlanName}");
 
             foreach (var item in currentPlan.Items.OrderBy(i => i.Index))
@@ -439,34 +452,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     Index = item.Index,
                     ItemName = item.ItemName,
                     CheckCondition = item.CheckCondition,
-                    CheckResult = string.Empty,
-                    Judgment = string.Empty
-                });
-            }
-        }
-
-        /// <summary>
-        /// 加载默认检测项目（无方案时的回退）
-        /// </summary>
-        private void LoadDefaultTestItems()
-        {
-            var items = new[]
-            {
-                new { Name = "A1-A2", Condition = "OPEN" },
-                new { Name = "A2-A3", Condition = "SHORT" },
-                new { Name = "A3-A4", Condition = "OPEN" },
-                new { Name = "A4-A5", Condition = "SHORT" },
-                new { Name = "B1-B2", Condition = "OPEN" },
-                new { Name = "B2-B3", Condition = "SHORT" },
-            };
-
-            for (int i = 0; i < items.Length; i++)
-            {
-                TestItems.Add(new TestItemModel
-                {
-                    Index = i + 1,
-                    ItemName = items[i].Name,
-                    CheckCondition = items[i].Condition,
                     CheckResult = string.Empty,
                     Judgment = string.Empty
                 });
@@ -488,27 +473,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             UiState = TestUIState.PendingSave;
 
-            // 计算综合判定
             var finalResult = TestItems.All(i => i.Judgment == "OK") ? "OK" : "NG";
 
-            // 更新顶部统计数据（累计，不清零）
             TotalCount++;
             if (finalResult == "OK") PassCount++;
             else FailCount++;
 
-            // 获取当前方案信息
             var allPlans = await _planStorageService.LoadAllPlansAsync();
             var currentPlan = allPlans.FirstOrDefault();
-            var machineType = currentPlan?.MachineType ?? "Unknown";    // 该部分要修改，因方案model已经修改
+            var machineType = currentPlan?.MachineType ?? "Unknown";
             var planName = currentPlan?.PlanName ?? "Unknown";
 
-            // 构建NG项目明细（供弹窗展示）
             var ngItems = TestItems.Where(i => i.Judgment == "NG").ToList();
             var ngDetail = ngItems.Any()
                 ? string.Join("\n", ngItems.Select(i => $"  • {i.ItemName}: {i.CheckResult} → NG"))
                 : "无";
 
-            // 弹窗确认
             var confirmed = await _notificationService.ConfirmAsync(
                 $"当前方案 [{planName}] 所有项目已检测完毕\n\n" +
                 $"综合判定: [{finalResult}]\n\n" +
@@ -518,15 +498,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             if (confirmed)
             {
-                // 事务保存到SQLite
-                await SaveLogToDatabaseAsync(machineType, finalResult);             // 该代码要修改，因方案model已经修改
+                await SaveLogToDatabaseAsync(machineType, finalResult);
                 await _notificationService.ShowInfoAsync("检测记录已保存！", "保存成功");
                 ResetToReadyState();
             }
             else
             {
-                // 取消：清空检测结果，保留Pin列表结构
-                // 统计数据不清零（需求文档明确要求）
                 foreach (var item in TestItems)
                 {
                     item.CheckResult = string.Empty;
@@ -562,7 +539,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     }).ToList()
                 };
 
-                //await _logDatabaseService.SaveLogRecordAsync(record);
                 await _testRecordStorage.SaveRecordAsync(record);
                 AddLog($"💾 检测记录已保存 - SN:{SerialNumber}, 结果:{finalResult}");
             }
@@ -581,7 +557,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private void ResetToReadyState()
         {
             SerialNumber = string.Empty;
-            // 保留 ModelName 和 OperatorName（通常不变）
             foreach (var item in TestItems)
             {
                 item.CheckResult = string.Empty;
@@ -597,9 +572,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 终了按钮命令 —— 支持测试中终止
-        /// 准备态/可启用态：直接返回主菜单
-        /// 测试态：弹窗确认后终止测试并返回
-        /// 待保存态：弹窗确认后丢弃数据并返回
         /// </summary>
         [RelayCommand]
         private async Task FinishAndReturnAsync()
@@ -614,17 +586,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             var confirmed = await _notificationService.ConfirmAsync(confirmMsg, "确认返回");
             if (!confirmed) return;
 
-            // 如果在测试中，发送PLC停止信号并中止检测引擎
             if (UiState == TestUIState.Testing)
             {
                 _inspectionEngine?.Stop();
                 AddLog("⚠️ 操作员终止了当前测试");
             }
 
-            // 清理传感器模拟定时器
             _sensorSimTimer?.Stop();
-
-            // 回到准备态
             ResetToReadyState();
 
             await _navigationService.NavigateToAsync<MainMenuView>();
@@ -643,7 +611,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var timestamp = DateTime.Now.ToString("HH:mm:ss");
                 LogMessages.Add($"[{timestamp}] {message}");
 
-                // 限制日志条数防止内存溢出
                 while (LogMessages.Count > 500)
                     LogMessages.RemoveAt(0);
             });
@@ -655,9 +622,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         private void SubscribeToHardwareEvents()
         {
-            // ❌ 删除原有的 PLC/DMM/Scanner 事件订阅代码
-
-            // ⭐ 订阅全局设备连接管理器的状态变更事件
             _deviceManager.PlcConnectionStateChanged += (s, e) =>
             {
                 Application.Current.Dispatcher.Invoke(() =>
@@ -688,10 +652,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 });
             };
 
-            // ⭐ 订阅扫码事件（由 DeviceConnectionManager 统一转发）
             _deviceManager.BarcodeScanned += OnScannerBarcodeParsed;
 
-            // InspectionEngine 事件保持不变
             if (_inspectionEngine != null)
             {
                 _inspectionEngine.StateChanged += OnInspectionStateChanged;
@@ -705,21 +667,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
-                // 测试态禁止扫码
                 if (UiState == TestUIState.Testing || UiState == TestUIState.PendingSave)
                 {
                     AddLog("⚠️ 测试中禁止扫码，条码已忽略");
                     return;
                 }
-                // ⭐ 填充机种名称和序列号
-                ModelName = e.ModelName;
 
-                // ⭐ 扫码填充机种名称后，自动刷新方案下拉列表
-                // 注意：OnModelNameChanged 已在属性setter中自动触发 RefreshPlanNameOptionsAsync
-                // 此处额外调用验证，确保扫码后方案名有效性判断正确
+                // ⭐ 填充机种名称（OnModelNameChanged会自动触发方案联动+验证）
+                ModelName = e.ModelName;
+                SerialNumber = e.SerialPart ?? string.Empty;
+
+                // ⭐ 扫码后验证方案名有效性
                 ValidateCurrentSchemeName();
 
-                SerialNumber = e.SerialPart ?? string.Empty;
                 AddLog($"📷 扫描到条码: 机种={e.ModelName}, 序列号={e.SerialPart}");
             });
         }
@@ -763,7 +723,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     : $"❌ 检测完成: 不良 (耗时{e.Result.Duration.TotalSeconds:F1}s)";
                 AddLog(msg);
 
-                // 进入待保存态逻辑
                 await OnAllPinsTestedAsync();
             });
         }
@@ -788,17 +747,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             await RefreshPlanNameOptionsAsync(ModelName);
             // ⭐ 步骤2：验证当前方案名有效性
             ValidateCurrentSchemeName();
-            // ⭐ 步骤3：再加载方案项目到检测列表
+            // ⭐ 步骤3：加载方案项目到检测列表（无匹配时列表为空）
             await LoadPlanItemsAsync();
 
             // ⭐ 重新订阅扫码事件（确保不重复订阅）
             _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
             _deviceManager.BarcodeScanned += OnScannerBarcodeParsed;
 
-            // ⭐ 同步设备连接状态（不再手动连接）
+            // ⭐ 同步设备连接状态
             SyncDeviceStates();
 
-            // 启动传感器模拟（TODO: 替换为真实PLC轮询）
+            // 启动传感器模拟
             StartSensorSimulation();
         }
 
@@ -807,7 +766,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _logger.LogInformation("离开运行界面");
             _sensorSimTimer?.Stop();
 
-            // ⭐ 取消订阅扫码事件
             if (_deviceManager != null)
             {
                 _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
@@ -818,7 +776,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         public Task<bool> CanNavigateFromAsync()
         {
-            // 测试中不允许直接返回（必须通过终了按钮）
             if (UiState == TestUIState.Testing)
                 return Task.FromResult(false);
             return Task.FromResult(true);
@@ -826,7 +783,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #endregion
 
-        #region 方案名称联动逻辑（机种 ↔ 方案）
+        // ═══════════════════════════════════════════════════════════════
+        // 方案名称联动逻辑（机种 ↔ 方案）
+        // ═══════════════════════════════════════════════════════════════
+
         /// <summary>
         /// 根据机种名称异步刷新方案下拉选项列表
         /// 参考 PlanSettingViewModel.RefreshPlanNameOptionsAsync 实现
@@ -899,8 +859,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
-        #endregion
-
         #region 自动连接硬件
 
         // ⭐ 新增：同步设备状态方法
@@ -926,12 +884,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _sensorSimTimer?.Stop();
             _sensorSimTimer = null;
 
-            // ⭐ 取消订阅全局设备管理器事件
             if (_deviceManager != null)
             {
                 _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
-                // 注意：连接状态事件不需要取消订阅，因为 DeviceConnectionManager 是全局单例
-                // 但扫码事件需要取消，避免在页面销毁后仍然触发
             }
 
             if (_inspectionEngine != null)
