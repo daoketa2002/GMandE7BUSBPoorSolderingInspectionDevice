@@ -482,6 +482,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 刷新全部数据
             await RefreshAllDataAsync();
 
+            // ⭐ 重新订阅扫码事件（确保不重复订阅）
+            _deviceManager.BarcodeScanned -= OnScannerBarcodeScanned;
+            _deviceManager.BarcodeScanned += OnScannerBarcodeScanned;
+
             // ⭐ 同步扫描枪连接状态（不再手动连接）
             IsScannerConnected = _deviceManager.IsScannerConnected;
             ScannerStatusText = _deviceManager.ScannerStatusText;

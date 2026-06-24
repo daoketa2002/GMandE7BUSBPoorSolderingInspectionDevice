@@ -198,20 +198,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 扫描仪重连命令
+        /// ⭐ 增强用户反馈和日志
         /// </summary>
         [RelayCommand]
         private async Task ReconnectScannerAsync()
         {
             ScannerStatusText = "连接中...";
+            IsScannerConnected = false;
+
+            AddLog($"🔄 正在尝试重新连接扫描仪...");
+
             try
             {
                 await _deviceManager.ReconnectDeviceAsync("Scanner");
+
+                // 状态由事件回调自动更新，但增加日志确保用户看到结果
+                if (IsScannerConnected)
+                {
+                    AddLog($"✅ 扫描仪重连成功");
+                }
+                else
+                {
+                    AddLog($"❌ 扫描仪重连失败 - 请检查：1.USB线是否插好 2.端口配置是否正确 3.设备管理器中COM口是否存在");
+                    await _notificationService.ShowWarningAsync(
+                        "扫描仪连接失败！\n\n请检查：\n1. USB线是否插好\n2. 设备管理器中COM口是否存在\n3. 系统设定中端口配置是否正确",
+                        "连接失败");
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "扫描仪重连失败");
+                _logger.LogError(ex, "扫描仪重连异常");
+                AddLog($"❌ 扫描仪重连异常: {ex.Message}");
+                await _notificationService.ShowErrorAsync($"扫描仪重连失败：{ex.Message}", "错误");
             }
-            // 状态由事件回调自动更新
         }
 
         /// <summary>
@@ -623,8 +642,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     AddLog("⚠️ 测试中禁止扫码，条码已忽略");
                     return;
                 }
-                SerialNumber = e.SerialPart ?? e.RawBarcode;
-                AddLog($"📷 扫描到条码: {e.RawBarcode}");
+                // ⭐ 填充机种名称和序列号
+                ModelName = e.ModelName;
+                SerialNumber = e.SerialPart ?? string.Empty;
+                AddLog($"📷 扫描到条码: 机种={e.ModelName}, 序列号={e.SerialPart}");
             });
         }
 
@@ -689,6 +710,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             AddLog($"当前作业员: {operatorName}");
 
             await LoadPlanItemsAsync();
+
+            // ⭐ 重新订阅扫码事件（确保不重复订阅）
+            _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
+            _deviceManager.BarcodeScanned += OnScannerBarcodeParsed;
 
             // ⭐ 同步设备连接状态（不再手动连接）
             SyncDeviceStates();

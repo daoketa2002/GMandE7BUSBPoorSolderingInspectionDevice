@@ -34,15 +34,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         string PortName { get; }
 
         /// <summary>
-        /// 连接扫描枪
+        /// 连接扫描枪（保留兼容，实际连接由 DeviceConnectionManager 管理）
         /// </summary>
         bool Connect(string portName);
 
         /// <summary>
-        /// 断开扫描枪
+        /// 断开扫描枪（同步版本，兼容旧代码）
         /// </summary>
-        void Disconnect();                   // 保留同步版本（兼容）
-        Task DisconnectAsync();                 // ⭐ 新增异步版本
+        void Disconnect();
+
+        /// <summary>
+        /// 断开扫描枪（异步版本）
+        /// </summary>
+        Task DisconnectAsync();
+
+        /// <summary>
+        /// ⭐ 异步初始化服务
+        /// 在 DeviceConnectionManager 完成硬件连接后调用
+        /// 同步硬件连接状态并激活条码解析功能
+        /// </summary>
+        Task InitializeAsync();
     }
 
     /// <summary>

@@ -52,6 +52,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                 }
 
                 var mainWindow = host.Services.GetRequiredService<MainWindow>();
+
+                // ⭐ 启动设备连接管理器（后台自动连接PLC、万用表、扫描枪）
+                var deviceManager = host.Services.GetRequiredService<IDeviceConnectionManager>();
+
+                Log.Information("========== 系统启动，开始初始化设备连接 ==========");
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await deviceManager.StartAllAsync();
+                        Log.Information("✅ 设备连接管理器启动完成");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "❌ 设备连接管理器启动失败: {Message}", ex.Message);
+                    }
+                });
+
                 app.Run(mainWindow);
             }
             catch (Exception ex)
@@ -220,11 +239,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // 4. 检测流程引擎
             services.AddSingleton<InspectionEngine>();
 
-            // 5. 设备连接管理器（依赖三个不同接口，DI自动区分）
-            services.AddSingleton<IDeviceConnectionManager, DeviceConnectionManager>();
-
-            // ⭐ 扫描枪条码服务（保留，因为 DeviceConnectionManager 依赖它转发扫码事件）
+            // 5. 扫描枪条码服务（保留，因为 DeviceConnectionManager 依赖它转发扫码事件）
             services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>();
+
+            // 6. 设备连接管理器（依赖三个不同接口，DI自动区分）
+            services.AddSingleton<IDeviceConnectionManager, DeviceConnectionManager>();
 
             // ⭐⭐⭐ ====== 硬件驱动服务注册结束 ====== ⭐⭐⭐
 

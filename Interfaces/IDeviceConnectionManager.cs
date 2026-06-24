@@ -61,10 +61,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         Task StopAllAsync();
 
         /// <summary>
-        /// 手动重连指定设备
+        /// 手动重连指定设备（先断开再连接）
         /// </summary>
         /// <param name="deviceType">设备类型："PLC" / "DMM" / "Scanner"</param>
         Task ReconnectDeviceAsync(string deviceType);
+
+        /// <summary>
+        /// 连接指定设备（仅连接，不先断开）
+        /// 与 ReconnectDeviceAsync 的区别：如果已连接则直接返回成功，不会先断开
+        /// </summary>
+        /// <param name="deviceType">设备类型："PLC" / "DMM" / "Scanner"</param>
+        Task ConnectDeviceAsync(string deviceType);
+
+        /// <summary>
+        /// 断开指定设备
+        /// </summary>
+        /// <param name="deviceType">设备类型："PLC" / "DMM" / "Scanner"</param>
+        Task DisconnectDeviceAsync(string deviceType);
 
         #endregion
 

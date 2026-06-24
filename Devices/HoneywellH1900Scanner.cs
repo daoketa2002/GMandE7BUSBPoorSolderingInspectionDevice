@@ -2,7 +2,9 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
+using System.IO;
 using System.IO.Ports;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,6 +21,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
     /// 兼容性说明：
     /// - 不依赖条码结束符（\r\n），兼容扫描枪有/无结束符两种模式
     /// - 采用100ms数据停顿超时判定条码完整，响应速度无感知
+    /// 
+    /// 热插拔说明（⭐2026-06重构）：
+    /// - 连接后5秒宽限期内不检测，避免端口稳定前的瞬态异常导致误判
+    /// - 连续2次检测到断开才触发断开，避免单次异常误判
+    /// - 检测到端口重新出现后自动重连，无需手动操作
     /// </summary>
     public class HoneywellH1900Scanner : IScannerDevice, IDisposable
     {
@@ -37,6 +44,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// H1900扫描枪连续发送字符间隔通常 < 10ms，100ms足够覆盖且无感知延迟
         /// </summary>
         private const int BARCODE_COMPLETE_TIMEOUT_MS = 100;
+
+        #endregion
+
+        #region 热插拔检测常量（⭐新增）
+
+        /// <summary>
+        /// 热插拔检测间隔（毫秒）
+        /// PortWatchdog 每3秒检查一次COM口状态
+        /// </summary>
+        private const int PORT_WATCHDOG_INTERVAL_MS = 3000;
+
+        /// <summary>
+        /// 宽限期（毫秒）
+        /// 连接成功后此时间内跳过 PortWatchdog 检测
+        /// 防止端口刚打开时 Windows 串口枚举缓存延迟导致误判断开
+        /// </summary>
+        private const int GRACE_PERIOD_MS = 5000;
+
+        /// <summary>
+        /// 防抖确认次数
+        /// 连续检测到断开达到此次数才真正触发断开逻辑
+        /// 单次异常（如瞬时 IO 抖动）不会误触发
+        /// </summary>
+        private const int DISCONNECT_CONFIRM_COUNT = 2;
 
         #endregion
 
@@ -61,6 +92,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
         private volatile bool _isMonitoring;
+
+        // ⭐ 热插拔检测：定时检查COM口是否存在
+        private System.Timers.Timer? _portWatchdogTimer;
+
+        // ⭐ 连接成功的时间戳，用于宽限期判断
+        private DateTime _connectionStableTime = DateTime.MinValue;
+
+        // ⭐ 防抖计数器：记录连续检测到断开的次数
+        private int _disconnectDetectedCount = 0;
 
         #endregion
 
@@ -88,7 +128,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         #endregion
 
-        #region 属性（⭐新增：供 DeviceConnectionManager 注入配置）
+        #region 属性
 
         /// <summary>
         /// 串口号（如 COM9）
@@ -134,7 +174,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         #endregion
 
-        #region 连接管理（⭐接口实现 + 内部保留原有逻辑）
+        #region 连接管理
 
         /// <summary>
         /// 异步连接设备（IScannerDevice 接口实现）
@@ -143,12 +183,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public async Task<bool> ConnectAsync(CancellationToken ct = default)
         {
-            // 串口连接本身是同步的，包装为 Task.Run 满足异步接口
             return await Task.Run(() => ConnectInternal(_portName, _baudRate), ct).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// 内部连接实现（保留原有逻辑，参数化）
+        /// 内部连接实现
+        /// ⭐ 修复：不再信任缓存的 _isConnected，改为检查实际串口状态
         /// </summary>
         private bool ConnectInternal(string portName, int baudRate)
         {
@@ -157,17 +197,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
             lock (_lockObject)
             {
-                if (_isConnected)
+                // ⭐ 修复：检查实际串口状态，不信任缓存的 _isConnected
+                if (_serialPort != null && _serialPort.IsOpen)
                 {
-                    _logger.LogWarning("扫描枪已连接");
+                    _logger.LogInformation("扫描枪串口已打开（{PortName}），跳过重复连接", _serialPort.PortName);
+                    _isConnected = true;
                     return true;
+                }
+
+                // ⭐ 如果 _isConnected 为 true 但串口实际已关闭，重置状态
+                if (_isConnected && (_serialPort == null || !_serialPort.IsOpen))
+                {
+                    _logger.LogWarning("⚠️ 检测到状态不一致：_isConnected=true 但串口未打开，强制重置状态");
+                    _isConnected = false;
+                    CloseSerialPort();
                 }
 
                 _portName = portName;
 
                 try
                 {
-                    _logger.LogInformation("正在打开扫描枪串口 {PortName}...", portName);
+                    // ⭐ 检查端口是否存在于系统中
+                    var availablePorts = SerialPort.GetPortNames();
+                    if (!availablePorts.Any(p => p.Equals(portName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.LogError("❌ 端口 {PortName} 不存在于系统中！可用端口: {AvailablePorts}",
+                            portName, string.Join(", ", availablePorts));
+                        Notify(NotificationType.Error, $"端口 {portName} 不存在！请检查设备连接和端口配置");
+                        return false;
+                    }
+
+                    _logger.LogInformation("正在打开扫描枪串口 {PortName} @ {BaudRate}bps...", portName, baudRate);
 
                     _serialPort = new SerialPort(portName, baudRate, PARITY, DATA_BITS, STOP_BITS)
                     {
@@ -185,23 +245,45 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                     _serialPort.Open();
                     _isConnected = true;
 
-                    _logger.LogInformation("扫描枪串口 {PortName} 已打开", portName);
+                    // 记录连接成功时间，用于 PortWatchdog 宽限期判断
+                    _connectionStableTime = DateTime.Now;
+
+                    // 重置防抖计数器
+                    _disconnectDetectedCount = 0;
+
+                    _logger.LogInformation("✅ 扫描枪串口 {PortName} 已成功打开 @ {BaudRate}bps", portName, baudRate);
                     ConnectionStateChanged?.Invoke(this, true);
-                    Notify(NotificationType.Success, $"扫描枪已连接: {portName}");
+                    Notify(NotificationType.Success, $"扫描枪已连接: {portName} @ {baudRate}bps");
 
                     StartMonitoring();
 
                     return true;
                 }
-                catch (Exception ex)
+                catch (UnauthorizedAccessException ex)
                 {
-                    _logger.LogError(ex, "打开扫描枪串口失败: {PortName}", portName);
-                    Notify(NotificationType.Error, $"扫描枪连接失败: {ex.Message}");
-
+                    _logger.LogError(ex, "❌ 端口 {PortName} 被其他程序占用", portName);
+                    Notify(NotificationType.Error, $"端口 {portName} 被占用！请关闭其他串口工具");
                     _serialPort?.Dispose();
                     _serialPort = null;
                     _isConnected = false;
-
+                    return false;
+                }
+                catch (IOException ex)
+                {
+                    _logger.LogError(ex, "❌ 端口 {PortName} IO异常: {Message}", portName, ex.Message);
+                    Notify(NotificationType.Error, $"端口 {portName} 通信异常: {ex.Message}");
+                    _serialPort?.Dispose();
+                    _serialPort = null;
+                    _isConnected = false;
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ 打开扫描枪串口失败: {PortName}, 错误: {Message}", portName, ex.Message);
+                    Notify(NotificationType.Error, $"扫描枪连接失败: {ex.Message}");
+                    _serialPort?.Dispose();
+                    _serialPort = null;
+                    _isConnected = false;
                     return false;
                 }
             }
@@ -219,13 +301,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                     StopMonitoring();
                     CloseSerialPort();
                     _isConnected = false;
+                    _connectionStableTime = DateTime.MinValue;
+                    _disconnectDetectedCount = 0;
                     ConnectionStateChanged?.Invoke(this, false);
                     _logger.LogInformation("扫描枪已断开连接");
                 }
             }).ConfigureAwait(false);
         }
 
-        // 保留原有 Connect(portName, baudRate) 方法作为兼容重载
         /// <summary>
         /// 打开扫描枪串口并开始监听（同步版本，保留兼容）
         /// </summary>
@@ -269,6 +352,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             _isMonitoring = true;
             _readLoopCts = new CancellationTokenSource();
 
+            // ⭐ 启动串口热插拔检测
+            StartPortWatchdog();
+
             _logger.LogDebug("扫描枪数据监听已启动");
         }
 
@@ -280,12 +366,250 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             _readLoopCts?.Dispose();
             _readLoopCts = null;
 
+            // ⭐ 停止热插拔检测
+            StopPortWatchdog();
+
             // 停止并释放超时计时器
             _barcodeCompleteTimer?.Stop();
             _barcodeCompleteTimer?.Dispose();
             _barcodeCompleteTimer = null;
 
             _logger.LogDebug("扫描枪数据监听已停止");
+        }
+
+        /// <summary>
+        /// ⭐ 启动串口热插拔检测定时器
+        /// 每3秒检查COM口状态
+        /// - 宽限期内跳过检测（防止刚连接时误判）
+        /// - 断开检测：连续 DISCONNECT_CONFIRM_COUNT 次确认后才触发断开
+        /// - 恢复检测：已断开状态下检测到端口重新出现，立即自动重连
+        /// </summary>
+        private void StartPortWatchdog()
+        {
+            if (_portWatchdogTimer != null) return;
+
+            _portWatchdogTimer = new System.Timers.Timer(PORT_WATCHDOG_INTERVAL_MS)
+            {
+                AutoReset = true
+            };
+            _portWatchdogTimer.Elapsed += OnPortWatchdogTick;
+            _portWatchdogTimer.Start();
+            _logger.LogDebug("串口热插拔检测已启动，端口: {Port}, 宽限期: {GraceMs}ms",
+                _portName, GRACE_PERIOD_MS);
+        }
+
+        /// <summary>
+        /// ⭐ 停止串口热插拔检测
+        /// </summary>
+        private void StopPortWatchdog()
+        {
+            if (_portWatchdogTimer == null) return;
+
+            _portWatchdogTimer.Stop();
+            _portWatchdogTimer.Elapsed -= OnPortWatchdogTick;
+            _portWatchdogTimer.Dispose();
+            _portWatchdogTimer = null;
+            _logger.LogDebug("串口热插拔检测已停止");
+        }
+
+        /// <summary>
+        /// ⭐ 热插拔检测回调（重构版）
+        /// 
+        /// 三种检测模式：
+        /// 
+        /// 【模式1 - 宽限期保护】
+        ///   连接成功后 GRACE_PERIOD_MS 内跳过所有检测
+        ///   防止 Windows 串口枚举缓存延迟导致刚连接就被误判断开
+        /// 
+        /// 【模式2 - 断开检测（带防抖）】
+        ///   已连接状态下检测端口是否消失
+        ///   连续 DISCONNECT_CONFIRM_COUNT 次确认后才触发断开
+        ///   避免单次瞬态异常（如 IO 抖动）导致误断开
+        /// 
+        /// 【模式3 - 恢复检测】
+        ///   已断开状态下检测端口是否重新出现
+        ///   端口重新出现 → 立即自动重连（不等后台监控冷却）
+        ///   实现真正的热插拔即插即用
+        /// </summary>
+        private void OnPortWatchdogTick(object? sender, System.Timers.ElapsedEventArgs e)
+        {
+            if (_isDisposed) return;
+
+            // ═══════════════════════════════════════════════
+            // 模式1：宽限期保护
+            // ═══════════════════════════════════════════════
+            if (_isConnected && _connectionStableTime != DateTime.MinValue)
+            {
+                var elapsedSinceConnect = (DateTime.Now - _connectionStableTime).TotalMilliseconds;
+                if (elapsedSinceConnect < GRACE_PERIOD_MS)
+                {
+                    _logger.LogDebug("热插拔检测：宽限期内，跳过检测 (已连接 {Elapsed:F0}ms / {GraceMs}ms)",
+                        elapsedSinceConnect, GRACE_PERIOD_MS);
+                    return;
+                }
+            }
+
+            // ═══════════════════════════════════════════════
+            // 模式2：断开检测（带防抖确认）
+            // ═══════════════════════════════════════════════
+            if (_isConnected)
+            {
+                bool isPortGone = CheckIfPortDisconnected();
+
+                if (isPortGone)
+                {
+                    _disconnectDetectedCount++;
+                    _logger.LogWarning("热插拔检测：端口可能已断开 ({Count}/{ConfirmCount})",
+                        _disconnectDetectedCount, DISCONNECT_CONFIRM_COUNT);
+
+                    // 连续确认达到阈值才触发断开
+                    if (_disconnectDetectedCount >= DISCONNECT_CONFIRM_COUNT)
+                    {
+                        _logger.LogWarning("热插拔检测：连续 {Count} 次确认断开，触发断开逻辑",
+                            _disconnectDetectedCount);
+                        Notify(NotificationType.Warning, $"扫描枪已断开（端口 {_portName} 消失）");
+
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await DisconnectAsync().ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogDebug(ex, "热插拔断开时异常（可忽略）");
+                            }
+                        });
+                    }
+                }
+                else
+                {
+                    // 端口正常，重置防抖计数器
+                    if (_disconnectDetectedCount > 0)
+                    {
+                        _logger.LogDebug("热插拔检测：端口恢复正常，重置防抖计数器");
+                        _disconnectDetectedCount = 0;
+                    }
+                }
+            }
+            // ═══════════════════════════════════════════════
+            // 模式3：恢复检测（⭐核心新增功能）
+            // ═══════════════════════════════════════════════
+            else
+            {
+                // 已断开状态下，检测端口是否重新出现
+                bool portReappeared = CheckIfPortReappeared();
+
+                if (portReappeared)
+                {
+                    _logger.LogInformation("热插拔检测：端口 {PortName} 重新出现，立即自动重连", _portName);
+                    Notify(NotificationType.Info, $"检测到扫描枪重新插入，正在重连...");
+
+                    // 同步执行重连（在 Timer 回调线程中，ConnectInternal 内部有锁保护）
+                    try
+                    {
+                        var reconnected = ConnectInternal(_portName, _baudRate);
+                        if (reconnected)
+                        {
+                            _logger.LogInformation("热插拔检测：自动重连成功！");
+                            Notify(NotificationType.Success, "扫描枪已重新连接");
+                        }
+                        else
+                        {
+                            _logger.LogWarning("热插拔检测：自动重连失败，将在下次检测周期重试");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "热插拔检测：自动重连异常");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// ⭐ 检测端口是否已断开
+        /// 综合三种方法判断，任一方法确认断开即返回 true
+        /// 
+        /// 方法1：检查 _serialPort.IsOpen 标志
+        /// 方法2：尝试访问 BytesToRead（拔出时通常抛 IOException）
+        /// 方法3：检查系统端口列表（GetPortNames）
+        /// </summary>
+        /// <returns>true = 端口已断开，false = 端口正常</returns>
+        private bool CheckIfPortDisconnected()
+        {
+            // 方法1：检查串口IsOpen标志
+            try
+            {
+                if (_serialPort == null || !_serialPort.IsOpen)
+                {
+                    _logger.LogDebug("PortWatchdog 方法1：串口已关闭");
+                    return true;
+                }
+            }
+            catch
+            {
+                _logger.LogDebug("PortWatchdog 方法1：串口访问异常");
+                return true;
+            }
+
+            // 方法2：尝试访问BytesToRead（拔出后通常抛IOException）
+            try
+            {
+                _ = _serialPort.BytesToRead;
+            }
+            catch (IOException)
+            {
+                _logger.LogDebug("PortWatchdog 方法2：IO异常（设备已拔出）");
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                _logger.LogDebug("PortWatchdog 方法2：串口已不可用");
+                return true;
+            }
+            catch (Exception)
+            {
+                // 其他异常，保守起见不判定为断开
+            }
+
+            // 方法3：检查系统端口列表
+            try
+            {
+                var portExists = SerialPort.GetPortNames()
+                    .Any(p => p.Equals(_portName, StringComparison.OrdinalIgnoreCase));
+                if (!portExists)
+                {
+                    _logger.LogDebug("PortWatchdog 方法3：端口 {PortName} 不在系统端口列表中", _portName);
+                    return true;
+                }
+            }
+            catch
+            {
+                // GetPortNames 异常时跳过，依赖其他方法
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// ⭐ 检测端口是否重新出现
+        /// 仅在已断开状态下调用，检查系统端口列表中是否存在目标端口
+        /// </summary>
+        /// <returns>true = 端口已重新出现，false = 端口仍不可用</returns>
+        private bool CheckIfPortReappeared()
+        {
+            try
+            {
+                var portExists = SerialPort.GetPortNames()
+                    .Any(p => p.Equals(_portName, StringComparison.OrdinalIgnoreCase));
+                return portExists;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "检测端口重新出现时异常");
+                return false;
+            }
         }
 
         /// <summary>
@@ -340,6 +664,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             {
                 // 读取超时，正常情况
             }
+            catch (IOException ex)
+            {
+                // ⭐ IO异常通常意味着设备已拔出
+                _logger.LogWarning(ex, "扫描枪IO异常（可能已拔出）");
+                // 不在此处立即触发断开，交给 PortWatchdog 防抖机制统一处理
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "扫描枪数据接收异常");
@@ -373,7 +703,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             {
                 _logger.LogInformation("扫描到条码: {Barcode}", barcode);
 
-                // 触发条码事件（BarcodeReceivedEventArgs 内部会再次 Trim）
+                // 触发条码事件
                 var args = new BarcodeReceivedEventArgs(barcode, barcode);
                 BarcodeReceived?.Invoke(this, args);
             }
@@ -382,25 +712,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private void OnErrorReceived(object sender, System.IO.Ports.SerialErrorReceivedEventArgs e)
         {
             _logger.LogWarning("扫描枪串口错误: {ErrorType}", e.EventType);
-            Notify(NotificationType.Warning, $"串口错误: {e.EventType}");
 
-            // 严重错误时尝试重连
-            if (e.EventType == System.IO.Ports.SerialError.TXFull ||
-                e.EventType == System.IO.Ports.SerialError.RXOver)
+            // ⭐ 严重错误只记录日志，不立即触发断开（交给 PortWatchdog 统一处理）
+            if (e.EventType == SerialError.TXFull ||
+                e.EventType == SerialError.RXOver ||
+                e.EventType == SerialError.Frame ||
+                e.EventType == SerialError.Overrun)
             {
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(1000);
-                    if (_isConnected && !_isDisposed)
-                    {
-                        _logger.LogInformation("尝试重新打开扫描枪串口...");
-                        lock (_lockObject)
-                        {
-                            CloseSerialPort();
-                            Connect(_portName);
-                        }
-                    }
-                });
+                _logger.LogWarning("扫描枪串口严重错误: {ErrorType}，将交由 PortWatchdog 确认", e.EventType);
+                Notify(NotificationType.Warning, $"串口错误: {e.EventType}，正在监控中...");
+            }
+            else
+            {
+                Notify(NotificationType.Warning, $"串口错误: {e.EventType}");
             }
         }
 
@@ -498,6 +822,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 StopMonitoring();
                 CloseSerialPort();
                 _isConnected = false;
+                _connectionStableTime = DateTime.MinValue;
+                _disconnectDetectedCount = 0;
                 ConnectionStateChanged?.Invoke(this, false);
             }
 
