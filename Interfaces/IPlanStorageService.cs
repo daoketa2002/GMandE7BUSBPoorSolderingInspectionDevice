@@ -19,11 +19,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 保存方案（新增或更新）
-        /// 如果是编辑模式且机种发生了变更，传入原机种名以处理文件移动
         /// </summary>
-        /// <param name="plan">要保存的方案对象</param>
-        /// <param name="originalMachineType">编辑前的原机种名（新增时为null）</param>
-        Task SavePlanAsync(PlanModel plan, string? originalMachineType = null);
+        /// <param name="plan">方案对象</param>
+        /// <param name="originalMachineType">编辑模式下的原机种名（新增时为null），用于处理机种变更时的文件移动/删除</param>
+        /// <param name="originalPlanName">编辑模式下的原方案名（新增时为null），用于处理方案名变更时的文件重命名</param>
+        Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null);
 
         /// <summary>
         /// 删除方案

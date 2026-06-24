@@ -317,7 +317,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <inheritdoc/>
-        public async Task SavePlanAsync(PlanModel plan, string? originalMachineType = null)
+        public async Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null)
         {
             // 参数校验
             if (string.IsNullOrWhiteSpace(plan.MachineType))
@@ -329,7 +329,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 lock (_fileLock)
                 {
+                    // ================================================================
                     // 重新整理检测项目序号（从1开始连续）
+                    // ================================================================
                     for (int i = 0; i < plan.Items.Count; i++)
                     {
                         plan.Items[i].Index = i + 1;
@@ -347,28 +349,42 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         plan.CreatedTime = DateTime.Now;
                     }
 
-                    // 处理机种变更：如果原机种与新机种不同，删除旧文件
-                    if (!string.IsNullOrWhiteSpace(originalMachineType) &&
-                        !string.Equals(originalMachineType, plan.MachineType, StringComparison.OrdinalIgnoreCase))
+                    // ================================================================
+                    // ★ 核心修复：判断是否需要删除旧文件
+                    // 判定条件：机种名称变更 OR 方案名称变更（任意一个变更都视为路径变化）
+                    // 覆盖场景：
+                    //   1. 新增方案 → originalMachineType/originalPlanName 都为 null，跳过删除
+                    //   2. 仅改内容   → 两者都未变，跳过删除，直接覆盖保存
+                    //   3. 仅改方案名 → planNameChanged=true，删除旧文件，保存新文件（重命名）
+                    //   4. 仅改机种   → machineTypeChanged=true，删除旧文件，保存新文件（移动）
+                    //   5. 同时改两者 → 两者都变更，删除旧文件，保存新文件
+                    // ================================================================
+                    bool machineTypeChanged = !string.IsNullOrWhiteSpace(originalMachineType)
+                        && !string.Equals(originalMachineType, plan.MachineType, StringComparison.OrdinalIgnoreCase);
+
+                    bool planNameChanged = !string.IsNullOrWhiteSpace(originalPlanName)
+                        && !string.Equals(originalPlanName, plan.PlanName, StringComparison.OrdinalIgnoreCase);
+
+                    if (machineTypeChanged || planNameChanged)
                     {
-                        var oldFilePath = GetPlanFilePath(originalMachineType, plan.PlanName);
+                        // 使用旧机种名+旧方案名定位原文件
+                        var oldMachineType = originalMachineType!;
+                        var oldPlanName = originalPlanName!;
+                        var oldFilePath = GetPlanFilePath(oldMachineType, oldPlanName);
+
                         if (File.Exists(oldFilePath))
                         {
                             File.Delete(oldFilePath);
-                            _logger.LogInformation("机种变更：已删除旧方案文件 {OldFile}", oldFilePath);
-
-                            // 如果旧机种文件夹为空，删除空文件夹
-                            var oldFolderPath = GetMachineTypeFolderPath(originalMachineType);
-                            if (Directory.Exists(oldFolderPath) &&
-                                Directory.GetFiles(oldFolderPath).Length == 0)
-                            {
-                                Directory.Delete(oldFolderPath);
-                                _logger.LogInformation("已删除空机种文件夹: {OldFolder}", oldFolderPath);
-                            }
+                            _logger.LogInformation("路径变更：已删除旧方案文件 {OldFile}", oldFilePath);
                         }
+
+                        // 清理旧机种文件夹（如果为空）
+                        CleanupEmptyMachineTypeFolder(oldMachineType);
                     }
 
-                    // 保存到新机种文件夹
+                    // ================================================================
+                    // 保存到新路径（覆盖或新建）
+                    // ================================================================
                     var newFilePath = GetPlanFilePath(plan.MachineType, plan.PlanName);
                     SavePlanToFile(plan, newFilePath);
 
@@ -376,6 +392,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         SanitizeFileName(plan.MachineType), SanitizeFileName(plan.PlanName));
                 }
             });
+        }
+
+        /// <summary>
+        /// 清理空的机种文件夹
+        /// 当文件夹下没有任何文件时，自动删除该空文件夹
+        /// </summary>
+        /// <param name="machineType">机种名称</param>
+        private void CleanupEmptyMachineTypeFolder(string machineType)
+        {
+            var folderPath = GetMachineTypeFolderPath(machineType);
+
+            if (!Directory.Exists(folderPath))
+                return;
+
+            // 检查文件夹是否为空（无文件且无子目录）
+            var hasFiles = Directory.GetFiles(folderPath).Length > 0;
+            var hasDirectories = Directory.GetDirectories(folderPath).Length > 0;
+
+            if (!hasFiles && !hasDirectories)
+            {
+                Directory.Delete(folderPath);
+                _logger.LogInformation("已删除空机种文件夹: {FolderPath}", folderPath);
+            }
         }
 
         /// <inheritdoc/>

@@ -363,8 +363,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     }).ToList()
                 };
 
-                // 保存：传入原机种名以处理机种变更（移动文件）
-                await _planStorageService.SavePlanAsync(plan, _originalPlan?.MachineType);
+                // 同时传递原机种名和原方案名，确保方案名变更时也能正确删除旧文件
+                await _planStorageService.SavePlanAsync(plan, _originalPlan?.MachineType, _originalPlan?.PlanName);
 
                 _logger.LogInformation("方案保存成功: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
                 await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 保存成功！", "保存成功");
