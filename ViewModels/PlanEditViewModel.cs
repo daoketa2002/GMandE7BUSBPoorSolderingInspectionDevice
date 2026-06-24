@@ -97,7 +97,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 初始化下拉选项
             MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
             PinOptions = new ObservableCollection<string>(PlanStorageService.PinList);
-            CheckConditionOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
+            CheckModeOptions = new ObservableCollection<string> { "Continuity", "Resistance" };
+            ContinuityUnitOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
 
             _logger.LogDebug("PlanEditViewModel 构造完成");
         }
@@ -143,9 +144,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public ObservableCollection<string> PinOptions { get; }
 
         /// <summary>
-        /// 检查条件下拉选项（OPEN / SHORT）
+        /// 检测方式下拉选项
+        /// Continuity — 导通检测（检查回路开路/短路）
+        /// Resistance — 电阻值检测（检查阻值范围）
         /// </summary>
-        public ObservableCollection<string> CheckConditionOptions { get; }
+        public ObservableCollection<string> CheckModeOptions { get; }
+
+        /// <summary>
+        /// 导通模式下的期望结果选项
+        /// OPEN — 期望开路（回路断开）
+        /// SHORT — 期望短路（回路导通）
+        /// </summary>
+        public ObservableCollection<string> ContinuityUnitOptions { get; }
 
         #endregion
 
@@ -189,7 +199,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 Index = Items.Count + 1,
                 PinLeft = string.Empty,
                 PinRight = string.Empty,
-                CheckCondition = "OPEN"
+                CheckMode = "Continuity",
+                Unit = "OPEN"
             };
             Items.Add(newItem);
             ReindexItems();
@@ -352,7 +363,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         Id = Guid.NewGuid().ToString(),  // 为新项目生成唯一标识
                         Index = item.Index,
                         ItemName = $"{item.PinLeft}-{item.PinRight}",
-                        CheckCondition = item.CheckCondition
+                        CheckMode = item.CheckMode,
+                        LowerLimit = item.CheckMode == "Resistance" ? item.LowerLimit : null,
+                        UpperLimit = item.CheckMode == "Resistance" ? item.UpperLimit : null,
+                        Unit = item.GetEffectiveUnit()
                     }).ToList()
                 };
 
@@ -453,7 +467,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 CreatedTime = existingPlan.CreatedTime;
                 LastModifiedTime = existingPlan.LastModifiedTime;
 
-                // 加载检测项目
+                // 加载检测项目（适配新版方案字段）
                 Items.Clear();
                 foreach (var item in existingPlan.Items)
                 {
@@ -463,7 +477,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         Index = item.Index,
                         PinLeft = parts.Length > 0 ? parts[0] : string.Empty,
                         PinRight = parts.Length > 1 ? parts[1] : string.Empty,
-                        CheckCondition = item.CheckCondition
+                        CheckMode = item.CheckMode,
+                        LowerLimit = item.LowerLimit,
+                        UpperLimit = item.UpperLimit,
+                        Unit = item.Unit
                     });
                 }
 
@@ -522,8 +539,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     }
 
     /// <summary>
-    /// 检测项目 ViewModel（用于DataGrid行绑定）
-    /// 将PlanItem的ItemName拆分为左右引脚，便于独立编辑
+    /// 检测项目 ViewModel（用于方案编辑 DataGrid 行绑定）
+    /// 将 PlanItem 的 ItemName 拆分为左右引脚，便于独立编辑
+    ///
+    /// 改动说明（方案需求变动）：
+    /// CheckCondition 字段删除，改为 CheckMode + LowerLimit + UpperLimit + Unit
+    /// 通过 CheckMode 控制下限/上限/单位输入框的可用状态
     /// </summary>
     public partial class PlanItemViewModel : ObservableObject
     {
@@ -539,11 +560,80 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private string _pinRight = string.Empty;
 
-        /// <summary>检查条件（OPEN / SHORT）</summary>
+        /// <summary>
+        /// 检测方式
+        /// "Continuity" — 导通检测
+        /// "Resistance" — 电阻值检测
+        /// </summary>
         [ObservableProperty]
-        private string _checkCondition = "OPEN";
+        private string _checkMode = "Continuity";
 
-        /// <summary>完整的检测项目名称（如 A1-A2）</summary>
+        /// <summary>
+        /// 电阻值下限（Ω），导通模式为 null
+        /// </summary>
+        [ObservableProperty]
+        private double? _lowerLimit;
+
+        /// <summary>
+        /// 电阻值上限（Ω），导通模式为 null
+        /// </summary>
+        [ObservableProperty]
+        private double? _upperLimit;
+
+        /// <summary>
+        /// 物理单位或期望结果
+        /// 导通模式： "OPEN"（期望开路）或 "SHORT"（期望短路）
+        /// 电阻模式：固定 "Ω"
+        /// </summary>
+        [ObservableProperty]
+        private string _unit = "OPEN";
+
+        /// <summary>
+        /// 是否为电阻值检测模式
+        /// 用于控制下限/上限输入框的 IsEnabled 状态
+        /// </summary>
+        public bool IsResistanceMode => CheckMode == "Resistance";
+
+        /// <summary>
+        /// 完整的检测项目名称（如 A1-A2）
+        /// </summary>
         public string FullItemName => $"{PinLeft}-{PinRight}";
+
+        /// <summary>
+        /// 获取有效的单位文本
+        /// 导通模式返回 Unit（OPEN/SHORT），电阻模式固定返回 "Ω"
+        /// </summary>
+        public string GetEffectiveUnit()
+        {
+            return CheckMode switch
+            {
+                "Resistance" => "Ω",
+                _ => Unit // "OPEN" 或 "SHORT"
+            };
+        }
+
+        /// <summary>
+        /// 检查方式变更时联动
+        /// 切换到电阻模式时自动设置 Unit="Ω"
+        /// 切换到导通模式时清空上下限并恢复 Unit="OPEN"
+        /// </summary>
+        partial void OnCheckModeChanged(string value)
+        {
+            if (value == "Resistance")
+            {
+                Unit = "Ω";
+            }
+            else // Continuity
+            {
+                LowerLimit = null;
+                UpperLimit = null;
+                if (Unit != "OPEN" && Unit != "SHORT")
+                {
+                    Unit = "OPEN";
+                }
+            }
+            // 通知 IsResistanceMode 已变更（手动触发 UI 刷新）
+            OnPropertyChanged(nameof(IsResistanceMode));
+        }
     }
 }

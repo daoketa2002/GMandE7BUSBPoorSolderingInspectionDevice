@@ -311,18 +311,107 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTemplateColumn Header="检查条件" Width="150">
+                    <DataGridTemplateColumn Header="检查方式" Width="150">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <ComboBox IsEditable="True"
                                           IsReadOnly="True"
-                                          Text="{Binding CheckCondition, UpdateSourceTrigger=PropertyChanged}"
-                                          ItemsSource="{Binding DataContext.CheckConditionOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                          Text="{Binding CheckMode, UpdateSourceTrigger=PropertyChanged}"
+                                          ItemsSource="{Binding DataContext.CheckModeOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
                                           Height="30"
                                           VerticalContentAlignment="Center"
                                           BorderThickness="1"
                                           BorderBrush="#CED4DA"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <DataGridTemplateColumn Header="下限 (Ω)" Width="130">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
+                                         IsEnabled="{Binding IsResistanceMode}"
+                                         FontSize="15"
+                                         Height="30"
+                                         VerticalContentAlignment="Center"
+                                         BorderThickness="1"
+                                         BorderBrush="#CED4DA"
+                                         HorizontalContentAlignment="Center">
+                                    <TextBox.Style>
+                                        <Style TargetType="TextBox">
+                                            <Setter Property="Background" Value="White"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsResistanceMode}" Value="False">
+                                                    <Setter Property="Background" Value="#E9ECEF"/>
+                                                    <Setter Property="Foreground" Value="#ADB5BD"/>
+                                                    <Setter Property="Text" Value=""/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBox.Style>
+                                </TextBox>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <DataGridTemplateColumn Header="上限 (Ω)" Width="130">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBox Text="{Binding UpperLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
+                                         IsEnabled="{Binding IsResistanceMode}"
+                                         FontSize="15"
+                                         Height="30"
+                                         VerticalContentAlignment="Center"
+                                         BorderThickness="1"
+                                         BorderBrush="#CED4DA"
+                                         HorizontalContentAlignment="Center">
+                                    <TextBox.Style>
+                                        <Style TargetType="TextBox">
+                                            <Setter Property="Background" Value="White"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsResistanceMode}" Value="False">
+                                                    <Setter Property="Background" Value="#E9ECEF"/>
+                                                    <Setter Property="Foreground" Value="#ADB5BD"/>
+                                                    <Setter Property="Text" Value=""/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBox.Style>
+                                </TextBox>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <DataGridTemplateColumn Header="单位" Width="120">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ComboBox IsEditable="True"
+                                          IsReadOnly="True"
+                                          Text="{Binding Unit, UpdateSourceTrigger=PropertyChanged}"
+                                          FontSize="15"
+                                          Height="30"
+                                          VerticalContentAlignment="Center"
+                                          BorderThickness="1"
+                                          BorderBrush="#CED4DA">
+                                    <ComboBox.Style>
+                                        <Style TargetType="ComboBox">
+                                            <Setter Property="IsEnabled" Value="True"/>
+                                            <Style.Triggers>
+                                                <!-- 电阻模式固定为 Ω，下拉禁用 -->
+                                                <DataTrigger Binding="{Binding CheckMode}" Value="Resistance">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                    <Setter Property="ItemsSource"
+                                                            Value="{Binding DataContext.CheckModeOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding CheckMode}" Value="Continuity">
+                                                    <Setter Property="ItemsSource"
+                                                            Value="{Binding DataContext.ContinuityUnitOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ComboBox.Style>
+                                </ComboBox>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>

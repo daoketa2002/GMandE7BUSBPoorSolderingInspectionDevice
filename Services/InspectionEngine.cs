@@ -118,7 +118,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public void SetConfig(InspectionConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            LogInfo($"检测配置已更新：测试点数={config.TestPoints.Count}, 阈值={config.ResistanceThresholdLow}~{config.ResistanceThresholdHigh}Ω");
+            LogInfo($"检测配置已更新：测试点数={config.TestPoints.Count}");
         }
 
         #endregion
@@ -170,7 +170,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         _inspectionCts.Token.ThrowIfCancellationRequested();
 
                         var testPoint = _config.TestPoints[i];
-                        LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.Condition})");
+                        LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode}/{testPoint.Unit})");
 
                         // 2.1 切换继电器到当前测试点
                         await SwitchToTestPointAsync(i, _inspectionCts.Token).ConfigureAwait(false);
@@ -195,7 +195,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         else
                         {
                             failCount++;
-                            LogInfo($"  ❌ {testPoint.Name}: {measurement.Value:F4}Ω → NG (阈值:{_config.ResistanceThresholdLow}~{_config.ResistanceThresholdHigh}Ω)");
+                            var detail = testPoint.CheckMode == "Resistance"
+                                ? $" (范围:{testPoint.LowerLimit}~{testPoint.UpperLimit}Ω)"
+                                : $" (期望:{testPoint.Unit})";
+                            LogInfo($"  ❌ {testPoint.Name}: {measurement.Value:F4}Ω → NG{detail}");
                         }
 
                         // 2.5 将判定结果写入PLC
@@ -319,6 +322,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 判定测量结果
+        ///
+        /// 判定逻辑（方案需求变动）：
+        ///   导通模式 (Continuity)：
+        ///     - Unit="OPEN"（期望开路）：实测值 > 1MΩ → OK，否则 NG
+        ///     - Unit="SHORT"（期望短路）：实测值 < 1Ω → OK，否则 NG
+        ///   电阻模式 (Resistance)：
+        ///     - LowerLimit ≤ 实测值 ≤ UpperLimit → OK，否则 NG
         /// </summary>
         private string JudgeResult(MeasurementResult measurement, TestPointConfig testPoint)
         {
@@ -328,20 +338,33 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 return "NG";
             }
 
-            return testPoint.Condition switch
+            double value = measurement.Value;
+
+            if (testPoint.CheckMode == "Resistance")
             {
-                TestCondition.Open =>
-                    measurement.Value > _config.OpenThreshold ? "OK" : "NG",
+                // ─── 电阻值检测：判断实测值是否在下限～上限范围内 ───
+                double lower = testPoint.LowerLimit ?? 0;
+                double upper = testPoint.UpperLimit ?? double.MaxValue;
 
-                TestCondition.Short =>
-                    measurement.Value < _config.ShortThreshold ? "OK" : "NG",
-
-                TestCondition.Resistance =>
-                    (measurement.Value >= _config.ResistanceThresholdLow &&
-                     measurement.Value <= _config.ResistanceThresholdHigh) ? "OK" : "NG",
-
-                _ => "NG"
-            };
+                if (value >= lower && value <= upper)
+                    return "OK";
+                else
+                    return "NG";
+            }
+            else
+            {
+                // ─── 导通检测 ───
+                if (testPoint.Unit == "SHORT")
+                {
+                    // 期望短路：实测值 < 1Ω → OK
+                    return value < 1.0 ? "OK" : "NG";
+                }
+                else
+                {
+                    // 期望开路（OPEN）：实测值 > 1MΩ → OK
+                    return value > 1_000_000.0 ? "OK" : "NG";
+                }
+            }
         }
 
         /// <summary>
@@ -488,45 +511,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
     /// <summary>
     /// 检测配置
+    /// 由方案文件（PlanModel）的检测项目填充，不再硬编码默认测试点
+    ///
+    /// 改动说明（方案需求变动）：
+    /// 每项检测使用独立阈值（来自 PlanItem），不再使用全局阈值
     /// </summary>
     public class InspectionConfig
     {
         /// <summary>
         /// 测试点列表
+        /// 由外部加载方案文件后通过 SetConfig() 或直接赋值注入
         /// </summary>
-        public List<TestPointConfig> TestPoints { get; set; } = new()
-        {
-            new TestPointConfig { Name = "A1-A2", Condition = TestCondition.Open, RelayChannel = 0 },
-            new TestPointConfig { Name = "A2-A3", Condition = TestCondition.Short, RelayChannel = 1 },
-            new TestPointConfig { Name = "A3-A4", Condition = TestCondition.Open, RelayChannel = 2 },
-            new TestPointConfig { Name = "A4-A5", Condition = TestCondition.Short, RelayChannel = 3 },
-            new TestPointConfig { Name = "B1-B2", Condition = TestCondition.Open, RelayChannel = 4 },
-            new TestPointConfig { Name = "B2-B3", Condition = TestCondition.Short, RelayChannel = 5 },
-            new TestPointConfig { Name = "B3-B4", Condition = TestCondition.Open, RelayChannel = 6 },
-            new TestPointConfig { Name = "C1-C2", Condition = TestCondition.Resistance, RelayChannel = 7 },
-            new TestPointConfig { Name = "C2-C3", Condition = TestCondition.Open, RelayChannel = 8 },
-            new TestPointConfig { Name = "D1-D2", Condition = TestCondition.Short, RelayChannel = 9 },
-        };
-
-        /// <summary>
-        /// 开路判定阈值 (Ω) — 大于此值视为开路OK
-        /// </summary>
-        public double OpenThreshold { get; set; } = 1000000.0; // 1MΩ
-
-        /// <summary>
-        /// 短路判定阈值 (Ω) — 小于此值视为短路OK
-        /// </summary>
-        public double ShortThreshold { get; set; } = 1.0; // 1Ω
-
-        /// <summary>
-        /// 电阻判定阈值下限 (Ω)
-        /// </summary>
-        public double ResistanceThresholdLow { get; set; } = 0.0;
-
-        /// <summary>
-        /// 电阻判定阈值上限 (Ω)
-        /// </summary>
-        public double ResistanceThresholdHigh { get; set; } = 100.0;
+        public List<TestPointConfig> TestPoints { get; set; } = new();
 
         /// <summary>
         /// 继电器稳定时间 (ms)
@@ -536,27 +532,42 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
     /// <summary>
     /// 测试点配置
+    /// 每个测试点对应方案中的一个 PlanItem
+    ///
+    /// 改动说明（方案需求变动）：
+    /// 新增 CheckMode / LowerLimit / UpperLimit / Unit 字段
+    /// 判定逻辑从全局阈值改为每项独立阈值
     /// </summary>
     public class TestPointConfig
     {
+        /// <summary>项目名称（如 "A4-A5"）</summary>
         public string Name { get; set; } = string.Empty;
-        public TestCondition Condition { get; set; } = TestCondition.Open;
+
+        /// <summary>
+        /// 检测方式
+        /// "Continuity" — 导通检测，"Resistance" — 电阻值检测
+        /// </summary>
+        public string CheckMode { get; set; } = "Continuity";
+
+        /// <summary>电阻值下限（Ω），导通模式为 null</summary>
+        public double? LowerLimit { get; set; }
+
+        /// <summary>电阻值上限（Ω），导通模式为 null</summary>
+        public double? UpperLimit { get; set; }
+
+        /// <summary>
+        /// 导通模式期望结果： "OPEN"（期望开路）或 "SHORT"（期望短路）
+        /// 电阻模式： "Ω"
+        /// </summary>
+        public string Unit { get; set; } = "OPEN";
+
+        /// <summary>继电器通道号</summary>
         public int? RelayChannel { get; set; }
 
         // 运行时填充
         public double ActualValue { get; set; }
         public string Judgment { get; set; } = string.Empty;
         public bool IsTested { get; set; }
-    }
-
-    /// <summary>
-    /// 测试条件类型
-    /// </summary>
-    public enum TestCondition
-    {
-        Open,       // 开路检查
-        Short,      // 短路检查
-        Resistance  // 电阻值检查
     }
 
     /// <summary>

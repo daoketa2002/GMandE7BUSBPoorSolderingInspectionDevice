@@ -491,11 +491,45 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 {
                     Index = item.Index,
                     ItemName = item.ItemName,
-                    CheckCondition = item.CheckCondition,
+                    CheckMode = item.CheckMode == "Resistance" ? "电阻值" : "导通",
+                    LowerLimitText = FormatLowerLimit(item),
+                    UpperLimitText = FormatUpperLimit(item),
                     CheckResult = string.Empty,
                     Judgment = string.Empty
                 });
             }
+        }
+
+        /// <summary>
+        /// 格式化下限显示文本
+        /// 导通模式：显示期望状态（如 "OPEN(开路)"、"-"）
+        /// 电阻模式：显示数值下限
+        /// </summary>
+        private static string FormatLowerLimit(PlanItem item)
+        {
+            if (item.CheckMode == "Resistance")
+                return item.LowerLimit?.ToString("F1") ?? "-";
+
+            // 导通模式：显示期望结果
+            return item.Unit switch
+            {
+                "SHORT" => "SHORT(短路)",
+                _ => "OPEN(开路)"
+            };
+        }
+
+        /// <summary>
+        /// 格式化上限显示文本
+        /// 导通模式：显示 "-"（无对应参数）
+        /// 电阻模式：显示数值上限
+        /// </summary>
+        private static string FormatUpperLimit(PlanItem item)
+        {
+            if (item.CheckMode == "Resistance")
+                return item.UpperLimit?.ToString("F1") ?? "-";
+
+            // 导通模式：上限无意义，用 "-" 占位
+            return "-";
         }
 
         #endregion
@@ -555,7 +589,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 将本次检测结果保存到SQLite数据库（事务写入）
+        /// 将本次检测结果保存到 CSV 文件（实际测量值写入动态列）
+        ///
+        /// 改动说明（方案需求变动）：
+        /// PinResult.Result 存储实际测量值（如 "2.5"、"开路"）而非判定文本
+        /// 综合判定保留在 FinalResult 列
         /// </summary>
         private async Task SaveLogToDatabaseAsync(string series, string finalResult)
         {
@@ -568,14 +606,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 {
                     Timestamp = DateTime.Now,
                     Series = series,
+                    MachineType = currentPlan?.MachineType ?? ModelName,
                     SerialNumber = SerialNumber,
-                    PlanName = currentPlan?.PlanName ?? "Unknown",
+                    PlanName = currentPlan?.PlanName ?? SchemeName,
                     Operator = OperatorName,
                     FinalResult = finalResult,
                     PinResults = TestItems.Select(item => new PinResult
                     {
                         PinName = item.ItemName,
-                        Result = item.Judgment == "OK" ? "OK" : $"{item.CheckResult} → NG"
+                        // ★ 写入实际测量值（如 "2.5"、"开路"）而非判定文本
+                        Result = item.CheckResult
                     }).ToList()
                 };
 
@@ -750,12 +790,36 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var item = TestItems.ElementAtOrDefault(e.StepIndex);
                 if (item != null)
                 {
-                    item.CheckResult = e.Measurement.IsValid
-                        ? $"{e.Measurement.Value:F4} Ω"
-                        : "测量失败";
+                    item.CheckResult = FormatMeasurementResult(e.Measurement, e.TestPoint);
                     item.Judgment = e.TestPoint.Judgment;
                 }
             });
+        }
+
+        /// <summary>
+        /// 格式化测量结果显示文本
+        /// 导通模式：值极大 → "开路"，值极小 → "短路"，否则显示数值
+        /// 电阻模式：显示具体阻值
+        /// </summary>
+        private static string FormatMeasurementResult(MeasurementResult measurement, TestPointConfig testPoint)
+        {
+            if (!measurement.IsValid)
+                return "测量失败";
+
+            double value = measurement.Value;
+
+            if (testPoint.CheckMode == "Continuity")
+            {
+                // 导通模式：根据测量值判断物理状态
+                if (value > 1_000_000.0)     // > 1MΩ → 开路
+                    return "开路";
+                if (value < 1.0)             // < 1Ω → 短路
+                    return "短路";
+                return $"{value:F4} Ω";       // 中间值显示数值
+            }
+
+            // 电阻模式：显示实测阻值
+            return $"{value:F4} Ω";
         }
 
         private void OnInspectionCompleted(object? sender, InspectionCompletedEventArgs e)

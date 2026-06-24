@@ -515,97 +515,213 @@
         </Border>
 
         <!-- ================================================================ -->
-        <!-- 3. 下部测试列表区 (DataGrid) -->
+        <!-- 3. 下部测试列表区（自定义合并表头 + DataGrid） -->
+        <!--
+            方案需求变动：
+            "检查条件"拆分为"检查方式"+"下限(Ω)"+"上限(Ω)"三个子列
+            使用自定义 Grid 绘制双行合并表头，DataGrid 隐藏原生表头
+            代码后置在 LayoutUpdated 时同步列宽
+        -->
         <!-- ================================================================ -->
-        <DataGrid Grid.Row="2"
-                  ItemsSource="{Binding TestItems}"
-                  Style="{StaticResource TestDataGridStyle}"
-                  ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
-                  Margin="8,4"
-                  x:Name="TestDataGrid">
-            <DataGrid.Columns>
-                <!-- 序号 -->
-                <DataGridTextColumn Header="序号" 
-                                    Binding="{Binding Index}" 
-                                    Width="80">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="HorizontalAlignment" Value="Center"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="FontSize" Value="18"/>
-                            <Setter Property="FontWeight" Value="SemiBold"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+        <Grid Grid.Row="2" Margin="8,4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>  <!-- 自定义双行合并表头 -->
+                <RowDefinition Height="*"/>     <!-- DataGrid 数据行 -->
+            </Grid.RowDefinitions>
 
-                <!-- 项目名称 -->
-                <DataGridTextColumn Header="项目名称" 
-                                    Binding="{Binding ItemName}" 
-                                    Width="200">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="HorizontalAlignment" Value="Center"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="FontSize" Value="18"/>
-                            <Setter Property="FontWeight" Value="SemiBold"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+            <!-- ═══════════ 自定义双行合并表头 ═══════════ -->
+            <Grid Grid.Row="0" x:Name="CustomHeaderGrid">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="40"/>  <!-- 父级标题行 -->
+                    <RowDefinition Height="40"/>  <!-- 子列标题行 -->
+                </Grid.RowDefinitions>
 
-                <!-- 检查条件 -->
-                <DataGridTextColumn Header="检查条件" 
-                                    Binding="{Binding CheckCondition}" 
-                                    Width="250">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="HorizontalAlignment" Value="Center"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="FontSize" Value="16"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+                <!-- ══ 第1行：父级标题 ══ -->
+                <Border Grid.Row="0" Background="#2C3E50" BorderBrush="#1A252F" BorderThickness="0,0,0,1">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="HeaderCol0" Width="80"/>
+                            <ColumnDefinition x:Name="HeaderCol1" Width="200"/>
+                            <!-- 检查条件（合并3列） -->
+                            <ColumnDefinition x:Name="HeaderCol2" Width="420"/>
+                            <ColumnDefinition x:Name="HeaderCol5" Width="230"/>
+                            <ColumnDefinition x:Name="HeaderCol6" Width="180"/>
+                        </Grid.ColumnDefinitions>
 
-                <!-- 检查结果 -->
-                <DataGridTextColumn Header="检查结果" 
-                                    Binding="{Binding CheckResult}" 
-                                    Width="250">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="HorizontalAlignment" Value="Center"/>
-                            <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="FontSize" Value="18"/>
-                            <Setter Property="FontWeight" Value="SemiBold"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+                        <!-- 序号 -->
+                        <Border Grid.Column="0" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="序号" Foreground="White" FontSize="16" FontWeight="Bold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 项目名称 -->
+                        <Border Grid.Column="1" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="项目名称" Foreground="White" FontSize="16" FontWeight="Bold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 检查条件（合并列，跨3个子列） -->
+                        <Border Grid.Column="2" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="检查条件" Foreground="White" FontSize="16" FontWeight="Bold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 检查结果 -->
+                        <Border Grid.Column="3" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="检查结果" Foreground="White" FontSize="16" FontWeight="Bold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 判定 -->
+                        <Border Grid.Column="4">
+                            <TextBlock Text="判  定" Foreground="White" FontSize="16" FontWeight="Bold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
+                </Border>
 
-                <!-- 判定（动态着色） -->
-                <DataGridTemplateColumn Header="判  定" Width="180">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <Border CornerRadius="4"
-                                    Padding="12,4"
-                                    Margin="4">
-                                <Border.Background>
-                                    <SolidColorBrush Color="{Binding Judgment, 
-                                        Converter={StaticResource JudgmentToBackgroundConverter}}"/>
-                                </Border.Background>
-                                <TextBlock Text="{Binding Judgment}" 
-                                           FontSize="22" 
-                                           FontWeight="ExtraBold"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center">
-                                    <TextBlock.Foreground>
-                                        <SolidColorBrush Color="{Binding Judgment, 
-                                            Converter={StaticResource JudgmentToForegroundConverter}}"/>
-                                    </TextBlock.Foreground>
-                                </TextBlock>
-                            </Border>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-            </DataGrid.Columns>
-        </DataGrid>
+                <!-- ══ 第2行：子列标题（仅"检查条件"下的3个子列需要差异标题，其余为空白/重复） ══ -->
+                <Border Grid.Row="1" Background="#34495E" BorderBrush="#1A252F" BorderThickness="0,0,0,2">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol0, Path=Width}"/>
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol1, Path=Width}"/>
+                            <!-- 检查条件子列 -->
+                            <ColumnDefinition x:Name="HeaderSubCol2" Width="120"/>
+                            <ColumnDefinition x:Name="HeaderSubCol3" Width="150"/>
+                            <ColumnDefinition x:Name="HeaderSubCol4" Width="150"/>
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol5, Path=Width}"/>
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol6, Path=Width}"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- 序号（空白，继承第1行） -->
+                        <Border Grid.Column="0"/>
+                        <!-- 项目名称（空白，继承第1行） -->
+                        <Border Grid.Column="1"/>
+                        <!-- 检查方式 -->
+                        <Border Grid.Column="2" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="检查方式" Foreground="#BDC3C7" FontSize="14" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 下限 (Ω) -->
+                        <Border Grid.Column="3" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="下限 (Ω)" Foreground="#BDC3C7" FontSize="14" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 上限 (Ω) -->
+                        <Border Grid.Column="4" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
+                            <TextBlock Text="上限 (Ω)" Foreground="#BDC3C7" FontSize="14" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 检查结果（空白，继承第1行） -->
+                        <Border Grid.Column="5"/>
+                        <!-- 判定（空白，继承第1行） -->
+                        <Border Grid.Column="6"/>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- ═══════════ DataGrid（隐藏原生表头） ═══════════ -->
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding TestItems}"
+                      Style="{StaticResource TestDataGridStyle}"
+                      HeadersVisibility="None"
+                      x:Name="TestDataGrid">
+                <DataGrid.Columns>
+                    <!-- 序号 -->
+                    <DataGridTextColumn Binding="{Binding Index}" Width="80">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontSize" Value="18"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- 项目名称 -->
+                    <DataGridTextColumn Binding="{Binding ItemName}" Width="200">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontSize" Value="18"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- 检查方式 -->
+                    <DataGridTextColumn Binding="{Binding CheckMode}" Width="120">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontSize" Value="16"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- 下限 (Ω) -->
+                    <DataGridTextColumn Binding="{Binding LowerLimitText}" Width="150">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontSize" Value="16"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- 上限 (Ω) -->
+                    <DataGridTextColumn Binding="{Binding UpperLimitText}" Width="150">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontSize" Value="16"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- 检查结果 -->
+                    <DataGridTextColumn Binding="{Binding CheckResult}" Width="230">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontSize" Value="18"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- 判定（动态着色） -->
+                    <DataGridTemplateColumn Width="180">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="4"
+                                        Padding="12,4"
+                                        Margin="4">
+                                    <Border.Background>
+                                        <SolidColorBrush Color="{Binding Judgment,
+                                            Converter={StaticResource JudgmentToBackgroundConverter}}"/>
+                                    </Border.Background>
+                                    <TextBlock Text="{Binding Judgment}"
+                                               FontSize="22"
+                                               FontWeight="ExtraBold"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Foreground>
+                                            <SolidColorBrush Color="{Binding Judgment,
+                                                Converter={StaticResource JudgmentToForegroundConverter}}"/>
+                                        </TextBlock.Foreground>
+                                    </TextBlock>
+                                </Border>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Grid>
 
         <!-- ================================================================ -->
         <!-- 4. 底部日志与操作区 -->

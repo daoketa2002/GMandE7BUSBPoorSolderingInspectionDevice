@@ -64,13 +64,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// <summary>
         /// 保存一条检测记录到 CSV 文件
         /// 自动写入当前月份文件夹，按机种_方案命名
+        ///
+        /// 改动说明（方案需求变动）：
+        /// 优先使用 MachineType 字段（新版机种名），Series 作为兼容回退
+        /// 动态列写入实际测量值（由调用方在 PinResult.Result 中填充）
         /// </summary>
         public async Task SaveRecordAsync(LogRecord record)
         {
             if (record == null)
                 throw new ArgumentNullException(nameof(record));
-            if (string.IsNullOrWhiteSpace(record.Series))
-                throw new ArgumentException("机种名称(Series)不能为空", nameof(record));
+
+            // ★ 优先使用 MachineType，兼容旧数据回退到 Series
+            string effectiveMachineType = !string.IsNullOrWhiteSpace(record.MachineType)
+                ? record.MachineType
+                : record.Series;
+
+            if (string.IsNullOrWhiteSpace(effectiveMachineType))
+                throw new ArgumentException("机种名称不能为空", nameof(record));
             if (string.IsNullOrWhiteSpace(record.SerialNumber))
                 throw new ArgumentException("序列号不能为空", nameof(record));
             if (record.PinResults == null || record.PinResults.Count == 0)
@@ -80,7 +90,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 // 使用记录的时间戳确定月份（而非当前时间）
                 var recordDate = record.Timestamp == default ? DateTime.Now : record.Timestamp;
-                string filePath = _pathManager.GetAvailableCsvFilePath(record.Series, record.PlanName, recordDate);
+                string filePath = _pathManager.GetAvailableCsvFilePath(effectiveMachineType, record.PlanName, recordDate);
                 var fileLock = _fileLocks.GetOrAdd(filePath, _ => new ReaderWriterLockSlim());
 
                 await Task.Run(() =>
@@ -109,8 +119,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         }
 
                         _logger.LogInformation(
-                            "CSV保存成功 - 机种:{Series}, 方案:{Plan}, SN:{Serial}, 结果:{Result}",
-                            record.Series, record.PlanName, record.SerialNumber,
+                            "CSV保存成功 - 机种:{MachineType}, 方案:{Plan}, SN:{Serial}, 结果:{Result}",
+                            effectiveMachineType, record.PlanName, record.SerialNumber,
                             record.FinalResult);
                     }
                     finally
@@ -230,7 +240,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             // 固定列
             dataBuilder.Append(rowIndex);
             dataBuilder.Append(',');
-            dataBuilder.Append(EscapeCsvField(record.Series));
+            // ★ 机种名称优先使用 MachineType，兼容旧数据回退 Series
+            dataBuilder.Append(EscapeCsvField(
+                !string.IsNullOrWhiteSpace(record.MachineType) ? record.MachineType : record.Series));
             dataBuilder.Append(',');
             dataBuilder.Append(EscapeCsvField(record.SerialNumber));
             dataBuilder.Append(',');

@@ -48,12 +48,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
     /// <summary>
     /// 方案中的单个检测项目
     /// 每个项目有唯一标识（GUID），便于追踪和引用
+    ///
+    /// 改动说明（方案需求变动）：
+    /// 将旧版单一"检查条件"字段升级为结构化检测模式：
+    /// - Continuity（导通）：Unit = "OPEN"(开路) 或 "SHORT"(短路)，无上下限
+    /// - Resistance（电阻值）：Unit = "Ω"，需配置 LowerLimit / UpperLimit
     /// </summary>
     public class PlanItem
     {
         /// <summary>
         /// 唯一标识（GUID）
-        /// 新增字段，用于精确追踪每个检测项目
+        /// 用于精确追踪每个检测项目
         /// </summary>
         [JsonPropertyName("Id")]
         public string Id { get; set; } = Guid.NewGuid().ToString();
@@ -70,10 +75,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         [JsonPropertyName("Order")]
         public int Index { get; set; }
 
+        // ═══════════════════════════════════════════════════════════════
+        // 方案需求变动 — 新增检测方式、上下限、单位字段
+        // 替代旧版 PhysicalUnits 字段
+        // ═══════════════════════════════════════════════════════════════
+
         /// <summary>
-        /// 检查条件：OPEN（开路）或 SHORT（短路）
+        /// 检测方式
+        /// "Continuity" — 导通检测（检查回路通断状态）
+        /// "Resistance" — 电阻值检测（检查阻值是否在预设范围内）
         /// </summary>
-        [JsonPropertyName("PhysicalUnits")]
-        public string CheckCondition { get; set; } = "OPEN";
+        [JsonPropertyName("CheckMode")]
+        public string CheckMode { get; set; } = "Continuity";
+
+        /// <summary>
+        /// 电阻值下限（Ω）
+        /// 仅 CheckMode = "Resistance" 时有效，导通模式下为 null
+        /// </summary>
+        [JsonPropertyName("LowerLimit")]
+        public double? LowerLimit { get; set; }
+
+        /// <summary>
+        /// 电阻值上限（Ω）
+        /// 仅 CheckMode = "Resistance" 时有效，导通模式下为 null
+        /// </summary>
+        [JsonPropertyName("UpperLimit")]
+        public double? UpperLimit { get; set; }
+
+        /// <summary>
+        /// 物理单位或期望结果
+        /// 导通模式： "OPEN"(期望开路) 或 "SHORT"(期望短路)
+        /// 电阻模式： "Ω"
+        /// </summary>
+        [JsonPropertyName("Unit")]
+        public string Unit { get; set; } = "OPEN";
     }
 }
