@@ -1,4 +1,10 @@
-﻿using System;
+﻿// ============================================================
+// 文件: Models/PlanModel.cs
+// 描述: 方案数据模型
+// 改动说明: CheckMode 存储值改为中文 "导通"/"电阻值"
+// ============================================================
+
+using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
@@ -51,8 +57,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
     ///
     /// 改动说明（方案需求变动）：
     /// 将旧版单一"检查条件"字段升级为结构化检测模式：
-    /// - Continuity（导通）：Unit = "OPEN"(开路) 或 "SHORT"(短路)，无上下限
-    /// - Resistance（电阻值）：Unit = "Ω"，需配置 LowerLimit / UpperLimit
+    /// - 导通：Unit = "OPEN"(开路) 或 "SHORT"(短路)，无上下限
+    /// - 电阻值：Unit = "Ω"，需配置 LowerLimit / UpperLimit
+    /// - ★ CheckMode 存储中文值 "导通" / "电阻值"（JSON直接可读）
     /// </summary>
     public class PlanItem
     {
@@ -81,23 +88,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         // ═══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// 检测方式
-        /// "Continuity" — 导通检测（检查回路通断状态）
-        /// "Resistance" — 电阻值检测（检查阻值是否在预设范围内）
+        /// 检测方式（中文存储）
+        /// "导通" — 导通检测（检查回路通断状态）
+        /// "电阻值" — 电阻值检测（检查阻值是否在预设范围内）
         /// </summary>
         [JsonPropertyName("CheckMode")]
-        public string CheckMode { get; set; } = "Continuity";
+        public string CheckMode { get; set; } = "导通";
 
         /// <summary>
         /// 电阻值下限（Ω）
-        /// 仅 CheckMode = "Resistance" 时有效，导通模式下为 null
+        /// 仅 CheckMode = "电阻值" 时有效，导通模式下为 null
         /// </summary>
         [JsonPropertyName("LowerLimit")]
         public double? LowerLimit { get; set; }
 
         /// <summary>
         /// 电阻值上限（Ω）
-        /// 仅 CheckMode = "Resistance" 时有效，导通模式下为 null
+        /// 仅 CheckMode = "电阻值" 时有效，导通模式下为 null
         /// </summary>
         [JsonPropertyName("UpperLimit")]
         public double? UpperLimit { get; set; }
@@ -109,5 +116,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         /// </summary>
         [JsonPropertyName("Unit")]
         public string Unit { get; set; } = "OPEN";
+    }
+
+    /// <summary>
+    /// 检测方式常量（中文标准值）
+    /// 用于避免字符串硬编码分散在各处
+    /// </summary>
+    public static class CheckModeConstants
+    {
+        /// <summary>导通检测</summary>
+        public const string Continuity = "导通";
+
+        /// <summary>电阻值检测</summary>
+        public const string Resistance = "电阻值";
     }
 }

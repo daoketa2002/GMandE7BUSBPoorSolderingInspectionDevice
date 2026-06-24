@@ -317,7 +317,7 @@
                                 <ComboBox IsEditable="True"
                                           IsReadOnly="True"
                                           Text="{Binding CheckMode, UpdateSourceTrigger=PropertyChanged}"
-                                          ItemsSource="{Binding DataContext.CheckModeOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                          ItemsSource="{Binding CheckModeOptions}"
                                           FontSize="15"
                                           Height="30"
                                           VerticalContentAlignment="Center"

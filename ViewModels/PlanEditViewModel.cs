@@ -4,7 +4,8 @@
 // 改动:
 //   - 去除"系列"字段，改为"机种"字段
 //   - 使用 ScannerIntegrationHelper 替代内联扫描枪代码
-//   - 新增 CreatedTime/LastModifiedTime 时间戳
+//   - CheckMode 存储中文 "导通"/"电阻值"
+//   - 新增 CheckModeConstants 引用，消除硬编码字符串
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -88,7 +89,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // ⭐ 同步扫描枪初始状态
             IsScannerConnected = _deviceManager.IsScannerConnected;
             ScannerStatusText = _deviceManager.ScannerStatusText;
-            ScannerPortName = _deviceManager.IsScannerConnected ? "COM8" : "COM8";  // 从配置读取或使用默认值
+            ScannerPortName = _deviceManager.IsScannerConnected ? "COM8" : "COM8";
 
             // ⭐ 订阅全局设备管理器事件
             _deviceManager.ScannerConnectionStateChanged += OnScannerConnectionStateChanged;
@@ -97,7 +98,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 初始化下拉选项
             MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
             PinOptions = new ObservableCollection<string>(PlanStorageService.PinList);
-            CheckModeOptions = new ObservableCollection<string> { "Continuity", "Resistance" };
+            // ★ CheckMode 下拉选项使用中文（不再需要单独的 CheckModeOptions，已内聚到 PlanItemViewModel）
             ContinuityUnitOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
 
             _logger.LogDebug("PlanEditViewModel 构造完成");
@@ -144,13 +145,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public ObservableCollection<string> PinOptions { get; }
 
         /// <summary>
-        /// 检测方式下拉选项
-        /// Continuity — 导通检测（检查回路开路/短路）
-        /// Resistance — 电阻值检测（检查阻值范围）
-        /// </summary>
-        public ObservableCollection<string> CheckModeOptions { get; }
-
-        /// <summary>
         /// 导通模式下的期望结果选项
         /// OPEN — 期望开路（回路断开）
         /// SHORT — 期望短路（回路导通）
@@ -189,7 +183,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 项目操作命令
 
         /// <summary>
-        /// 新增一个检测项目（默认检查条件为 OPEN）
+        /// 新增一个检测项目（默认检查方式为导通）
         /// </summary>
         [RelayCommand]
         private void AddItem()
@@ -199,7 +193,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 Index = Items.Count + 1,
                 PinLeft = string.Empty,
                 PinRight = string.Empty,
-                CheckMode = "Continuity",
+                CheckMode = CheckModeConstants.Continuity,  // ★ 使用常量
                 Unit = "OPEN"
             };
             Items.Add(newItem);
@@ -264,7 +258,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region 扫描枪事件处理
 
-        // ⭐ 新增：扫描枪连接状态变更回调
         private void OnScannerConnectionStateChanged(object? sender, DeviceConnectionStateChangedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -351,21 +344,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // 构建方案对象
+                // 构建方案对象（CheckMode 直接使用中文值存储到JSON）
                 var plan = new PlanModel
                 {
                     MachineType = MachineType.Trim(),
                     PlanName = PlanName.Trim(),
-                    CreatedTime = _isEditMode ? CreatedTime : DateTime.Now,  // 编辑模式保留原创建时间
+                    CreatedTime = _isEditMode ? CreatedTime : DateTime.Now,
                     LastModifiedTime = DateTime.Now,
                     Items = Items.Select(item => new PlanItem
                     {
-                        Id = Guid.NewGuid().ToString(),  // 为新项目生成唯一标识
+                        Id = Guid.NewGuid().ToString(),
                         Index = item.Index,
                         ItemName = $"{item.PinLeft}-{item.PinRight}",
-                        CheckMode = item.CheckMode,
-                        LowerLimit = item.CheckMode == "Resistance" ? item.LowerLimit : null,
-                        UpperLimit = item.CheckMode == "Resistance" ? item.UpperLimit : null,
+                        CheckMode = item.CheckMode,  // ★ 中文 "导通" 或 "电阻值"
+                        LowerLimit = item.CheckMode == CheckModeConstants.Resistance ? item.LowerLimit : null,
+                        UpperLimit = item.CheckMode == CheckModeConstants.Resistance ? item.UpperLimit : null,
                         Unit = item.GetEffectiveUnit()
                     }).ToList()
                 };
@@ -414,21 +407,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 校验单个引脚格式是否合法
-        /// 合法格式：大写字母 A 或 B 开头，后接至少一位数字（如 A1、A20、B5、B15）
         /// </summary>
-        /// <param name="pin">引脚字符串</param>
-        /// <param name="side">引脚位置描述（左引脚/右引脚），用于错误提示</param>
-        /// <returns>null 表示合法，否则返回具体错误描述</returns>
         private static string? ValidateSinglePin(string pin, string side)
         {
             if (string.IsNullOrWhiteSpace(pin))
                 return $"{side}不能为空";
 
-            // 正则：^[AB]\d+$  —— 必须以大写A或B开头，后接至少一位数字，不含其他字符
             if (!System.Text.RegularExpressions.Regex.IsMatch(pin.Trim(), @"^[AB]\d+$"))
                 return $"{side} \"{pin.Trim()}\" 格式错误：必须以大写A或B开头+数字（如A1、B20）";
 
-            return null; // 校验通过
+            return null;
         }
 
         /// <summary>
@@ -449,13 +437,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 页面导航进入时触发
         /// 根据参数判断新增/编辑模式，加载已有方案数据
-        /// 订阅并自动连接扫描枪
         /// </summary>
         public Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.LogDebug("进入方案编辑页面");
 
-            // 判断新增/编辑模式
             if (parameter is PlanModel existingPlan)
             {
                 // 编辑模式：加载已有方案数据
@@ -467,7 +453,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 CreatedTime = existingPlan.CreatedTime;
                 LastModifiedTime = existingPlan.LastModifiedTime;
 
-                // 加载检测项目（适配新版方案字段）
+                // 加载检测项目
                 Items.Clear();
                 foreach (var item in existingPlan.Items)
                 {
@@ -477,7 +463,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         Index = item.Index,
                         PinLeft = parts.Length > 0 ? parts[0] : string.Empty,
                         PinRight = parts.Length > 1 ? parts[1] : string.Empty,
-                        CheckMode = item.CheckMode,
+                        CheckMode = item.CheckMode,  // 已是标准中文值
                         LowerLimit = item.LowerLimit,
                         UpperLimit = item.UpperLimit,
                         Unit = item.Unit
@@ -502,11 +488,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.LogInformation("新增模式");
             }
 
-            // ⭐ 重新订阅扫码事件（确保不重复订阅）
+            // ⭐ 重新订阅扫码事件
             _deviceManager.BarcodeScanned -= OnScannerBarcodeScanned;
             _deviceManager.BarcodeScanned += OnScannerBarcodeScanned;
 
-            // ⭐ 同步扫描枪连接状态（不再手动连接）
+            // ⭐ 同步扫描枪连接状态
             IsScannerConnected = _deviceManager.IsScannerConnected;
             ScannerStatusText = _deviceManager.ScannerStatusText;
 
@@ -515,13 +501,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 页面导航离开时触发
-        /// 必须取消订阅扫描枪事件，防止在其他页面扫码时误触发本页逻辑
         /// </summary>
         public Task OnNavigatedFromAsync()
         {
             _logger.LogDebug("离开方案编辑页面");
 
-            // ⭐ 页面离开时取消订阅扫码事件，避免在其他页面触发
             if (_deviceManager != null)
             {
                 _deviceManager.BarcodeScanned -= OnScannerBarcodeScanned;
@@ -536,6 +520,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         #endregion
+
+        
     }
 
     /// <summary>
@@ -544,6 +530,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
     ///
     /// 改动说明（方案需求变动）：
     /// CheckCondition 字段删除，改为 CheckMode + LowerLimit + UpperLimit + Unit
+    /// CheckMode 存储中文 "导通" / "电阻值"
     /// 通过 CheckMode 控制下限/上限/单位输入框的可用状态
     /// </summary>
     public partial class PlanItemViewModel : ObservableObject
@@ -561,12 +548,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private string _pinRight = string.Empty;
 
         /// <summary>
-        /// 检测方式
-        /// "Continuity" — 导通检测
-        /// "Resistance" — 电阻值检测
+        /// 检测方式（中文存储）
+        /// "导通" — 导通检测
+        /// "电阻值" — 电阻值检测
         /// </summary>
         [ObservableProperty]
-        private string _checkMode = "Continuity";
+        private string _checkMode = CheckModeConstants.Continuity;
 
         /// <summary>
         /// 电阻值下限（Ω），导通模式为 null
@@ -589,10 +576,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private string _unit = "OPEN";
 
         /// <summary>
+        /// 检测方式下拉选项（中文）
+        /// 绑定到 DataGrid ComboBox.ItemsSource
+        /// </summary>
+        public ObservableCollection<string> CheckModeOptions { get; } = new ObservableCollection<string>
+        {
+            CheckModeConstants.Continuity,
+            CheckModeConstants.Resistance
+        };
+
+        /// <summary>
         /// 是否为电阻值检测模式
         /// 用于控制下限/上限输入框的 IsEnabled 状态
         /// </summary>
-        public bool IsResistanceMode => CheckMode == "Resistance";
+        public bool IsResistanceMode => CheckMode == CheckModeConstants.Resistance;
 
         /// <summary>
         /// 完整的检测项目名称（如 A1-A2）
@@ -607,7 +604,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             return CheckMode switch
             {
-                "Resistance" => "Ω",
+                var m when m == CheckModeConstants.Resistance => "Ω",
                 _ => Unit // "OPEN" 或 "SHORT"
             };
         }
@@ -619,11 +616,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// </summary>
         partial void OnCheckModeChanged(string value)
         {
-            if (value == "Resistance")
+            if (value == CheckModeConstants.Resistance)
             {
                 Unit = "Ω";
             }
-            else // Continuity
+            else // 导通
             {
                 LowerLimit = null;
                 UpperLimit = null;

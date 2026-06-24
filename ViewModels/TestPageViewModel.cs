@@ -1,15 +1,7 @@
 ﻿// ============================================================
 // 文件: ViewModels/TestPageViewModel.cs
 // 描述: 运行界面 ViewModel
-// 改动说明:
-//   - 移除 ScannerIntegrationHelper 字段
-//   - 注入 IDeviceConnectionManager 替代手动连接硬件
-//   - 移除 AutoConnectHardwareAsync() 方法
-//   - 移除手动 ReconnectPlc/Scanner/Dmm 中的连接逻辑
-//   - 统一订阅 DeviceConnectionManager 的状态事件
-//   - 方案名称改为可编辑ComboBox，与机种联动过滤
-//   - 移除默认方案加载逻辑
-//   - 修复方案选择后检测项目列表不联动加载的问题
+// 改动: CheckMode 已存中文，LoadPlanItemsAsync 中无需转换
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -452,6 +444,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 从方案文件中加载检测项目
         /// 根据当前机种名称和方案名称精确匹配方案，无匹配时清空检测列表
+        /// ★ CheckMode 存储值已是中文，直接赋值即可
         /// </summary>
         private async Task LoadPlanItemsAsync()
         {
@@ -487,11 +480,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             foreach (var item in currentPlan.Items.OrderBy(i => i.Index))
             {
+                // ★ CheckMode 已是中文 "导通"/"电阻值"，无需转换
                 TestItems.Add(new TestItemModel
                 {
                     Index = item.Index,
                     ItemName = item.ItemName,
-                    CheckMode = item.CheckMode == "Resistance" ? "电阻值" : "导通",
+                    CheckMode = item.CheckMode,  // ★ 直接赋值
                     LowerLimitText = FormatLowerLimit(item),
                     UpperLimitText = FormatUpperLimit(item),
                     CheckResult = string.Empty,
@@ -500,14 +494,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+
         /// <summary>
         /// 格式化下限显示文本
-        /// 导通模式：显示期望状态（如 "OPEN(开路)"、"-"）
+        /// 导通模式：显示期望状态（如 "OPEN(开路)"）
         /// 电阻模式：显示数值下限
+        /// ★ 比较使用 CheckModeConstants 常量
         /// </summary>
         private static string FormatLowerLimit(PlanItem item)
         {
-            if (item.CheckMode == "Resistance")
+            if (item.CheckMode == CheckModeConstants.Resistance)
                 return item.LowerLimit?.ToString("F1") ?? "-";
 
             // 导通模式：显示期望结果
@@ -522,10 +518,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 格式化上限显示文本
         /// 导通模式：显示 "-"（无对应参数）
         /// 电阻模式：显示数值上限
+        /// ★ 比较使用 CheckModeConstants 常量
         /// </summary>
         private static string FormatUpperLimit(PlanItem item)
         {
-            if (item.CheckMode == "Resistance")
+            if (item.CheckMode == CheckModeConstants.Resistance)
                 return item.UpperLimit?.ToString("F1") ?? "-";
 
             // 导通模式：上限无意义，用 "-" 占位
@@ -799,7 +796,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 格式化测量结果显示文本
         /// 导通模式：值极大 → "开路"，值极小 → "短路"，否则显示数值
-        /// 电阻模式：显示具体阻值
+        /// 电阻值模式：显示具体阻值
+        /// ★ 比较使用 CheckModeConstants 常量
         /// </summary>
         private static string FormatMeasurementResult(MeasurementResult measurement, TestPointConfig testPoint)
         {
@@ -808,17 +806,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             double value = measurement.Value;
 
-            if (testPoint.CheckMode == "Continuity")
+            // ★ 使用中文常量比较
+            if (testPoint.CheckMode == CheckModeConstants.Continuity)
             {
                 // 导通模式：根据测量值判断物理状态
                 if (value > 1_000_000.0)     // > 1MΩ → 开路
                     return "开路";
                 if (value < 1.0)             // < 1Ω → 短路
                     return "短路";
-                return $"{value:F4} Ω";       // 中间值显示数值
+                return $"{value:F4} Ω";      // 中间值显示数值
             }
 
-            // 电阻模式：显示实测阻值
+            // 电阻值模式：显示实测阻值
             return $"{value:F4} Ω";
         }
 

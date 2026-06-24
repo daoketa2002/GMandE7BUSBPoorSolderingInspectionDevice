@@ -324,11 +324,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// 判定测量结果
         ///
         /// 判定逻辑（方案需求变动）：
-        ///   导通模式 (Continuity)：
+        ///   导通模式：
         ///     - Unit="OPEN"（期望开路）：实测值 > 1MΩ → OK，否则 NG
         ///     - Unit="SHORT"（期望短路）：实测值 < 1Ω → OK，否则 NG
-        ///   电阻模式 (Resistance)：
+        ///   电阻值模式：
         ///     - LowerLimit ≤ 实测值 ≤ UpperLimit → OK，否则 NG
+        /// ★ CheckMode 比较使用中文常量 CheckModeConstants
         /// </summary>
         private string JudgeResult(MeasurementResult measurement, TestPointConfig testPoint)
         {
@@ -340,7 +341,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             double value = measurement.Value;
 
-            if (testPoint.CheckMode == "Resistance")
+            // ★ 使用中文常量比较
+            if (testPoint.CheckMode == CheckModeConstants.Resistance)
             {
                 // ─── 电阻值检测：判断实测值是否在下限～上限范围内 ───
                 double lower = testPoint.LowerLimit ?? 0;

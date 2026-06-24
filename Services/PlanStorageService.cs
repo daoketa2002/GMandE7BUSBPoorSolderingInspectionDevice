@@ -143,6 +143,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 从JSON文件加载单个方案
+        /// ★ 改动：加载后兼容转换旧数据中的英文 CheckMode → 中文
         /// </summary>
         /// <param name="filePath">JSON文件路径</param>
         /// <returns>方案对象，如果文件不存在或解析失败返回null</returns>
@@ -165,6 +166,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     // 从文件名反推方案名（去除.json扩展名）
                     var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(filePath);
                     plan.PlanName = fileNameWithoutExtension ?? plan.PlanName;
+
+                    // ★ 兼容旧数据：将英文 CheckMode 统一转为中文
+                    NormalizeCheckModeInPlan(plan);
                 }
 
                 return plan;
@@ -174,6 +178,46 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 _logger.LogWarning(ex, "加载方案文件失败: {FilePath}", filePath);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 规范化方案中所有检测项目的 CheckMode 值
+        /// 兼容旧数据：英文 "Continuity"/"Resistance" → 中文 "导通"/"电阻值"
+        /// </summary>
+        /// <param name="plan">方案对象</param>
+        private static void NormalizeCheckModeInPlan(PlanModel plan)
+        {
+            if (plan.Items == null || plan.Items.Count == 0)
+                return;
+
+            foreach (var item in plan.Items)
+            {
+                item.CheckMode = NormalizeCheckMode(item.CheckMode);
+            }
+        }
+
+        /// <summary>
+        /// 单个 CheckMode 值规范化
+        /// 英文值自动转中文，中文值原样返回
+        /// </summary>
+        /// <param name="rawValue">原始值</param>
+        /// <returns>标准中文值</returns>
+        private static string NormalizeCheckMode(string rawValue)
+        {
+            if (string.IsNullOrWhiteSpace(rawValue))
+                return CheckModeConstants.Continuity;
+
+            return rawValue.Trim() switch
+            {
+                // 旧版英文 → 中文
+                "Continuity" => CheckModeConstants.Continuity,
+                "Resistance" => CheckModeConstants.Resistance,
+                // 已经是中文 → 原样返回
+                "导通" => CheckModeConstants.Continuity,
+                "电阻值" => CheckModeConstants.Resistance,
+                // 未知值 → 保留原样（避免数据丢失）
+                _ => rawValue.Trim()
+            };
         }
 
         /// <summary>
