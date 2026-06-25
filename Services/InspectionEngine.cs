@@ -24,6 +24,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     /// 5. 判定 OK/NG → 写入PLC
     /// 6. 切换下一个测试点 → 循环
     /// 7. 全部完成 → 记录结果
+    /// 
+    /// 事件时序：
+    ///   StepStarted → 继电器切换 → 延时稳定 → 万用表测量 → 判定 → StepCompleted
+    ///   所有步骤完成后 → InspectionCompleted
     /// </summary>
     public class InspectionEngine : IAsyncDisposable, IDisposable
     {
@@ -56,7 +60,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public event EventHandler<InspectionStateChangedEventArgs>? StateChanged;
 
         /// <summary>
+        /// 单步检测开始（在切换继电器之前触发，用于驱动 UI 显示"测试中"状态）
+        /// 触发时机：确定当前测试点、输出日志之前
+        /// ViewModel 收到此事件后，将对应行 CheckResult 更新为"测试中"
+        /// </summary>
+        public event EventHandler<StepStartedEventArgs>? StepStarted;
+
+        /// <summary>
         /// 单步检测完成
+        /// 触发时机：万用表测量完成、判定结果已生成之后
+        /// ViewModel 收到此事件后，将对应行 CheckResult 更新为实际测量值、Judgment 更新为 OK/NG
         /// </summary>
         public event EventHandler<StepCompletedEventArgs>? StepCompleted;
 
@@ -127,6 +140,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 启动检测流程
+        /// 
+        /// TODO: 当前由外部手动调用（如 ViewModel 通过某种信号触发）
+        /// 实际部署时，此方法应由 PLC 启动信号触发：
+        ///   1. PLC 通过 Modbus 轮询检测到启动信号（如 M0 线圈置位）
+        ///   2. 上位机读取条码后调用 RunInspectionAsync
+        ///   3. 具体触发路径待硬件联调时确认
         /// </summary>
         public async Task<InspectionResult> RunInspectionAsync(
             string barcode,
@@ -170,12 +189,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         _inspectionCts.Token.ThrowIfCancellationRequested();
 
                         var testPoint = _config.TestPoints[i];
+
+                        // ═══════════════════════════════════════════════════════
+                        // ⭐ 通知 ViewModel：当前项目即将开始检测
+                        // 触发时机：在继电器切换之前，确保操作员第一时间看到"测试中"
+                        // ViewModel 收到此事件后，将 TestItems[i].CheckResult 设为"测试中"
+                        // ═══════════════════════════════════════════════════════
+                        StepStarted?.Invoke(this, new StepStartedEventArgs(i, testPoint));
+
                         LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode}/{testPoint.ModeValue})");
 
                         // 2.1 切换继电器到当前测试点
                         await SwitchToTestPointAsync(i, _inspectionCts.Token).ConfigureAwait(false);
 
                         // 2.2 短暂延时等待继电器稳定
+                        // 稳定时间由 InspectionConfig.RelaySettleTimeMs 控制，默认150ms
+                        // 可根据实际硬件响应速度调整
                         await Task.Delay(_config.RelaySettleTimeMs, _inspectionCts.Token).ConfigureAwait(false);
 
                         // 2.3 万用表测量
@@ -205,6 +234,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         await WriteJudgmentToPlcAsync(i, judgment, _inspectionCts.Token).ConfigureAwait(false);
 
                         // 2.6 触发单步完成事件
+                        // ViewModel 收到此事件后，将 CheckResult 设为实际测量值、Judgment 设为 OK/NG
                         StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
                     }
 
@@ -330,6 +360,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         ///   电阻值模式：
         ///     - LowerLimit ≤ 实测值 ≤ UpperLimit → OK，否则 NG
         /// ★ CheckMode 比较使用中文常量 CheckModeConstants
+        /// 
+        /// 阈值说明：
+        ///   导通判定的 1Ω/1MΩ 阈值基于通用工业标准，可根据实际需要调整
         /// </summary>
         private string JudgeResult(MeasurementResult measurement, TestPointConfig testPoint)
         {
@@ -528,6 +561,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 继电器稳定时间 (ms)
+        /// 默认150ms，可根据实际继电器响应速度调整
+        /// 设置过短可能导致测量时继电器未完全闭合，设置过长会影响检测节拍
         /// </summary>
         public int RelaySettleTimeMs { get; set; } = 150;
     }
@@ -630,6 +665,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
     #region 事件参数
 
+    /// <summary>
+    /// 检测状态变更事件参数
+    /// </summary>
     public class InspectionStateChangedEventArgs : EventArgs
     {
         public InspectionState OldState { get; }
@@ -642,10 +680,57 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
     }
 
+    /// <summary>
+    /// 单步检测开始事件参数
+    /// 在 InspectionEngine 切换到指定测试点、开始测量之前触发
+    /// ViewModel 收到此事件后，将对应行 CheckResult 更新为"测试中"
+    /// </summary>
+    public class StepStartedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// 当前步骤索引（0-based，对应 TestItems 集合的索引）
+        /// 用于 ViewModel 定位 DataGrid 中的目标行
+        /// </summary>
+        public int StepIndex { get; }
+
+        /// <summary>
+        /// 即将检测的测试点配置（包含项目名称、检测方式、期望值等信息）
+        /// </summary>
+        public TestPointConfig TestPoint { get; }
+
+        /// <summary>
+        /// 构造单步检测开始事件参数
+        /// </summary>
+        /// <param name="stepIndex">当前步骤索引（0-based）</param>
+        /// <param name="testPoint">即将检测的测试点配置</param>
+        /// <exception cref="ArgumentNullException">testPoint 为 null 时抛出</exception>
+        public StepStartedEventArgs(int stepIndex, TestPointConfig testPoint)
+        {
+            StepIndex = stepIndex;
+            TestPoint = testPoint ?? throw new ArgumentNullException(nameof(testPoint));
+        }
+    }
+
+    /// <summary>
+    /// 单步检测完成事件参数
+    /// 在万用表测量完成、判定结果生成后触发
+    /// ViewModel 收到此事件后，将 CheckResult 设为实际测量值、Judgment 设为 OK/NG
+    /// </summary>
     public class StepCompletedEventArgs : EventArgs
     {
+        /// <summary>
+        /// 当前步骤索引（0-based）
+        /// </summary>
         public int StepIndex { get; }
+
+        /// <summary>
+        /// 已完成的测试点配置（包含判定结果 Judgment）
+        /// </summary>
         public TestPointConfig TestPoint { get; }
+
+        /// <summary>
+        /// 万用表测量结果（包含实际测量值、有效性等信息）
+        /// </summary>
         public MeasurementResult Measurement { get; }
 
         public StepCompletedEventArgs(int stepIndex, TestPointConfig testPoint, MeasurementResult measurement)
@@ -656,8 +741,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
     }
 
+    /// <summary>
+    /// 全部检测完成事件参数
+    /// </summary>
     public class InspectionCompletedEventArgs : EventArgs
     {
+        /// <summary>
+        /// 完整的检测结果（包含所有统计数据）
+        /// </summary>
         public InspectionResult Result { get; }
 
         public InspectionCompletedEventArgs(InspectionResult result)

@@ -1,7 +1,11 @@
 ﻿// ============================================================
 // 文件: ViewModels/TestPageViewModel.cs
 // 描述: 运行界面 ViewModel
-// 改动: CheckMode 已存中文，LoadPlanItemsAsync 中无需转换
+// 改动: 
+//   1. 新增 OnStepStarted 事件处理 —— 标记当前检测项目为"测试中"
+//   2. LoadPlanItemsAsync 初始化 CheckResult = "未测试"
+//   3. ResetToReadyState 恢复 CheckResult = "未测试"
+//   4. 事件订阅/取消订阅生命周期管理
 // ============================================================
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -445,6 +449,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 从方案文件中加载检测项目
         /// 根据当前机种名称和方案名称精确匹配方案，无匹配时清空检测列表
         /// ★ CheckMode 存储值已是中文，直接赋值即可
+        /// 
+        /// 状态初始化：
+        ///   每个检测项目 CheckResult 初始化为 "未测试"
+        ///   后续由 InspectionEngine 事件驱动状态变更：
+        ///     StepStarted  → "测试中"
+        ///     StepCompleted → 实际测量值 + OK/NG
         /// </summary>
         private async Task LoadPlanItemsAsync()
         {
@@ -488,7 +498,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     CheckMode = item.CheckMode,  // ★ 直接赋值
                     LowerLimitText = FormatLowerLimit(item),
                     UpperLimitText = FormatUpperLimit(item),
-                    CheckResult = string.Empty,
+                    CheckResult = "未测试",       // ⭐ 初始化状态：检测未开始
                     Judgment = string.Empty
                 });
             }
@@ -628,15 +638,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 回到准备态（保存成功后调用）
-        /// 清空输入信息，保留统计数据
+        /// 回到准备态（保存成功后或操作员取消保存后调用）
+        /// 清空输入信息，保留统计数据，恢复检测项目列表为初始状态
+        /// 
+        /// 状态恢复：
+        ///   每个检测项目 CheckResult → "未测试"
+        ///   Judgment → 清空
+        ///   注意：不重置 CheckMode/LowerLimitText/UpperLimitText，这些来自方案配置
         /// </summary>
         private void ResetToReadyState()
         {
             SerialNumber = string.Empty;
             foreach (var item in TestItems)
             {
-                item.CheckResult = string.Empty;
+                // ⭐ 恢复为初始状态："未测试"
+                // 不重置 CheckMode/LowerLimitText/UpperLimitText，这些来自方案配置
+                item.CheckResult = "未测试";
                 item.Judgment = string.Empty;
             }
             UiState = TestUIState.CanStart;
@@ -733,7 +750,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             if (_inspectionEngine != null)
             {
+                // ═══════════════════════════════════════════════════════
+                // 订阅 InspectionEngine 的全部事件
+                // 事件时序：StateChanged → StepStarted → StepCompleted → ... → InspectionCompleted
+                // ═══════════════════════════════════════════════════════
                 _inspectionEngine.StateChanged += OnInspectionStateChanged;
+                _inspectionEngine.StepStarted += OnStepStarted;        // ⭐ 新增：检测步骤开始
                 _inspectionEngine.StepCompleted += OnStepCompleted;
                 _inspectionEngine.InspectionCompleted += OnInspectionCompleted;
                 _inspectionEngine.LogMessage += (s, msg) => AddLog(msg);
@@ -765,6 +787,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             });
         }
 
+        /// <summary>
+        /// 检测流程状态变更回调 —— 由 InspectionEngine.StateChanged 事件触发
+        /// 将引擎内部状态映射为 UI 状态，驱动界面锁定/解锁
+        /// </summary>
         private void OnInspectionStateChanged(object? sender, InspectionStateChangedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -780,6 +806,49 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             });
         }
 
+        /// <summary>
+        /// 检测步骤开始回调 —— 由 InspectionEngine.StepStarted 事件触发
+        /// 将当前检测项 CheckResult 标记为"测试中"，让操作员看到检测进度
+        /// 
+        /// 状态流转：
+        ///   未测试 → 测试中（本方法）→ 实际测量值+OK/NG（OnStepCompleted）
+        /// 
+        /// 执行线程：InspectionEngine 工作线程 → 通过 Dispatcher 调度到 UI 线程
+        /// </summary>
+        /// <param name="sender">事件源（InspectionEngine 实例）</param>
+        /// <param name="e">事件参数，包含 StepIndex 和 TestPoint</param>
+        private void OnStepStarted(object? sender, StepStartedEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                // 根据 StepIndex 从 TestItems 集合中获取对应的行
+                // StepIndex 为 0-based，与 TestItems 索引一一对应
+                var item = TestItems.ElementAtOrDefault(e.StepIndex);
+                if (item != null)
+                {
+                    // 标记为"测试中" —— UI DataGrid 会实时反映此变化
+                    item.CheckResult = "测试中";
+                    // 清除上一轮的判定残留（确保不会显示旧结果）
+                    item.Judgment = string.Empty;
+
+                    // 输出日志到界面终端，方便操作员查看检测进度
+                    AddLog($"🔍 [{e.StepIndex + 1}/{TestItems.Count}] {e.TestPoint.Name} 检测中...");
+                }
+                else
+                {
+                    // 防御性编程：索引越界时记录警告（正常流程不应出现）
+                    _logger.LogWarning("StepStarted 事件中的 StepIndex={StepIndex} 超出 TestItems 范围（Count={Count}）",
+                        e.StepIndex, TestItems.Count);
+                }
+            });
+        }
+
+        /// <summary>
+        /// 检测步骤完成回调 —— 由 InspectionEngine.StepCompleted 事件触发
+        /// 与 OnStepStarted 配合使用，形成完整的状态流转：
+        ///   未测试 → 测试中（OnStepStarted）→ 实际测量值+OK/NG（本方法）
+        /// 将万用表实际测量值写入 CheckResult，将判定结果写入 Judgment
+        /// </summary>
         private void OnStepCompleted(object? sender, StepCompletedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -821,6 +890,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             return $"{value:F4} Ω";
         }
 
+        /// <summary>
+        /// 全部检测完成回调 —— 由 InspectionEngine.InspectionCompleted 事件触发
+        /// 汇总结果、更新统计、弹窗确认保存
+        /// </summary>
         private void OnInspectionCompleted(object? sender, InspectionCompletedEventArgs e)
         {
             Application.Current.Dispatcher.Invoke(async () =>
@@ -995,6 +1068,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #region IDisposable
 
+        /// <summary>
+        /// 释放所有资源，取消所有事件订阅
+        /// 确保不产生内存泄漏
+        /// </summary>
         public void Dispose()
         {
             _clockTimer?.Stop();
@@ -1007,9 +1084,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
             }
 
+            // ⭐ 取消订阅 InspectionEngine 的所有事件，防止内存泄漏
             if (_inspectionEngine != null)
             {
                 _inspectionEngine.StateChanged -= OnInspectionStateChanged;
+                _inspectionEngine.StepStarted -= OnStepStarted;      // ⭐ 新增
                 _inspectionEngine.StepCompleted -= OnStepCompleted;
                 _inspectionEngine.InspectionCompleted -= OnInspectionCompleted;
             }

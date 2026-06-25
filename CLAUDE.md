@@ -93,8 +93,8 @@ dotnet run
 │   ├── 设备设置/
 │   │   └── DeviceSettings.json
 │   ├── 方案设置/                         # 方案 JSON 文件
-│   │   ├── T998248391/
-│   │   │   ├── 方案A.json
+│   │   ├── T998248391/					# 机种文件夹
+│   │   │   ├── 方案A.json				# 方案文件（文件名=方案名）
 │   │   │   └── 方案B.json
 │   │   └── ...
 │   ├── currentOperator.json             # 当前作业员
