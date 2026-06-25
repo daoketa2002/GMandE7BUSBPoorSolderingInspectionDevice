@@ -1,30 +1,21 @@
-﻿
 using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 {
     /// <summary>
     /// PasswordDialog.xaml 的交互逻辑
+    /// 支持多上下文：根据 PasswordDialogContext 展示不同文案和强调色
     /// </summary>
     public partial class PasswordDialog : Window
     {
         private readonly PasswordDialogViewModel _viewModel;
 
-        public PasswordDialog()
+        private PasswordDialog(PasswordDialogContext context)
         {
             InitializeComponent();
-            _viewModel = new PasswordDialogViewModel(this);
+            _viewModel = new PasswordDialogViewModel(this, context);
             DataContext = _viewModel;
 
             // 绑定密码框的密码到 ViewModel
@@ -33,7 +24,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
                 _viewModel.Password = PasswordBox.Password;
             };
 
-            // ✅ 监听 ViewModel 的清空请求，同步清空密码框
+            // 监听 ViewModel 的清空请求，同步清空密码框
             _viewModel.PasswordCleared += OnPasswordCleared;
         }
 
@@ -44,12 +35,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         }
 
         /// <summary>
-        /// 静态方法：显示密码验证弹窗
+        /// 显示密码验证弹窗
         /// </summary>
+        /// <param name="owner">父窗口</param>
+        /// <param name="context">弹窗上下文（决定文案和颜色）</param>
         /// <returns>true=验证通过，false=验证失败或取消</returns>
-        public static bool ShowPasswordDialog(Window owner)
+        public static bool ShowPasswordDialog(Window owner, PasswordDialogContext context = PasswordDialogContext.SystemSettings)
         {
-            var dialog = new PasswordDialog
+            var dialog = new PasswordDialog(context)
             {
                 Owner = owner
             };

@@ -3,13 +3,26 @@ using CommunityToolkit.Mvvm.Input;
 using Serilog;
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Windows;
+using System.Windows.Media;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     /// <summary>
+    /// 密码弹窗上下文 —— 用于区分从哪个功能入口打开
+    /// 不同上下文显示不同的图标、标题、说明文字和强调色
+    /// </summary>
+    public enum PasswordDialogContext
+    {
+        /// <summary>系统设置入口</summary>
+        SystemSettings,
+        /// <summary>方案设定入口</summary>
+        PlanSettings
+    }
+
+    /// <summary>
     /// 密码输入弹窗的 ViewModel
+    /// 支持多上下文：根据 PasswordDialogContext 动态展示不同文案和强调色
     /// </summary>
     public partial class PasswordDialogViewModel : ObservableObject
     {
@@ -35,10 +48,45 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             "ROOT"
         };
 
-        public PasswordDialogViewModel(Window dialog)
+        // ══════════════════════════════════════════════════════════
+        //  上下文相关属性 —— 不同入口显示不同文案和颜色
+        // ══════════════════════════════════════════════════════════
+
+        /// <summary>对话框标题（如 "系统设置"、"方案设定"）</summary>
+        public string DialogTitle { get; }
+
+        /// <summary>图标文字（如 "⚙"、"📋"）</summary>
+        public string IconText { get; }
+
+        /// <summary>说明文字（如 "需要管理员权限才能访问系统设置"）</summary>
+        public string DescriptionText { get; }
+
+        /// <summary>强调色（确定按钮背景、密码框焦点边框等）</summary>
+        public Brush AccentBrush { get; }
+
+        public PasswordDialogViewModel(Window dialog, PasswordDialogContext context = PasswordDialogContext.SystemSettings)
         {
             _dialog = dialog ?? throw new ArgumentNullException(nameof(dialog));
             _logger = Log.ForContext<PasswordDialogViewModel>();
+
+            // 根据上下文初始化文案和颜色
+            (DialogTitle, IconText, DescriptionText, AccentBrush) = context switch
+            {
+                PasswordDialogContext.PlanSettings => (
+                    "方案设定",
+                    "📋",
+                    "需要管理员权限才能访问方案设定",
+                    new SolidColorBrush(Color.FromRgb(0x34, 0x98, 0xDB)) // 蓝色 #3498DB
+                ),
+                _ => (
+                    "系统设置",
+                    "⚙",
+                    "需要管理员权限才能访问系统设置",
+                    new SolidColorBrush(Color.FromRgb(0xE6, 0x7E, 0x22)) // 橙色 #E67E22
+                )
+            };
+
+            _dialog.Title = DialogTitle;
         }
 
         /// <summary>

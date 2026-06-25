@@ -87,7 +87,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var mainWindow = Application.Current.MainWindow;
                 if (mainWindow == null) return;
 
-                bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow);
+                bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow, PasswordDialogContext.PlanSettings);
                 if (isPasswordVerified)
                 {
                     _logger.Information("密码验证通过，导航到方案设定界面");
@@ -133,7 +133,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var mainWindow = Application.Current.MainWindow;
                 if (mainWindow == null) return;
 
-                bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow);
+                bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow, PasswordDialogContext.SystemSettings);
                 if (isPasswordVerified)
                 {
                     _logger.Information("密码验证通过，导航到系统设置界面");
