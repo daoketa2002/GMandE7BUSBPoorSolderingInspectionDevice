@@ -155,6 +155,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     return null;
 
                 var json = File.ReadAllText(filePath, Encoding.UTF8);
+
+                // ★ 兼容迁移：旧 JSON 字段 "Unit" → "ModeValue"
+                // 仅匹配 JSON key 位置的 "Unit":（避免误伤值中的 Unit）
+                json = System.Text.RegularExpressions.Regex.Replace(
+                    json,
+                    "\"Unit\"\\s*:",
+                    "\"ModeValue\":",
+                    System.Text.RegularExpressions.RegexOptions.None);
+
                 var plan = JsonSerializer.Deserialize<PlanModel>(json, _jsonOptions);
 
                 if (plan != null)

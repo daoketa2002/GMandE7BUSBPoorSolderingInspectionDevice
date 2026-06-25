@@ -194,7 +194,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 PinLeft = string.Empty,
                 PinRight = string.Empty,
                 CheckMode = CheckModeConstants.Continuity,  // ★ 使用常量
-                Unit = "OPEN"
+                ModeValue = "OPEN"
             };
             Items.Add(newItem);
             ReindexItems();
@@ -359,7 +359,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         CheckMode = item.CheckMode,  // ★ 中文 "导通" 或 "电阻值"
                         LowerLimit = item.CheckMode == CheckModeConstants.Resistance ? item.LowerLimit : null,
                         UpperLimit = item.CheckMode == CheckModeConstants.Resistance ? item.UpperLimit : null,
-                        Unit = item.GetEffectiveUnit()
+                        ModeValue = item.CheckMode == CheckModeConstants.Resistance
+                            ? null                          // 电阻模式：实际值运行时由万用表填充
+                            : item.ModeValue                // 导通模式：保存用户选择的 OPEN/SHORT
                     }).ToList()
                 };
 
@@ -466,7 +468,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         CheckMode = item.CheckMode,  // 已是标准中文值
                         LowerLimit = item.LowerLimit,
                         UpperLimit = item.UpperLimit,
-                        Unit = item.Unit
+                        ModeValue = item.ModeValue
                     });
                 }
 
@@ -568,12 +570,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private double? _upperLimit;
 
         /// <summary>
-        /// 物理单位或期望结果
+        /// 模式值（替代旧字段 Unit）
         /// 导通模式： "OPEN"（期望开路）或 "SHORT"（期望短路）
-        /// 电阻模式：固定 "Ω"
+        /// 电阻值模式： null（实际值在运行时由万用表填充）
+        /// 界面绑定到"下限"列的条件渲染控件
         /// </summary>
         [ObservableProperty]
-        private string _unit = "OPEN";
+        private string? _modeValue = "OPEN";
 
         /// <summary>
         /// 检测方式下拉选项（中文）
@@ -597,40 +600,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public string FullItemName => $"{PinLeft}-{PinRight}";
 
         /// <summary>
-        /// 获取有效的单位文本
-        /// 导通模式返回 Unit（OPEN/SHORT），电阻模式固定返回 "Ω"
+        /// 是否为导通检测模式
+        /// 用于"下限"列条件渲染：导通 → ComboBox，电阻值 → TextBox
         /// </summary>
-        public string GetEffectiveUnit()
-        {
-            return CheckMode switch
-            {
-                var m when m == CheckModeConstants.Resistance => "Ω",
-                _ => Unit // "OPEN" 或 "SHORT"
-            };
-        }
+        public bool IsContinuityMode => CheckMode == CheckModeConstants.Continuity;
 
         /// <summary>
         /// 检查方式变更时联动
-        /// 切换到电阻模式时自动设置 Unit="Ω"
-        /// 切换到导通模式时清空上下限并恢复 Unit="OPEN"
+        /// 切换到电阻模式：清空 ModeValue（运行时由万用表填充），保留上下限作为阈值配置
+        /// 切换到导通模式：清空上下限（导通模式下无阈值），ModeValue 初始化为 "OPEN"
         /// </summary>
         partial void OnCheckModeChanged(string value)
         {
             if (value == CheckModeConstants.Resistance)
             {
-                Unit = "Ω";
+                // 电阻值模式：ModeValue 由运行时测量值填充，编辑期置为 null
+                ModeValue = null;
             }
             else // 导通
             {
+                // 导通模式：清空电阻值阈值
                 LowerLimit = null;
                 UpperLimit = null;
-                if (Unit != "OPEN" && Unit != "SHORT")
+                // ModeValue 恢复为合法导通值
+                if (ModeValue != "OPEN" && ModeValue != "SHORT")
                 {
-                    Unit = "OPEN";
+                    ModeValue = "OPEN";
                 }
             }
-            // 通知 IsResistanceMode 已变更（手动触发 UI 刷新）
+            // 通知条件渲染绑定属性已变更
             OnPropertyChanged(nameof(IsResistanceMode));
+            OnPropertyChanged(nameof(IsContinuityMode));
         }
     }
 }

@@ -327,30 +327,55 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
+                    <!-- ★ "下限"列：根据 CheckMode 条件渲染
+                         导通模式 → ComboBox 绑定 ModeValue（OPEN/SHORT）
+                         电阻值模式 → TextBox 绑定 LowerLimit（配置阈值） -->
                     <DataGridTemplateColumn Header="下限 (Ω)" Width="130">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
-                                         IsEnabled="{Binding IsResistanceMode}"
-                                         FontSize="15"
-                                         Height="30"
-                                         VerticalContentAlignment="Center"
-                                         BorderThickness="1"
-                                         BorderBrush="#CED4DA"
-                                         HorizontalContentAlignment="Center">
-                                    <TextBox.Style>
-                                        <Style TargetType="TextBox">
-                                            <Setter Property="Background" Value="White"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsResistanceMode}" Value="False">
-                                                    <Setter Property="Background" Value="#E9ECEF"/>
-                                                    <Setter Property="Foreground" Value="#ADB5BD"/>
-                                                    <Setter Property="Text" Value=""/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBox.Style>
-                                </TextBox>
+                                <Grid>
+                                    <!-- 导通模式：ComboBox（OPEN / SHORT） -->
+                                    <ComboBox IsEditable="True"
+                                              IsReadOnly="True"
+                                              Text="{Binding ModeValue, UpdateSourceTrigger=PropertyChanged}"
+                                              ItemsSource="{Binding DataContext.ContinuityUnitOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                              FontSize="15"
+                                              Height="30"
+                                              VerticalContentAlignment="Center"
+                                              BorderThickness="1"
+                                              BorderBrush="#CED4DA">
+                                        <ComboBox.Style>
+                                            <Style TargetType="ComboBox">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CheckMode}" Value="导通">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ComboBox.Style>
+                                    </ComboBox>
+
+                                    <!-- 电阻值模式：TextBox（输入下限阈值数值） -->
+                                    <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
+                                             FontSize="15"
+                                             Height="30"
+                                             VerticalContentAlignment="Center"
+                                             BorderThickness="1"
+                                             BorderBrush="#CED4DA"
+                                             HorizontalContentAlignment="Center">
+                                        <TextBox.Style>
+                                            <Style TargetType="TextBox">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CheckMode}" Value="电阻值">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBox.Style>
+                                    </TextBox>
+                                </Grid>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
@@ -383,38 +408,6 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTemplateColumn Header="单位" Width="120">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <ComboBox IsEditable="True"
-                                          IsReadOnly="True"
-                                          Text="{Binding Unit, UpdateSourceTrigger=PropertyChanged}"
-                                          FontSize="15"
-                                          Height="30"
-                                          VerticalContentAlignment="Center"
-                                          BorderThickness="1"
-                                          BorderBrush="#CED4DA">
-                                    <ComboBox.Style>
-                                        <Style TargetType="ComboBox">
-                                            <Setter Property="IsEnabled" Value="True"/>
-                                            <Style.Triggers>
-                                                <!-- 电阻模式固定为 Ω，下拉禁用 -->
-                                                <DataTrigger Binding="{Binding CheckMode}" Value="Resistance">
-                                                    <Setter Property="IsEnabled" Value="False"/>
-                                                    <Setter Property="ItemsSource"
-                                                            Value="{Binding DataContext.CheckModeOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding CheckMode}" Value="Continuity">
-                                                    <Setter Property="ItemsSource"
-                                                            Value="{Binding DataContext.ContinuityUnitOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </ComboBox.Style>
-                                </ComboBox>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
                 </DataGrid.Columns>
             </DataGrid>
         </Grid>

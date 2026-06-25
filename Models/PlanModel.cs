@@ -57,9 +57,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
     ///
     /// 改动说明（方案需求变动）：
     /// 将旧版单一"检查条件"字段升级为结构化检测模式：
-    /// - 导通：Unit = "OPEN"(开路) 或 "SHORT"(短路)，无上下限
-    /// - 电阻值：Unit = "Ω"，需配置 LowerLimit / UpperLimit
+    /// - 导通：ModeValue = "OPEN"(开路) 或 "SHORT"(短路)，无上下限
+    /// - 电阻值：ModeValue = 万用表实际测量值（运行时填充），需配置 LowerLimit / UpperLimit
     /// - ★ CheckMode 存储中文值 "导通" / "电阻值"（JSON直接可读）
+    /// - ★ Unit 字段已删除，由 ModeValue 替代
     /// </summary>
     public class PlanItem
     {
@@ -109,13 +110,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         [JsonPropertyName("UpperLimit")]
         public double? UpperLimit { get; set; }
 
-        /// <summary>
-        /// 物理单位或期望结果
+                /// <summary>
+        /// 模式值（替代旧字段 Unit）
         /// 导通模式： "OPEN"(期望开路) 或 "SHORT"(期望短路)
-        /// 电阻模式： "Ω"
+        /// 电阻值模式： 万用表实际测量值（方案编辑时为 null，运行时由检测引擎填充）
+        /// 界面"下限"列根据 CheckMode 条件渲染：
+        ///   导通 → ComboBox 绑定 ModeValue（OPEN/SHORT）
+        ///   电阻值 → TextBox 绑定 LowerLimit（配置阈值）
         /// </summary>
-        [JsonPropertyName("Unit")]
-        public string Unit { get; set; } = "OPEN";
+        [JsonPropertyName("ModeValue")]
+        public string? ModeValue { get; set; } = "OPEN";
     }
 
     /// <summary>

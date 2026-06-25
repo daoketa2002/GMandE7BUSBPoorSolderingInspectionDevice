@@ -506,8 +506,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (item.CheckMode == CheckModeConstants.Resistance)
                 return item.LowerLimit?.ToString("F1") ?? "-";
 
-            // 导通模式：显示期望结果
-            return item.Unit switch
+            // 导通模式：显示期望结果（ModeValue 替代旧 Unit 字段）
+            return item.ModeValue switch
             {
                 "SHORT" => "SHORT(短路)",
                 _ => "OPEN(开路)"

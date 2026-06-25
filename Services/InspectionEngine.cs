@@ -170,7 +170,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         _inspectionCts.Token.ThrowIfCancellationRequested();
 
                         var testPoint = _config.TestPoints[i];
-                        LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode}/{testPoint.Unit})");
+                        LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode}/{testPoint.ModeValue})");
 
                         // 2.1 切换继电器到当前测试点
                         await SwitchToTestPointAsync(i, _inspectionCts.Token).ConfigureAwait(false);
@@ -197,7 +197,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                             failCount++;
                             var detail = testPoint.CheckMode == "Resistance"
                                 ? $" (范围:{testPoint.LowerLimit}~{testPoint.UpperLimit}Ω)"
-                                : $" (期望:{testPoint.Unit})";
+                                : $" (期望:{testPoint.ModeValue})";
                             LogInfo($"  ❌ {testPoint.Name}: {measurement.Value:F4}Ω → NG{detail}");
                         }
 
@@ -325,8 +325,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         ///
         /// 判定逻辑（方案需求变动）：
         ///   导通模式：
-        ///     - Unit="OPEN"（期望开路）：实测值 > 1MΩ → OK，否则 NG
-        ///     - Unit="SHORT"（期望短路）：实测值 < 1Ω → OK，否则 NG
+        ///     - ModeValue="OPEN"（期望开路）：实测值 > 1MΩ → OK，否则 NG
+        ///     - ModeValue="SHORT"（期望短路）：实测值 < 1Ω → OK，否则 NG
         ///   电阻值模式：
         ///     - LowerLimit ≤ 实测值 ≤ UpperLimit → OK，否则 NG
         /// ★ CheckMode 比较使用中文常量 CheckModeConstants
@@ -356,7 +356,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             else
             {
                 // ─── 导通检测 ───
-                if (testPoint.Unit == "SHORT")
+                if (testPoint.ModeValue == "SHORT")
                 {
                     // 期望短路：实测值 < 1Ω → OK
                     return value < 1.0 ? "OK" : "NG";
@@ -537,7 +537,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     /// 每个测试点对应方案中的一个 PlanItem
     ///
     /// 改动说明（方案需求变动）：
-    /// 新增 CheckMode / LowerLimit / UpperLimit / Unit 字段
+    /// 新增 CheckMode / LowerLimit / UpperLimit / ModeValue 字段
     /// 判定逻辑从全局阈值改为每项独立阈值
     /// </summary>
     public class TestPointConfig
@@ -558,10 +558,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public double? UpperLimit { get; set; }
 
         /// <summary>
-        /// 导通模式期望结果： "OPEN"（期望开路）或 "SHORT"（期望短路）
-        /// 电阻模式： "Ω"
+        /// 模式值（替代旧字段 Unit）
+        /// 导通模式： "OPEN"（期望开路）或 "SHORT"（期望短路）
+        /// 电阻值模式： 万用表实际测量值（运行时由检测引擎填充）
         /// </summary>
-        public string Unit { get; set; } = "OPEN";
+        public string? ModeValue { get; set; } = "OPEN";
 
         /// <summary>继电器通道号</summary>
         public int? RelayChannel { get; set; }
