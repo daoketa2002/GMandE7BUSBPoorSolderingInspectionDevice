@@ -16,7 +16,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// 将泛型数据集合导出为CSV文件。
         /// 内部弹出 SaveFileDialog 让用户选择保存位置。
         /// </summary>
-        /// <typeparam name="T">数据行类型（如 LogDataModel）</typeparam>
+        /// <typeparam name="T">数据行类型（如 LogRecord）</typeparam>
         /// <param name="data">要导出的数据行集合</param>
         /// <param name="headers">列头定义列表 — 每一项包含列名（Header）和从数据行取值的函数（ValueSelector）</param>
         /// <param name="defaultFileName">保存对话框中显示的默认文件名</param>
