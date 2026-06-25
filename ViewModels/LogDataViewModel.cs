@@ -134,6 +134,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             "全部", "OK", "NG"
         };
 
+        /// <summary>是否有开始日期（控制×清除按钮显隐）</summary>
+        [ObservableProperty]
+        private bool _hasStartDate;
+
+        /// <summary>是否有结束日期（控制×清除按钮显隐）</summary>
+        [ObservableProperty]
+        private bool _hasEndDate;
+
+        /// <summary>
+        /// 当StartDate变化时，同步更新HasStartDate
+        /// </summary>
+        partial void OnStartDateChanged(DateTime? value)
+        {
+            HasStartDate = value.HasValue;
+        }
+
+        /// <summary>
+        /// 当EndDate变化时，同步更新HasEndDate
+        /// </summary>
+        partial void OnEndDateChanged(DateTime? value)
+        {
+            HasEndDate = value.HasValue;
+        }
+
         #endregion
 
         #region 分页属性
@@ -431,15 +455,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [RelayCommand]
         private void ClearConditions()
         {
-            _logger.LogInformation("清空检索条件输入框");
+            _logger.LogInformation("清空检索条件输入框（含开始日期、结束日期）");
 
             SelectedMachineType = string.Empty;
             SearchSerialNumber = string.Empty;
             SelectedPlanName = "全部方案";
-            StartDate = null;
-            EndDate = null;
+            StartDate = null;    // 自动触发 HasStartDate=false，×按钮隐藏
+            EndDate = null;      // 自动触发 HasEndDate=false，×按钮隐藏
             FilterFinalResult = "全部";
             PageIndex = 1;
+        }
+
+        /// <summary>
+        /// 清除开始日期
+        /// </summary>
+        [RelayCommand]
+        private void ClearStartDate()
+        {
+            _logger.LogInformation("用户点击×清除了开始日期");
+            StartDate = null;  // 置null后OnStartDateChanged自动将HasStartDate设为false，×按钮自动隐藏
+        }
+
+        /// <summary>
+        /// 清除结束日期
+        /// </summary>
+        [RelayCommand]
+        private void ClearEndDate()
+        {
+            _logger.LogInformation("用户点击×清除了结束日期");
+            EndDate = null;   // 置null后OnEndDateChanged自动将HasEndDate设为false，×按钮自动隐藏
         }
 
         /// <summary>

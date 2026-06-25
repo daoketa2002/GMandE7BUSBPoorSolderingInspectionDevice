@@ -40,6 +40,9 @@
 
         <!-- ⭐ AlternationIndex + 1 转换器 -->
         <converters:IntPlusOneConverter x:Key="AlternationIndexConverter"/>
+
+        <!-- ⭐ null → Visibility 转换器（×清除按钮显隐） -->
+        <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
     </UserControl.Resources>
 
     <Grid Margin="16">
@@ -190,23 +193,97 @@
 
                     <!-- 开始日期 -->
                     <TextBlock Grid.Column="0" Text="开始日期：" VerticalAlignment="Center"
-                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
-                    <DatePicker Grid.Column="1"
-                                SelectedDate="{Binding StartDate}"
-                                Height="36" FontSize="14"
-                                VerticalContentAlignment="Center"
-                                x:Name="StartDatePicker"
-                                ToolTip="选择查询起始日期（含当天）"/>
+                                FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <Grid Grid.Column="1">
+                        <DatePicker SelectedDate="{Binding StartDate}"
+                                    Height="36" FontSize="14"
+                                    VerticalContentAlignment="Center"
+                                    x:Name="StartDatePicker"
+                                    ToolTip="选择查询起始日期（含当天）"/>
+                        <!-- ×清除开始日期按钮 -->
+                        <Button Content="✕"
+                                Width="18" Height="18"
+                                FontSize="11" FontWeight="Bold"
+                                Foreground="#95A5A6"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Margin="0,0,28,0"
+                                ToolTip="清除开始日期"
+                                Command="{Binding ClearStartDateCommand}"
+                                Visibility="{Binding StartDate, Converter={StaticResource NullToVisibilityConverter}}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="border"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="9"
+                            BorderThickness="0">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="Background" Value="#E74C3C"/>
+                                            <Setter Property="Foreground" Value="White"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="border" Property="Background" Value="#C0392B"/>
+                                            <Setter Property="Foreground" Value="White"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
 
                     <!-- 结束日期 -->
                     <TextBlock Grid.Column="3" Text="结束日期：" VerticalAlignment="Center"
-                               FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
-                    <DatePicker Grid.Column="4"
-                                SelectedDate="{Binding EndDate}"
-                                Height="36" FontSize="14"
-                                VerticalContentAlignment="Center"
-                                x:Name="EndDatePicker"
-                                ToolTip="选择查询截止日期（含当天）"/>
+                                FontSize="14" FontWeight="SemiBold" Foreground="#495057"/>
+                    <Grid Grid.Column="4">
+                        <DatePicker SelectedDate="{Binding EndDate}"
+                                    Height="36" FontSize="14"
+                                    VerticalContentAlignment="Center"
+                                    x:Name="EndDatePicker"
+                                    ToolTip="选择查询截止日期（含当天）"/>
+                        <!-- ×清除结束日期按钮 -->
+                        <Button Content="✕"
+                                Width="18" Height="18"
+                                FontSize="11" FontWeight="Bold"
+                                Foreground="#95A5A6"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Margin="0,0,28,0"
+                                ToolTip="清除结束日期"
+                                Command="{Binding ClearEndDateCommand}"
+                                Visibility="{Binding EndDate, Converter={StaticResource NullToVisibilityConverter}}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="border"
+                                            Background="{TemplateBinding Background}"
+                                            CornerRadius="9"
+                                            BorderThickness="0">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="Background" Value="#E74C3C"/>
+                                            <Setter Property="Foreground" Value="White"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="border" Property="Background" Value="#C0392B"/>
+                                            <Setter Property="Foreground" Value="White"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
                 </Grid>
 
                 <!-- 第三行：操作按钮（检索/重置/清空条件/导出CSV） -->
