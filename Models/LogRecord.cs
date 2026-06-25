@@ -1,9 +1,12 @@
-﻿// ============================================================
+// ============================================================
 // 文件: Models/LogRecord.cs
-// 描述: EF Core 实体 —— 检测主记录表（LogRecords）
-//      每次完整检测流程产生一条记录
-// 数据库: SQLite
+// 描述: 检测记录数据模型
+//      每次完整检测流程产生一条记录，写入 CSV 日志文件
+// 存储: CSV 文件（由 CsvTestRecordStorage 处理读写）
+//       SqliteTestRecordStorage 为遗留实现，当前未注入使用
 // 改动说明: 新增 MachineType 字段，保留原有 Series 字段兼容旧数据
+// 遗留: [Key] / [Required] / [MaxLength] 数据注解为 SqliteTestRecordStorage
+//      使用（EF Core 需要），CSV 实现不关心这些注解
 // ============================================================
 
 using System;
@@ -14,14 +17,15 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
 {
     /// <summary>
-    /// 检测主记录表 —— 对应 SQLite LogRecords 表
-    /// 存储每次完整检测流程的元数据（系列、机种、序列号、方案、操作员、综合判定等）
+    /// 检测记录数据模型
+    /// 对应 CSV 日志文件中的一行主记录
+    /// 存储每次完整检测流程的元数据（机种、序列号、方案、操作员、综合判定等）
     /// </summary>
     [Table("LogRecords")]
     public class LogRecord
     {
         /// <summary>
-        /// 主键，自增整数
+        /// 主键（遗留：SqliteTestRecordStorage EF Core 使用，CSV 实现不关心）
         /// </summary>
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -30,7 +34,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         /// <summary>
         /// 检测时间戳 —— 精确到毫秒
         /// 用于高频测试场景下的精确排序
-        /// SQLite 使用 TEXT 类型存储（ISO 8601 格式）
         /// </summary>
         [Required]
         public DateTime Timestamp { get; set; }
@@ -40,7 +43,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         /// 来源于旧方案JSON中的 Series 字段
         /// 保留用于兼容旧数据，新数据可为空
         /// </summary>
-        [Required]
         [MaxLength(50)]
         public string Series { get; set; } = string.Empty;
 
@@ -85,20 +87,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         public string FinalResult { get; set; } = string.Empty;
 
         /// <summary>
-        /// 记录创建时间（数据库自动填充）
+        /// 记录创建时间
         /// 与 Timestamp 的区别：Timestamp 是检测发生的实际时间，
-        /// CreatedAt 是记录写入数据库的时间
+        /// CreatedAt 是记录写入 CSV 文件的时间
         /// </summary>
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
-        // ============================================================
-        // 导航属性
-        // ============================================================
-
         /// <summary>
-        /// 导航属性 —— 本记录包含的所有 Pin 检测明细
-        /// EF Core 通过 LogRecordId 外键自动关联
-        /// 级联删除：删除主记录时自动删除所有明细
+        /// 本记录包含的所有 Pin 检测明细
+        /// 写入 CSV 文件时作为动态列（如 A4-A5、B3-B7）展开
+        /// EF Core 通过 LogRecordId 外键自动关联（级联删除）
         /// </summary>
         public List<PinResult> PinResults { get; set; } = new();
     }
