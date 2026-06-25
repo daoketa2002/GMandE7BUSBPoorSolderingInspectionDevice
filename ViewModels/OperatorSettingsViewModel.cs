@@ -126,6 +126,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [RelayCommand]
         private async Task AddOrUpdateAsync()
         {
+            // ★ 自动去首尾空格
             var name = InputName?.Trim();
             if (string.IsNullOrWhiteSpace(name))
             {
@@ -134,14 +135,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 return;
             }
 
+            // ★ 重名检查（忽略大小写 + 去空格）
             var existing = Operators.FirstOrDefault(o =>
-                string.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase));
+                string.Equals(o.Name.Trim(), name, StringComparison.OrdinalIgnoreCase));
 
             if (existing != null)
             {
+                // 已有同名作业员 → 提示用户并询问是否覆盖
+                var confirmMsg = $"作业员「{existing.Name}」已存在，是否更新其信息？";
+                var result = MessageBox.Show(confirmMsg, "重名确认",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (result != MessageBoxResult.Yes)
+                {
+                    _logger.LogInformation("用户取消重复作业员添加: {Operator}", name);
+                    return;
+                }
                 existing.Name = name;
                 existing.CreatedAt = DateTime.Now;
-                _logger.LogInformation("作业员已更新: {Operator}", name);
+                _logger.LogInformation("作业员已更新（重名覆盖）: {Operator}", name);
             }
             else
             {

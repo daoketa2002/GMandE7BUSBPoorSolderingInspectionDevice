@@ -173,6 +173,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
+                // ========== 保存前全面校验各设备参数 ==========
+                var errors = ValidateAllConfigs();
+                if (errors.Count > 0)
+                {
+                    string errorMessage = "以下参数设置有误，请修正后再保存：\n\n"
+                                        + string.Join("\n", errors);
+                    await _notificationService.ShowWarningAsync(errorMessage, "参数校验失败");
+                    _logger.Warning("系统设置保存被拒绝，校验错误 {Count} 项", errors.Count);
+                    return;
+                }
+
                 var deviceSettings = new DeviceSettings
                 {
                     FP0HCommunication = Fp0hConfig,
@@ -194,6 +205,72 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _logger.Error(ex, "保存配置失败");
                 await _notificationService.ShowErrorAsync($"保存配置失败：{ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 全面校验三个设备的所有配置参数
+        /// 包括：IP格式、端口范围、串口格式、超时值范围、心跳间隔范围等
+        /// </summary>
+        /// <returns>错误列表（空列表表示全部通过校验）</returns>
+        private List<string> ValidateAllConfigs()
+        {
+            var errors = new List<string>();
+
+            // ─── FP0H PLC 校验 ───
+            if (!Common.Validators.InputValidationHelper.IsValidIpAddress(Fp0hConfig.IpAddress))
+                errors.Add($"PLC IP地址 \"{Fp0hConfig.IpAddress}\" 格式不正确（应为 xxx.xxx.xxx.xxx）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidPort(Fp0hConfig.Port))
+                errors.Add($"PLC 端口号 {Fp0hConfig.Port} 超出范围（应为 {Common.Validators.InputValidationHelper.PortMinValue}~{Common.Validators.InputValidationHelper.PortMaxValue}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidModbusSlaveId(Fp0hConfig.SlaveId))
+                errors.Add($"PLC Modbus从站ID {Fp0hConfig.SlaveId} 超出范围（应为 {Common.Validators.InputValidationHelper.ModbusSlaveIdMin}~{Common.Validators.InputValidationHelper.ModbusSlaveIdMax}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Fp0hConfig.ReceiveTimeoutMs))
+                errors.Add($"PLC 接收超时 {Fp0hConfig.ReceiveTimeoutMs}ms 超出范围（应为 {Common.Validators.InputValidationHelper.TimeoutMsMinValue}~{Common.Validators.InputValidationHelper.TimeoutMsMaxValue}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Fp0hConfig.SendTimeoutMs))
+                errors.Add($"PLC 发送超时 {Fp0hConfig.SendTimeoutMs}ms 超出范围（应为 {Common.Validators.InputValidationHelper.TimeoutMsMinValue}~{Common.Validators.InputValidationHelper.TimeoutMsMaxValue}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidReconnectDelayMs(Fp0hConfig.ReconnectDelayMs))
+                errors.Add($"PLC 重连延迟 {Fp0hConfig.ReconnectDelayMs}ms 超出范围（应为 {Common.Validators.InputValidationHelper.ReconnectDelayMsMin}~{Common.Validators.InputValidationHelper.ReconnectDelayMsMax}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidReconnectAttempts(Fp0hConfig.MaxReconnectAttempts))
+                errors.Add($"PLC 最大重连次数 {Fp0hConfig.MaxReconnectAttempts} 超出范围（应为 {Common.Validators.InputValidationHelper.ReconnectAttemptsMin}~{Common.Validators.InputValidationHelper.ReconnectAttemptsMax}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidHealthCheckInterval(Fp0hConfig.HealthCheckIntervalSeconds))
+                errors.Add($"PLC 心跳间隔 {Fp0hConfig.HealthCheckIntervalSeconds}秒 超出范围（应为 {Common.Validators.InputValidationHelper.HealthCheckIntervalMinSec}~{Common.Validators.InputValidationHelper.HealthCheckIntervalMaxSec}）");
+
+            // ─── 扫描枪 H1900 校验 ───
+            if (!Common.Validators.InputValidationHelper.IsValidComPort(ScannerConfig.SerialNumber))
+                errors.Add($"扫描枪串口号 \"{ScannerConfig.SerialNumber}\" 格式不正确（应为 COM1~COM256）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidHealthCheckInterval(ScannerConfig.HealthCheckIntervalSeconds))
+                errors.Add($"扫描枪心跳间隔 {ScannerConfig.HealthCheckIntervalSeconds}秒 超出范围（应为 {Common.Validators.InputValidationHelper.HealthCheckIntervalMinSec}~{Common.Validators.InputValidationHelper.HealthCheckIntervalMaxSec}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidDataTimeout(ScannerConfig.LastDataTimeoutSeconds))
+                errors.Add($"扫描枪数据超时 {ScannerConfig.LastDataTimeoutSeconds}秒 超出范围（应为 {Common.Validators.InputValidationHelper.DataTimeoutMinSec}~{Common.Validators.InputValidationHelper.DataTimeoutMaxSec}）");
+
+            // ─── GDM-9060 万用表校验 ───
+            if (!Common.Validators.InputValidationHelper.IsValidIpAddress(Gdm9060Config.IpAddress))
+                errors.Add($"万用表 IP地址 \"{Gdm9060Config.IpAddress}\" 格式不正确（应为 xxx.xxx.xxx.xxx）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidPort(Gdm9060Config.Port))
+                errors.Add($"万用表 端口号 {Gdm9060Config.Port} 超出范围（应为 {Common.Validators.InputValidationHelper.PortMinValue}~{Common.Validators.InputValidationHelper.PortMaxValue}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Gdm9060Config.ReceiveTimeoutMs))
+                errors.Add($"万用表 接收超时 {Gdm9060Config.ReceiveTimeoutMs}ms 超出范围（应为 {Common.Validators.InputValidationHelper.TimeoutMsMinValue}~{Common.Validators.InputValidationHelper.TimeoutMsMaxValue}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Gdm9060Config.SendTimeoutMs))
+                errors.Add($"万用表 发送超时 {Gdm9060Config.SendTimeoutMs}ms 超出范围（应为 {Common.Validators.InputValidationHelper.TimeoutMsMinValue}~{Common.Validators.InputValidationHelper.TimeoutMsMaxValue}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidHealthCheckInterval(Gdm9060Config.HealthCheckIntervalSeconds))
+                errors.Add($"万用表心跳间隔 {Gdm9060Config.HealthCheckIntervalSeconds}秒 超出范围（应为 {Common.Validators.InputValidationHelper.HealthCheckIntervalMinSec}~{Common.Validators.InputValidationHelper.HealthCheckIntervalMaxSec}）");
+
+            if (!Common.Validators.InputValidationHelper.IsValidDataTimeout(Gdm9060Config.LastDataTimeoutSeconds))
+                errors.Add($"万用表数据超时 {Gdm9060Config.LastDataTimeoutSeconds}秒 超出范围（应为 {Common.Validators.InputValidationHelper.DataTimeoutMinSec}~{Common.Validators.InputValidationHelper.DataTimeoutMaxSec}）");
+
+            return errors;
         }
 
         /// <summary>

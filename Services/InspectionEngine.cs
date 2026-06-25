@@ -195,7 +195,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         else
                         {
                             failCount++;
-                            var detail = testPoint.CheckMode == "Resistance"
+                            var detail = testPoint.CheckMode == CheckModeConstants.Resistance
                                 ? $" (范围:{testPoint.LowerLimit}~{testPoint.UpperLimit}Ω)"
                                 : $" (期望:{testPoint.ModeValue})";
                             LogInfo($"  ❌ {testPoint.Name}: {measurement.Value:F4}Ω → NG{detail}");
@@ -546,10 +546,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public string Name { get; set; } = string.Empty;
 
         /// <summary>
-        /// 检测方式
-        /// "Continuity" — 导通检测，"Resistance" — 电阻值检测
+        /// 检测方式（中文存储，与 CheckModeConstants 保持一致）
+        /// "导通" — 导通检测，"电阻值" — 电阻值检测
         /// </summary>
-        public string CheckMode { get; set; } = "Continuity";
+        public string CheckMode { get; set; } = CheckModeConstants.Continuity;
 
         /// <summary>电阻值下限（Ω），导通模式为 null</summary>
         public double? LowerLimit { get; set; }

@@ -58,13 +58,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 // 验证密码（不区分大小写）
                 if (_validPasswords.Contains(Password.Trim()))
                 {
-                    _logger.Information("密码验证成功");
+                    // ★ 操作审计：密码验证成功（Warning 级别确保持久化记录）
+                    _logger.Warning("【审计】密码验证成功（操作时间: {Time}）", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                     _dialog.DialogResult = true;
                     _dialog.Close();
                 }
                 else
                 {
-                    _logger.Warning("密码验证失败: 输入了错误密码");
+                    // ★ 操作审计：密码验证失败（记录尝试行为）
+                    _logger.Warning("【审计】密码验证失败（操作时间: {Time}，输入值已清空，不可恢复）",
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                     ShowError("密码错误，请重试");
 
                     // 清空 ViewModel 中的密码

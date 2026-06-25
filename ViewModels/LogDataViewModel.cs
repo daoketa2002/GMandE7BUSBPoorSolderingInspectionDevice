@@ -255,6 +255,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
+                // ★ 校验日期区间：开始日期不能晚于结束日期
+                if (StartDate.HasValue && EndDate.HasValue && StartDate.Value > EndDate.Value)
+                {
+                    _logger.LogWarning("日期区间校验失败: 开始日期 {Start} 晚于结束日期 {End}",
+                        StartDate.Value.ToString("yyyy-MM-dd"), EndDate.Value.ToString("yyyy-MM-dd"));
+                    System.Windows.MessageBox.Show(
+                        $"开始日期（{StartDate.Value:yyyy-MM-dd}）不能晚于结束日期（{EndDate.Value:yyyy-MM-dd}）！\n请重新选择日期后检索。",
+                        "日期区间错误",
+                        System.Windows.MessageBoxButton.OK,
+                        System.Windows.MessageBoxImage.Warning);
+                    return;
+                }
+
                 _logger.LogInformation(
                     "执行检索 - 机种:{Machine}, 序列号:{Serial}, 方案:{Plan}, " +
                     "日期:{Start}~{End}, 判定:{Result}, 页码:{Page}/{Size}",

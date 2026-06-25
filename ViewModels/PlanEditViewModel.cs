@@ -188,6 +188,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [RelayCommand]
         private void AddItem()
         {
+            // ★ 限制检测项目最大数量，防止无限添加导致 UI 卡顿
+            if (Items.Count >= Common.Validators.InputValidationHelper.MaxInspectItemsCount)
+            {
+                _ = _notificationService.ShowWarningAsync(
+                    $"检测项目最多 {Common.Validators.InputValidationHelper.MaxInspectItemsCount} 项，无法继续添加！",
+                    "数量限制");
+                _logger.LogWarning("检测项目已达上限 {Max}，拒绝新增", Common.Validators.InputValidationHelper.MaxInspectItemsCount);
+                return;
+            }
+
             var newItem = new PlanItemViewModel
             {
                 Index = Items.Count + 1,
@@ -341,6 +351,45 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string errorMessage = "以下检测项目引脚有问题，请修正后再保存：\n\n"
                                         + string.Join("\n", pinErrors);
                     await _notificationService.ShowWarningAsync(errorMessage, "引脚校验失败");
+                    return;
+                }
+
+                // ========== 校验电阻值阈值（电阻值模式下的 LowerLimit / UpperLimit） ==========
+                var resistanceErrors = new List<string>();
+
+                for (int i = 0; i < Items.Count; i++)
+                {
+                    var item = Items[i];
+
+                    // 只校验电阻值模式下的项
+                    if (item.CheckMode != CheckModeConstants.Resistance)
+                        continue;
+
+                    int displayIndex = item.Index;
+
+                    // 校验下限电阻值范围（NaN / Infinity / 负数 / 过大）
+                    string? lowerError = Common.Validators.InputValidationHelper.ValidateResistanceValue(item.LowerLimit);
+                    if (lowerError != null)
+                        resistanceErrors.Add($"第{displayIndex}项 下限: {lowerError}");
+
+                    // 校验上限电阻值范围
+                    string? upperError = Common.Validators.InputValidationHelper.ValidateResistanceValue(item.UpperLimit);
+                    if (upperError != null)
+                        resistanceErrors.Add($"第{displayIndex}项 上限: {upperError}");
+
+                    // 校验下限 ≤ 上限
+                    string? rangeError = Common.Validators.InputValidationHelper.ValidateLimitRange(
+                        item.LowerLimit, item.UpperLimit);
+                    if (rangeError != null)
+                        resistanceErrors.Add($"第{displayIndex}项 {rangeError}");
+                }
+
+                // 如果有任何阈值错误，一次性汇总提示
+                if (resistanceErrors.Count > 0)
+                {
+                    string errorMessage = "以下检测项目电阻值设置有误，请修正后再保存：\n\n"
+                                        + string.Join("\n", resistanceErrors);
+                    await _notificationService.ShowWarningAsync(errorMessage, "阈值校验失败");
                     return;
                 }
 

@@ -291,13 +291,14 @@
                              FontSize="22"
                              FontWeight="Bold"
                              Height="52"
+                             MaxLength="20"
                              Padding="14,10"
                              BorderBrush="#3498DB"
                              BorderThickness="2"
                              Background="#EBF5FB"
                              VerticalContentAlignment="Center"
                              x:Name="InputNameTextBox"
-                             ToolTip="输入新作业员名字，或选择左侧列表中的名字进行修改">
+                             ToolTip="输入新作业员名字（最长20个字符），或选择左侧列表中的名字进行修改">
                         <TextBox.Style>
                             <Style TargetType="TextBox">
                                 <Setter Property="Background" Value="#EBF5FB"/>

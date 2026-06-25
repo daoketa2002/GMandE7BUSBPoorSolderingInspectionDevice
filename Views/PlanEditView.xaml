@@ -5,6 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
              xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
+             xmlns:behaviors="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Behaviors"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:PlanEditViewModel}"
              d:DesignWidth="1100" d:DesignHeight="700"
@@ -132,7 +133,8 @@
                 <!-- 方案名称（必填，带★标记） -->
                 <TextBlock Grid.Column="2" Text="★ 方案名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
                 <TextBox Grid.Column="3" Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
-                         FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA"/>
+                         FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA"
+                         MaxLength="50"/>
 
                 <!-- 时间戳信息（只读展示） -->
                 <TextBlock Grid.Column="4" Text="创建：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="12,0,4,0"/>
@@ -356,10 +358,16 @@
                                         </ComboBox.Style>
                                     </ComboBox>
 
-                                    <!-- 电阻值模式：TextBox（输入下限阈值数值） -->
+                                    <!-- 电阻值模式：TextBox（输入下限阈值数值，仅允许数字输入） -->
                                     <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
                                              FontSize="15"
                                              Height="30"
+                                             MaxLength="12"
+                                             behaviors:NumericTextBoxBehavior.IsEnabled="True"
+                                             behaviors:NumericTextBoxBehavior.AllowDecimal="True"
+                                             behaviors:NumericTextBoxBehavior.AllowNegative="False"
+                                             behaviors:NumericTextBoxBehavior.MinValue="0"
+                                             behaviors:NumericTextBoxBehavior.MaxValue="99999999"
                                              VerticalContentAlignment="Center"
                                              BorderThickness="1"
                                              BorderBrush="#CED4DA"
@@ -387,6 +395,12 @@
                                          IsEnabled="{Binding IsResistanceMode}"
                                          FontSize="15"
                                          Height="30"
+                                         MaxLength="12"
+                                         behaviors:NumericTextBoxBehavior.IsEnabled="True"
+                                         behaviors:NumericTextBoxBehavior.AllowDecimal="True"
+                                         behaviors:NumericTextBoxBehavior.AllowNegative="False"
+                                         behaviors:NumericTextBoxBehavior.MinValue="0"
+                                         behaviors:NumericTextBoxBehavior.MaxValue="99999999"
                                          VerticalContentAlignment="Center"
                                          BorderThickness="1"
                                          BorderBrush="#CED4DA"
