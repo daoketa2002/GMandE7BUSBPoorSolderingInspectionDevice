@@ -10,6 +10,12 @@
              Background="#F5F6FA">
 
     <UserControl.Resources>
+        <converters:ConnectionStatusToBackgroundConverter x:Key="ConnectionStatusToBackgroundConverter"/>
+        <converters:ConnectionStatusToForegroundConverter x:Key="ConnectionStatusToForegroundConverter"/>
+        <converters:BoolInverterConverter x:Key="BoolInverterConverter"/>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
+
         <!-- 标题样式 -->
         <Style x:Key="HeaderTextStyle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="22"/>
@@ -385,7 +391,6 @@
                 <!-- Tab 1：FP0H AFP0HC32ET PLC -->
                 <!-- ============================================================ -->
                 <TabItem Header="🔌 FP0H PLC">
-                    <!-- ScrollViewer：内容超出TabItem可用高度时自动出现垂直滚动条 -->
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Padding="10">
@@ -476,6 +481,52 @@
                                 <TextBox Text="{Binding Fp0hConfig.HealthCheckIntervalSeconds, UpdateSourceTrigger=PropertyChanged}"
                                          Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
+
+                            <!-- ═══════════════════════════════════════════ -->
+                            <!-- 测试连接区域 -->
+                            <!-- ═══════════════════════════════════════════ -->
+                            <Border Background="{Binding PlcTestStatus, Converter={StaticResource ConnectionStatusToBackgroundConverter}}"
+                                    CornerRadius="8"
+                                    Padding="15,12"
+                                    Margin="0,20,0,0">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="{Binding PlcTestButtonText}"
+                                                Command="{Binding TestPlcConnectionCommand}"
+                                                IsEnabled="{Binding IsTestingPlc, Converter={StaticResource BoolInverterConverter}}"
+                                                Width="140" Height="34"
+                                                FontSize="13" FontWeight="SemiBold"
+                                                Foreground="White" Background="#3498DB"
+                                                Cursor="Hand" BorderThickness="0">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}"
+                                                            CornerRadius="6" BorderThickness="0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="#2980B9"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter Property="Opacity" Value="0.6"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                        <TextBlock Text="⏳" FontSize="16" Margin="10,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Visibility="{Binding IsTestingPlc, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding PlcTestMessage}"
+                                               Foreground="{Binding PlcTestStatus, Converter={StaticResource ConnectionStatusToForegroundConverter}}"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               Margin="0,10,0,0"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding PlcTestMessage, Converter={StaticResource NullToVisibilityConverter}}"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
@@ -602,6 +653,52 @@
                                 <TextBox Text="{Binding ScannerConfig.LastDataTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
                                             Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
+
+                            <!-- ═══════════════════════════════════════════ -->
+                            <!-- 测试连接区域 -->
+                            <!-- ═══════════════════════════════════════════ -->
+                            <Border Background="{Binding ScannerTestStatus, Converter={StaticResource ConnectionStatusToBackgroundConverter}}"
+                                    CornerRadius="8"
+                                    Padding="15,12"
+                                    Margin="0,20,0,0">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="{Binding ScannerTestButtonText}"
+                                                Command="{Binding TestScannerConnectionCommand}"
+                                                IsEnabled="{Binding IsTestingScanner, Converter={StaticResource BoolInverterConverter}}"
+                                                Width="140" Height="34"
+                                                FontSize="13" FontWeight="SemiBold"
+                                                Foreground="White" Background="#3498DB"
+                                                Cursor="Hand" BorderThickness="0">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}"
+                                                            CornerRadius="6" BorderThickness="0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="#2980B9"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter Property="Opacity" Value="0.6"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                        <TextBlock Text="⏳" FontSize="16" Margin="10,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Visibility="{Binding IsTestingScanner, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding ScannerTestMessage}"
+                                               Foreground="{Binding ScannerTestStatus, Converter={StaticResource ConnectionStatusToForegroundConverter}}"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               Margin="0,10,0,0"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding ScannerTestMessage, Converter={StaticResource NullToVisibilityConverter}}"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
@@ -681,6 +778,52 @@
                                 <TextBox Text="{Binding Gdm9060Config.LastDataTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
                                         Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
+
+                            <!-- ═══════════════════════════════════════════ -->
+                            <!-- 测试连接区域 -->
+                            <!-- ═══════════════════════════════════════════ -->
+                            <Border Background="{Binding DmmTestStatus, Converter={StaticResource ConnectionStatusToBackgroundConverter}}"
+                                    CornerRadius="8"
+                                    Padding="15,12"
+                                    Margin="0,20,0,0">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="{Binding DmmTestButtonText}"
+                                                Command="{Binding TestDmmConnectionCommand}"
+                                                IsEnabled="{Binding IsTestingDmm, Converter={StaticResource BoolInverterConverter}}"
+                                                Width="140" Height="34"
+                                                FontSize="13" FontWeight="SemiBold"
+                                                Foreground="White" Background="#3498DB"
+                                                Cursor="Hand" BorderThickness="0">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}"
+                                                            CornerRadius="6" BorderThickness="0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="#2980B9"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter Property="Opacity" Value="0.6"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                        <TextBlock Text="⏳" FontSize="16" Margin="10,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Visibility="{Binding IsTestingDmm, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding DmmTestMessage}"
+                                               Foreground="{Binding DmmTestStatus, Converter={StaticResource ConnectionStatusToForegroundConverter}}"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               Margin="0,10,0,0"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding DmmTestMessage, Converter={StaticResource NullToVisibilityConverter}}"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

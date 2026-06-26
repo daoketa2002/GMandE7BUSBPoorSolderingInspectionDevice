@@ -22,7 +22,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters
         /// </summary>
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            return value == null ? Visibility.Collapsed : Visibility.Visible;
+            // null 或空字符串 → Collapsed
+            if (value == null)
+                return Visibility.Collapsed;
+            if (value is string strValue && string.IsNullOrEmpty(strValue))
+                return Visibility.Collapsed;
+            return Visibility.Visible;
         }
 
         /// <summary>

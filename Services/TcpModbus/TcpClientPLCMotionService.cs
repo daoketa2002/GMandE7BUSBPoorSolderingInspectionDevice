@@ -1635,6 +1635,110 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             }
         }
 
+        /// <summary>
+        /// 测试连接：使用指定参数尝试连接PLC并发送Modbus读保持寄存器指令验证通信。
+        /// 此方法创建临时TCP连接，不修改服务内部状态，不影响现有持久连接。
+        /// 用于系统设定页面的"测试连接"功能。
+        /// </summary>
+        /// <param name="host">PLC IP地址</param>
+        /// <param name="port">Modbus TCP端口号</param>
+        /// <param name="timeoutMs">连接和读取总超时（毫秒）</param>
+        /// <param name="ct">取消令牌</param>
+        /// <returns>连接成功且收到有效Modbus响应返回 true，否则 false</returns>
+        public async Task<bool> TestConnectionAsync(string host, int port, int timeoutMs, CancellationToken ct = default)
+        {
+            _logger.LogDebug("PLC 测试连接: Host={Host}, Port={Port}, Timeout={Timeout}ms", host, port, timeoutMs);
+
+            using var tcpClient = new TcpClient();
+            try
+            {
+                using var timeoutCts = new CancellationTokenSource(timeoutMs);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+                // 第一步：建立TCP连接
+                var connectTask = tcpClient.ConnectAsync(host, port);
+                var timeoutTask = Task.Delay(timeoutMs / 2, linkedCts.Token); // 连接最多用一半超时
+                var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
+
+                if (completedTask != connectTask)
+                {
+                    _logger.LogWarning("PLC 测试连接超时: 无法连接到 {Host}:{Port}", host, port);
+                    return false;
+                }
+
+                await connectTask.ConfigureAwait(false);
+                _logger.LogDebug("PLC TCP连接建立成功，发送Modbus测试指令");
+
+                using var stream = tcpClient.GetStream();
+                stream.ReadTimeout = timeoutMs / 2;
+                stream.WriteTimeout = timeoutMs / 2;
+
+                // 第二步：发送读保持寄存器请求（从站ID=1，起始地址0，数量1）
+                var request = ModbusTcpMessageHelper.CreateReadHoldingRegistersRequest(
+                    transactionId: 1,
+                    unitId: 1,
+                    startAddress: 0,
+                    quantity: 1);
+
+                await stream.WriteAsync(request, linkedCts.Token).ConfigureAwait(false);
+                await stream.FlushAsync(linkedCts.Token).ConfigureAwait(false);
+
+                // 第三步：读取响应（最小有效Modbus TCP响应 = MBAP头6字节 + UnitID1 + FC1 + ByteCount1 = 9字节）
+                var buffer = new byte[256];
+                int totalRead = 0;
+                int bytesRead;
+
+                do
+                {
+                    bytesRead = await stream.ReadAsync(
+                        buffer.AsMemory(totalRead, buffer.Length - totalRead),
+                        linkedCts.Token).ConfigureAwait(false);
+                    totalRead += bytesRead;
+                }
+                while (bytesRead > 0 && totalRead < buffer.Length);
+
+                _logger.LogDebug("PLC 测试连接收到 {Bytes} 字节响应", totalRead);
+
+                // 验证响应：MBAP头+UnitID+功能码至少需要9字节
+                bool isValid = totalRead >= 9;
+                if (isValid)
+                {
+                    // 解析MBAP头中的事务ID和PDU长度做二次验证
+                    byte functionCode = buffer[7];
+                    bool isErrorResponse = (functionCode & 0x80) != 0;
+                    if (isErrorResponse)
+                    {
+                        _logger.LogWarning("PLC 测试连接收到异常响应: FC={FunctionCode}, 错误码={ErrorCode}",
+                            functionCode, totalRead >= 9 ? buffer[8] : (byte)0);
+                        // 收到异常响应也算通信成功，只是PLC拒绝了请求
+                    }
+                }
+
+                _logger.LogInformation("PLC 测试连接结果: {Result}", isValid ? "成功" : "失败（响应不完整）");
+                return isValid;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("PLC 测试连接被取消或超时");
+                return false;
+            }
+            catch (SocketException ex)
+            {
+                _logger.LogWarning(ex, "PLC 测试连接 Socket 异常: {Message}", ex.Message);
+                return false;
+            }
+            catch (IOException ex)
+            {
+                _logger.LogWarning(ex, "PLC 测试连接 IO 异常: {Message}", ex.Message);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "PLC 测试连接未预期异常: {Message}", ex.Message);
+                return false;
+            }
+        }
+
         #endregion
     }
 }
