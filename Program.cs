@@ -6,6 +6,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.DeviceConnections;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
@@ -242,7 +243,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // 5. 扫描枪条码服务（保留，因为 DeviceConnectionManager 依赖它转发扫码事件）
             services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>();
 
-            // 6. 设备连接管理器（依赖三个不同接口，DI自动区分）
+            // 6. 设备连接内部组件（DeviceConnectionManager 的依赖）
+            services.AddSingleton<DeviceConnectionRetryOptions>();
+            services.AddSingleton<DeviceConnectionStateStore>();
+            services.AddSingleton<DeviceConfigurationApplier>();
+            services.AddSingleton<DeviceConnectionExecutor>();
+            services.AddSingleton<DeviceConnectionMonitor>();
+
+            // 7. 设备连接管理器（对外门面，依赖三个不同设备接口和上述内部组件）
             services.AddSingleton<IDeviceConnectionManager, DeviceConnectionManager>();
 
             // ⭐⭐⭐ ====== 硬件驱动服务注册结束 ====== ⭐⭐⭐
