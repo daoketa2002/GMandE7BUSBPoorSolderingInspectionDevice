@@ -10,9 +10,6 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Generic;
-using static GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs.DeviceSettings;
-
-
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 {
     /// <summary>
@@ -34,16 +31,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// 日志记录器
         /// </summary>
         private readonly ILogger<TcpClientPLCMotionService> _logger;
-
-        /// <summary>
-        /// 设备设置服务
-        /// </summary>
-        private readonly IDeviceSettingsService _settingsService;
-
-        /// <summary>
-        /// 当前TCP客户端PLC动作控制设置
-        /// </summary>
-        private TcpClientPLCMotionControlSettings? _currentSettings;
 
         /// <summary>
         /// TCP客户端
@@ -121,6 +108,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// </summary>
         public int? ConnectTimeoutMsDefault { get; set; } = 3000;
 
+        // ========== PLC 连接配置属性（由 DeviceConnectionManager 在启动时注入） ==========
+
+        /// <summary>PLC 服务器地址</summary>
+        public string Host { get; set; } = "192.168.1.3";
+
+        /// <summary>Modbus TCP 端口号</summary>
+        public int Port { get; set; } = 502;
+
+        /// <summary>TCP 接收超时（毫秒）</summary>
+        public int ReceiveTimeoutMs { get; set; } = 5000;
+
+        /// <summary>TCP 发送超时（毫秒）</summary>
+        public int SendTimeoutMs { get; set; } = 5000;
+
+        /// <summary>重连延迟（毫秒）</summary>
+        public int ReconnectDelayMs { get; set; } = 2000;
+
+        /// <summary>最大重连次数</summary>
+        public int MaxReconnectAttempts { get; set; } = 12;
+
+        /// <summary>心跳检测模式</summary>
+        public HealthCheckMode HealthCheckMode { get; set; } = HealthCheckMode.Disabled;
+
+        /// <summary>心跳检查间隔（秒）</summary>
+        public int HealthCheckIntervalSeconds { get; set; } = 5;
+
+        /// <summary>无数据超时时间（秒），配合 DataActivity 模式使用</summary>
+        public int LastDataTimeoutSeconds { get; set; } = 30;
+
         /// <summary>
         /// 获取当前TCP连接是否已成功建立 - 由内部状态控制，更可靠
         /// </summary>
@@ -160,13 +176,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// 初始化一个新的TCP Modbus客户端服务实例
         /// </summary>
         /// <param name="logger">日志记录器</param>
-        /// <param name="settingsService">设置服务，用于加载TCP客户端PLC动作控制设置</param>
         public TcpClientPLCMotionService(
-            ILogger<TcpClientPLCMotionService> logger,
-            IDeviceSettingsService settingsService)
+            ILogger<TcpClientPLCMotionService> logger)
         {
             _logger = logger;
-            _settingsService = settingsService;
         }
 
         /// <summary>
@@ -177,20 +190,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         {
             var next = Interlocked.Increment(ref _transactionIdCounter);
             return (ushort)(next == 0 ? 1 : next); // 跳过 0
-        }
-
-        /// <summary>
-        /// 获取当前有效的TCP客户端PLC动作控制通信配置。若未加载，则从设置服务中读取。
-        /// </summary>
-        /// <returns>TCP客户端PLC动作控制通信设置对象</returns>
-        private TcpClientPLCMotionControlSettings GetCurrentSettings()
-        {
-            if (_currentSettings == null)
-            {
-                var appSettings = _settingsService.LoadSettings();
-                _currentSettings = appSettings.TcpClientPLCMotion;
-            }
-            return _currentSettings;
         }
 
         /// <summary>
@@ -232,14 +231,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 }
 
                 _isRunning = true;
-                var settings = GetCurrentSettings();
 
                 _logger.LogInformation("开始启动Modbus TCP客户端...");
 
                 try
                 {
                     // 尝试连接到服务器
-                    await ConnectToServerAsync(settings).ConfigureAwait(false);
+                    await ConnectToServerAsync().ConfigureAwait(false);
 
                     // 关键修复：明确设置内部连接状态为 true，并触发事件
                     _isConnected = true;
@@ -247,7 +245,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     DetailedConnectionStateChanged?.Invoke(ConnectionState.Connected);
 
                     // 启动心跳检测
-                    if (settings.HealthCheckMode != HealthCheckMode.Disabled)
+                    if (HealthCheckMode != HealthCheckMode.Disabled)
                     {
                         _heartbeatCts = new CancellationTokenSource();
                         _healthCheckTask = Task.Run(() => StartHealthCheckLoop(_heartbeatCts.Token), _heartbeatCts.Token);
@@ -257,8 +255,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     _readLoopCts = new CancellationTokenSource();
                     _ = Task.Run(() => ReadDataAsync(_readLoopCts.Token), _readLoopCts.Token);
 
-                    _logger.LogInformation($"Modbus TCP客户端已连接到 {settings.Host}:{settings.Port}");
-                    Notify(NotificationType.Success, $"已连接到 {settings.Host}:{settings.Port}", "Start");
+                    _logger.LogInformation($"Modbus TCP客户端已连接到 {Host}:{Port}");
+                    Notify(NotificationType.Success, $"已连接到 {Host}:{Port}", "Start");
                 }
                 catch (Exception ex)
                 {
@@ -289,8 +287,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <returns>表示异步心跳检测循环的任务</returns>
         private async Task StartHealthCheckLoop(CancellationToken ct)
         {
-            var settings = GetCurrentSettings();
-            var periodicTimer = new PeriodicTimer(TimeSpan.FromSeconds(settings.HealthCheckIntervalSeconds));
+            var periodicTimer = new PeriodicTimer(TimeSpan.FromSeconds(HealthCheckIntervalSeconds));
 
             try
             {
@@ -310,16 +307,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         }
 
         /// <summary>
-        /// 异步连接到服务器
+        /// 异步连接到服务器，使用当前属性中的连接参数
         /// </summary>
-        /// <param name="settings">当前设置</param>
         /// <returns>表示异步连接操作的任务</returns>
-        private async Task ConnectToServerAsync(TcpClientPLCMotionControlSettings settings)
+        private async Task ConnectToServerAsync()
         {
-            int retryDelayMs = settings.ReconnectDelayMs ?? 2000;
+            int retryDelayMs = ReconnectDelayMs;
             int connectTimeoutMs = ConnectTimeoutMsDefault ?? 3000;
             int attempts = 0;
-            int maxRetries = settings.MaxReconnectAttempts ?? 12;
+            int maxRetries = MaxReconnectAttempts;
 
             // 🔥 关键：确保开始新连接前清理旧资源
             CleanupConnection();
@@ -329,14 +325,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 TcpClient? tempTcpClient = null;
                 try
                 {
-                    _logger.LogInformation($"尝试连接到 {settings.Host}:{settings.Port} (尝试 {attempts + 1}/{maxRetries})");
+                    _logger.LogInformation($"尝试连接到 {Host}:{Port} (尝试 {attempts + 1}/{maxRetries})");
 
                     tempTcpClient = new TcpClient();
-                    tempTcpClient.ReceiveTimeout = settings.ReceiveTimeoutMs ?? 5000;
-                    tempTcpClient.SendTimeout = settings.SendTimeoutMs ?? 5000;
+                    tempTcpClient.ReceiveTimeout = ReceiveTimeoutMs;
+                    tempTcpClient.SendTimeout = SendTimeoutMs;
 
                     // 🔥 关键：添加超时控制
-                    var connectTask = tempTcpClient.ConnectAsync(settings.Host, settings.Port);
+                    var connectTask = tempTcpClient.ConnectAsync(Host, Port);
                     var timeoutTask = Task.Delay(connectTimeoutMs);
 
                     var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
@@ -814,10 +810,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 // 清理连接资源
                 CleanupConnection();
 
-                var settings = GetCurrentSettings();
-                int retryDelayMs = settings.ReconnectDelayMs ?? 2000;
+                int retryDelayMs = ReconnectDelayMs;
                 int attempts = 0;
-                int maxRetries = settings.MaxReconnectAttempts ?? 10; // 使用设置中的最大重试次数
+                int maxRetries = MaxReconnectAttempts;
 
                 // 重连循环
                 while (_isRunning && attempts < maxRetries)
@@ -827,7 +822,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         _logger.LogInformation($"尝试重连 ({attempts + 1}/{maxRetries})...");
                         DetailedConnectionStateChanged?.Invoke(ConnectionState.Reconnecting);
 
-                        await ConnectToServerAsync(settings).ConfigureAwait(false);
+                        await ConnectToServerAsync().ConfigureAwait(false);
 
                         // 重连成功，启动数据接收循环
                         _readLoopCts?.Cancel();
@@ -1219,7 +1214,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         {
             if (!_isRunning || _heartbeatCts?.IsCancellationRequested == true) return; // 如果服务已停止，不再执行心跳检测
 
-            var settings = GetCurrentSettings();
             try
             {
                 _logger.LogDebug("执行心跳检测");
@@ -1231,14 +1225,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     return;
                 }
 
-                switch (settings.HealthCheckMode)
+                switch (HealthCheckMode)
                 {
                     case HealthCheckMode.CommandResponse:
                         await CheckByCommandResponse();
                         break;
 
                     case HealthCheckMode.DataActivity:
-                        CheckByDataActivity(settings.LastDataTimeoutSeconds ?? 30);
+                        CheckByDataActivity(LastDataTimeoutSeconds);
                         break;
 
                     case HealthCheckMode.StatusQuery:
@@ -1249,7 +1243,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         break;
 
                     default:
-                        _logger.LogWarning("未知的心跳模式: {HealthCheckMode}", settings.HealthCheckMode);
+                        _logger.LogWarning("未知的心跳模式: {HealthCheckMode}", HealthCheckMode);
                         break;
                 }
             }

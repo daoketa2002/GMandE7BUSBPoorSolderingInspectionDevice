@@ -53,9 +53,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public bool IsConnected => _isConnected;
 
         /// <summary>
-        /// 扫描枪端口名
+        /// 扫描枪端口名（从硬件驱动属性读取，或返回默认值）
         /// </summary>
-        public string PortName => "COM8"; // 从配置读取，此处为默认值
+        public string PortName => _scannerDevice is Devices.Scanner.HoneywellH1900Scanner scanner
+            ? scanner.PortName
+            : "COM9";
 
         /// <summary>
         /// 构造函数

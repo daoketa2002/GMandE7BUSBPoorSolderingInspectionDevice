@@ -2,6 +2,7 @@
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
@@ -15,6 +16,7 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -36,6 +38,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly Serilog.ILogger _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly ILoggerFactory _loggerFactory;
+        private readonly IDeviceConnectionManager _deviceManager;
 
         private readonly CsvStorageSettings _csvStorageSettings;
         private readonly CsvStoragePathManager _csvPathManager;
@@ -172,7 +175,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             CsvStoragePathManager csvPathManager,
             IConfiguration configuration,
             IServiceProvider serviceProvider,
-            ILoggerFactory loggerFactory)
+            ILoggerFactory loggerFactory,
+            IDeviceConnectionManager deviceManager)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
@@ -182,6 +186,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+            _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _logger = Log.ForContext<SystemSettingsViewModel>();
 
             LoadExistingSettings();
@@ -335,8 +340,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 测试FP0H PLC连接。
-        /// 使用当前UI上的配置参数，创建临时Modbus连接验证通信是否正常。
-        /// 不影响生产环境的持久连接。
+        /// 生产已连接时直接返回成功，不干扰持久连接。
+        /// 未连接时创建独立TcpClient发送Modbus指令验证，测试完立即释放。
         /// </summary>
         [RelayCommand]
         private async Task TestPlcConnectionAsync()
@@ -346,6 +351,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             // 取消之前的清除任务
             CancelTestClear(ref _plcTestClearCts);
+
+            // ⭐ 生产已连接则直接返回成功
+            if (_deviceManager.IsPlcConnected)
+            {
+                SetPlcTestResult(true, "PLC已连接（生产连接正常）");
+                ScheduleTestResultClear(ref _plcTestClearCts, ClearPlcTestResult);
+                return;
+            }
 
             IsTestingPlc = true;
             PlcTestButtonText = "⏳ 测试中...";
@@ -367,15 +380,42 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // 通过DI获取PLC服务实例并调用测试方法
-                var plcService = _serviceProvider.GetRequiredService<TcpClientPLCMotionService>();
+                // 创建独立TcpClient，不经过生产单例
+                bool success = false;
+                using (var tcpClient = new TcpClient())
+                {
+                    using var timeoutCts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
+                    var connectTask = tcpClient.ConnectAsync(Fp0hConfig.IpAddress, Fp0hConfig.Port);
+                    var timeoutTask = Task.Delay(TEST_CONNECTION_TIMEOUT_MS, timeoutCts.Token);
+                    var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(true);
 
-                using var cts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
-                bool success = await plcService.TestConnectionAsync(
-                    Fp0hConfig.IpAddress,
-                    Fp0hConfig.Port,
-                    TEST_CONNECTION_TIMEOUT_MS,
-                    cts.Token).ConfigureAwait(true);
+                    if (completedTask == connectTask)
+                    {
+                        await connectTask.ConfigureAwait(false);
+
+                        // TCP连上后发一条Modbus读保持寄存器请求验证通信
+                        using var stream = tcpClient.GetStream();
+                        stream.ReadTimeout = TEST_CONNECTION_TIMEOUT_MS / 2;
+                        stream.WriteTimeout = TEST_CONNECTION_TIMEOUT_MS / 2;
+
+                        var request = ModbusTcpMessageHelper.CreateReadHoldingRegistersRequest(
+                            transactionId: 1, unitId: 1, startAddress: 0, quantity: 1);
+                        await stream.WriteAsync(request, timeoutCts.Token).ConfigureAwait(false);
+                        await stream.FlushAsync(timeoutCts.Token).ConfigureAwait(false);
+
+                        var buffer = new byte[256];
+                        int totalRead = 0, bytesRead;
+                        do
+                        {
+                            bytesRead = await stream.ReadAsync(
+                                buffer.AsMemory(totalRead, buffer.Length - totalRead), timeoutCts.Token).ConfigureAwait(false);
+                            totalRead += bytesRead;
+                        }
+                        while (bytesRead > 0 && totalRead < buffer.Length);
+
+                        success = totalRead >= 9; // 最小有效Modbus TCP响应
+                    }
+                }
 
                 if (success)
                 {
@@ -402,7 +442,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 IsTestingPlc = false;
                 PlcTestButtonText = "🔍 测试连接";
-                // 5秒后自动清除结果
                 ScheduleTestResultClear(ref _plcTestClearCts, ClearPlcTestResult);
             }
         }
@@ -427,8 +466,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 测试扫描枪连接。
-        /// 创建临时HoneywellH1900Scanner实例，使用当前UI配置尝试打开串口。
-        /// 测试完成后立即断开并释放资源，不影响生产环境的持久连接。
+        /// 生产已连时直接返回成功（避免Windows COM口独占导致的假阴性）。
+        /// 未连接时创建临时HoneywellH1900Scanner实例测试串口通信，用完即释放。
         /// </summary>
         [RelayCommand]
         private async Task TestScannerConnectionAsync()
@@ -436,6 +475,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (IsTestingScanner) return;
 
             CancelTestClear(ref _scannerTestClearCts);
+
+            // ⭐ 生产已连接则直接返回成功
+            if (_deviceManager.IsScannerConnected)
+            {
+                SetScannerTestResult(true, "扫描枪已连接（生产连接正常）");
+                ScheduleTestResultClear(ref _scannerTestClearCts, ClearScannerTestResult);
+                return;
+            }
 
             IsTestingScanner = true;
             ScannerTestButtonText = "⏳ 测试中...";
@@ -528,8 +575,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 测试GDM-9060万用表连接。
-        /// 创建临时GwInstekGDM9060Driver实例，使用当前UI配置尝试TCP连接并验证SCPI通信。
-        /// 测试完成后立即断开并释放资源，不影响生产环境的持久连接。
+        /// 生产已连时直接返回成功。未连接时创建临时GwInstekGDM9060Driver实例测试TCP+SCPI通信。
         /// </summary>
         [RelayCommand]
         private async Task TestDmmConnectionAsync()
@@ -537,6 +583,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (IsTestingDmm) return;
 
             CancelTestClear(ref _dmmTestClearCts);
+
+            // ⭐ 生产已连接则直接返回成功
+            if (_deviceManager.IsDmmConnected)
+            {
+                SetDmmTestResult(true, "万用表已连接（生产连接正常）");
+                ScheduleTestResultClear(ref _dmmTestClearCts, ClearDmmTestResult);
+                return;
+            }
 
             IsTestingDmm = true;
             DmmTestButtonText = "⏳ 测试中...";

@@ -91,7 +91,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // ⭐ 同步扫描枪初始状态
             IsScannerConnected = _deviceManager.IsScannerConnected;
             ScannerStatusText = _deviceManager.ScannerStatusText;
-            ScannerPortName = _deviceManager.IsScannerConnected ? "COM8" : "COM8";  // 从配置读取或使用默认值
 
             // ⭐ 订阅全局设备管理器事件
             _deviceManager.ScannerConnectionStateChanged += OnScannerConnectionStateChanged;

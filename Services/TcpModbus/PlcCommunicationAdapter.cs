@@ -4,6 +4,7 @@
 // 修正: ConnectionStateChanged 事件代理改用内部订阅+转发
 // ============================================================
 
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using Microsoft.Extensions.Logging;
 using System;
@@ -81,6 +82,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         {
             // 安全触发 EventHandler<bool> 事件
             ConnectionStateChanged?.Invoke(this, connected);
+        }
+
+        #endregion
+
+        #region 配置注入
+
+        /// <summary>
+        /// 从 FP0HCommunicationConfig 应用PLC连接配置到内部的 TcpClientPLCMotionService
+        /// 由 DeviceConnectionManager 在启动时调用，确保配置与UI同步
+        /// </summary>
+        /// <param name="config">PLC通信配置（来自系统设定页）</param>
+        public void ApplyConfig(FP0HCommunicationConfig config)
+        {
+            _plcService.Host = config.IpAddress;
+            _plcService.Port = config.Port;
+            _plcService.ReceiveTimeoutMs = config.ReceiveTimeoutMs;
+            _plcService.SendTimeoutMs = config.SendTimeoutMs;
+            _plcService.ReconnectDelayMs = config.ReconnectDelayMs;
+            _plcService.MaxReconnectAttempts = config.MaxReconnectAttempts;
+            _plcService.HealthCheckMode = config.HealthCheckMode;
+            _plcService.HealthCheckIntervalSeconds = config.HealthCheckIntervalSeconds;
+            _plcService.LastDataTimeoutSeconds = config.LastDataTimeoutSeconds;
+
+            _logger.LogDebug("已应用PLC配置: {Host}:{Port}", _plcService.Host, _plcService.Port);
         }
 
         #endregion

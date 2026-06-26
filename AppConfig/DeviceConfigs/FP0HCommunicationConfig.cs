@@ -18,6 +18,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         private int _reconnectDelayMs = 2000;
         private int _maxReconnectAttempts = 12;
         private int _healthCheckIntervalSeconds = 5;
+        private int _lastDataTimeoutSeconds = 30;
         private HealthCheckMode _healthCheckMode = HealthCheckMode.Disabled;
 
         /// <summary>
@@ -99,6 +100,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         {
             get => _healthCheckIntervalSeconds;
             set { _healthCheckIntervalSeconds = value; OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// 配合 DataActivity 模式使用的无数据超时时间（秒）
+        /// 超过此时间未收到数据则判定连接断开，触发重连
+        /// </summary>
+        public int LastDataTimeoutSeconds
+        {
+            get => _lastDataTimeoutSeconds;
+            set { _lastDataTimeoutSeconds = value; OnPropertyChanged(); }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

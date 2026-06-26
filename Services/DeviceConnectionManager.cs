@@ -399,9 +399,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             }
 
             // ========== 注入PLC配置 ==========
-            if (settings.FP0HCommunication != null)
+            if (settings.FP0HCommunication != null &&
+                _plcDevice is Services.TcpModbus.PlcCommunicationAdapter plcAdapter)
             {
-                _logger.LogDebug("已加载PLC配置: {Ip}:{Port}",
+                plcAdapter.ApplyConfig(settings.FP0HCommunication);
+                _logger.LogDebug("已注入PLC配置: {Host}:{Port}",
                     settings.FP0HCommunication.IpAddress,
                     settings.FP0HCommunication.Port);
             }
