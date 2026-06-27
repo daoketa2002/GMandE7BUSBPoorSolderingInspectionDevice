@@ -239,21 +239,27 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     // 尝试连接到服务器
                     await ConnectToServerAsync().ConfigureAwait(false);
 
-                    // 关键修复：明确设置内部连接状态为 true，并触发事件
+                    // TCP 握手成功后仅作为内部临时通信状态，用于发送 Modbus 验证帧。
+                    // 注意：此处不能对外触发已连接事件，否则无真实 PLC 响应时运行界面会短暂变绿。
                     _isConnected = true;
+
+                    // ⭐ 先启动数据接收循环（Modbus验证需要读循环接收应答）
+                    _readLoopCts = new CancellationTokenSource();
+                    _ = Task.Run(() => ReadDataAsync(_readLoopCts.Token), _readLoopCts.Token);
+
+                    // ⭐ Modbus验证：读保持寄存器确认对方是真正的PLC，2秒超时
+                    await VerifyDeviceRespondsAsync().ConfigureAwait(false);
+
+                    // 只有 PLC 通过 Modbus 应答验证后，才向 UI 和设备管理器发布已连接状态。
                     ConnectionStateChanged?.Invoke(true);
                     DetailedConnectionStateChanged?.Invoke(ConnectionState.Connected);
 
-                    // 启动心跳检测
+                    // 验证通过后才启动心跳检测
                     if (HealthCheckMode != HealthCheckMode.Disabled)
                     {
                         _heartbeatCts = new CancellationTokenSource();
                         _healthCheckTask = Task.Run(() => StartHealthCheckLoop(_heartbeatCts.Token), _heartbeatCts.Token);
                     }
-
-                    // 启动数据接收循环
-                    _readLoopCts = new CancellationTokenSource();
-                    _ = Task.Run(() => ReadDataAsync(_readLoopCts.Token), _readLoopCts.Token);
 
                     _logger.LogInformation($"Modbus TCP客户端已连接到 {Host}:{Port}");
                     Notify(NotificationType.Success, $"已连接到 {Host}:{Port}", "Start");
@@ -278,6 +284,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             {
                 _syncLock.Release();
             }
+        }
+
+        /// <summary>
+        /// 发送读保持寄存器指令验证 PLC 是否有 Modbus 应答。
+        /// TCP 握手成功不代表对方是 PLC，必须在 _isConnected 宣告前验证。
+        /// 验证失败时抛出 IOException，由 StartAsync 的 catch 块统一清理。
+        /// </summary>
+        private async Task VerifyDeviceRespondsAsync()
+        {
+            // 读保持寄存器 40001（DT0），1 字，2 秒超时
+            var response = await ExecuteReadOperationAsync(0x03, 1, 40001, 1, 2000).ConfigureAwait(false);
+            if (response == null)
+            {
+                _logger.LogWarning("PLC设备Modbus验证失败：TCP已建立，但2秒内未收到寄存器40001响应");
+                throw new IOException("PLC设备验证失败：2秒内无Modbus应答");
+            }
+            _logger.LogInformation("PLC设备Modbus验证通过（寄存器40001应答正常）");
         }
 
         /// <summary>
@@ -824,14 +847,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                         await ConnectToServerAsync().ConfigureAwait(false);
 
+                        // TCP 重连成功后先恢复内部临时通信状态，供 Modbus 验证读指令使用。
+                        // 验证通过前不发布已连接事件，避免运行界面出现假性绿色已连接。
+                        _isConnected = true;
+
                         // 重连成功，启动数据接收循环
                         _readLoopCts?.Cancel();
                         _readLoopCts?.Dispose();
                         _readLoopCts = new CancellationTokenSource();
                         _ = Task.Run(() => ReadDataAsync(_readLoopCts.Token), _readLoopCts.Token);
 
-                        // 关键修复：重连成功后，明确设置内部连接状态为 true，并触发事件
-                        _isConnected = true;
+                        await VerifyDeviceRespondsAsync().ConfigureAwait(false);
+
+                        // 只有 PLC 通过 Modbus 应答验证后，才发布重连成功。
                         ConnectionStateChanged?.Invoke(true);
                         DetailedConnectionStateChanged?.Invoke(ConnectionState.Connected);
 
@@ -842,6 +870,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     catch (Exception ex)
                     {
                         attempts++;
+                        _isConnected = false;
+                        CleanupConnection();
                         _logger.LogWarning(ex, "重连失败 ({Attempts}/{MaxRetries})，等待 {RetryDelayMs}ms", attempts, maxRetries, retryDelayMs);
 
                         if (!_isRunning)

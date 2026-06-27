@@ -366,17 +366,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         private void SubscribeToHardwareEvents()
         {
-            // PLC 连接状态变更
-            _plcDevice.ConnectionStateChanged += async (sender, connected) =>
-                await PublishStateChangeAsync(DeviceTypeNames.Plc, connected).ConfigureAwait(false);
+            // ⭐ PLC 连接状态变更 —— 通过 Dispatcher.BeginInvoke 排队到 UI 线程，
+            // 避免驱动层在 ConnectAsync 内部过早触发 ConnectionStateChanged 同步污染 StateStore。
+            _plcDevice.ConnectionStateChanged += (sender, connected) =>
+            {
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    var args = _stateStore.UpdateConnectionState(DeviceTypeNames.Plc, connected);
+                    PlcConnectionStateChanged?.Invoke(this, args);
+                    CheckAllDevicesReady();
+                });
+            };
 
-            // 万用表连接状态变更
-            _dmmDevice.ConnectionStateChanged += async (sender, connected) =>
-                await PublishStateChangeAsync(DeviceTypeNames.Dmm, connected).ConfigureAwait(false);
+            // 万用表连接状态变更（同上 Dispatcher 包裹）
+            _dmmDevice.ConnectionStateChanged += (sender, connected) =>
+            {
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    var args = _stateStore.UpdateConnectionState(DeviceTypeNames.Dmm, connected);
+                    DmmConnectionStateChanged?.Invoke(this, args);
+                    CheckAllDevicesReady();
+                });
+            };
 
-            // 扫描枪连接状态变更
-            _scannerDevice.ConnectionStateChanged += async (sender, connected) =>
-                await PublishStateChangeAsync(DeviceTypeNames.Scanner, connected).ConfigureAwait(false);
+            // 扫描枪连接状态变更（同上 Dispatcher 包裹）
+            _scannerDevice.ConnectionStateChanged += (sender, connected) =>
+            {
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    var args = _stateStore.UpdateConnectionState(DeviceTypeNames.Scanner, connected);
+                    ScannerConnectionStateChanged?.Invoke(this, args);
+                    CheckAllDevicesReady();
+                });
+            };
 
             // 扫描枪条码转发（统一入口）
             _scannerBarcodeService.BarcodeParsed += (sender, e) =>
