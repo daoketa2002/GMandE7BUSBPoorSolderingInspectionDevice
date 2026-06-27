@@ -1,4 +1,5 @@
 ﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Logging;
 using GMandE7BUSBPoorSolderingInspectionDevice.Data;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Plc;
@@ -58,18 +59,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                 // ⭐ 启动设备连接管理器（后台自动连接PLC、万用表、扫描枪）
                 var deviceManager = host.Services.GetRequiredService<IDeviceConnectionManager>();
 
-                Log.Information("========== 系统启动，开始初始化设备连接 ==========");
+                var startupLogger = Log.ForContext<Program>();
+                startupLogger.Information("[系统启动] 开始初始化设备连接");
 
                 _ = Task.Run(async () =>
                 {
                     try
                     {
                         await deviceManager.StartAllAsync();
-                        Log.Information("✅ 设备连接管理器启动完成");
+                        startupLogger.Information("[系统启动] 设备连接管理器启动完成");
                     }
                     catch (Exception ex)
                     {
-                        Log.Error(ex, "❌ 设备连接管理器启动失败: {Message}", ex.Message);
+                        startupLogger.Error(ex, "[系统启动] 设备连接管理器启动失败: {Message}", ex.Message);
                     }
                 });
 
@@ -79,7 +81,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             {
                 MessageBox.Show($"应用程序启动失败: {ex.Message}",
                               "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                Log.Fatal(ex, "应用程序启动失败");
+                Log.ForContext<Program>().Fatal(ex, "[系统启动] 应用程序启动失败");
             }
         }
 
@@ -130,12 +132,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                       .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning) // 减少EF日志
                       .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
                       .Enrich.FromLogContext()
+                      .Enrich.With<SourceContextShortNameEnricher>()
                       .WriteTo.Debug(
-                          outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+                          outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}")
                       .WriteTo.File("logs/app-.log",
                           rollingInterval: RollingInterval.Day,
                           retainedFileCountLimit: 7,
-                          outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}");
+                          outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}");
               });
 
 
@@ -295,7 +298,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
         {
             try
             {
-                Log.Information("开始初始化数据库...");
+                var logger = Log.ForContext<Program>();
+                logger.Information("[系统启动] 开始初始化数据库");
 
 #if DEBUG
                 // ========== DEBUG 模式：开发环境，可以删库重建 ==========
@@ -303,20 +307,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
                 if (RECREATE_DATABASE_ON_EACH_RUN)
                 {
-                    Log.Information("【开发模式】正在删除旧数据库...");
+                    logger.Information("[系统启动] 【开发模式】正在删除旧数据库");
                     db.Database.EnsureDeleted();
-                    Log.Information("旧数据库已删除");
+                    logger.Information("[系统启动] 旧数据库已删除");
                 }
 
                 // 创建数据库和表
-                Log.Information("【开发模式】正在创建数据库表结构...");
+                logger.Information("[系统启动] 【开发模式】正在创建数据库表结构");
                 db.Database.EnsureCreated();
-                Log.Information("数据库表结构创建完成");
+                logger.Information("[系统启动] 数据库表结构创建完成");
 
                 // 初始化种子数据
                 InitializeSeedData(db);
 
-                Log.Information("【开发模式】数据库初始化完成");
+                logger.Information("[系统启动] 【开发模式】数据库初始化完成");
 #else
                 // ========== RELEASE 模式：生产环境，绝对不能删库 ==========
 
@@ -325,30 +329,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
                 if (pendingMigrations.Any())
                 {
-                    Log.Information("【生产模式】执行数据库迁移，共 {Count} 个", pendingMigrations.Count);
+                    logger.Information("[系统启动] 【生产模式】执行数据库迁移，共 {Count} 个", pendingMigrations.Count);
                     db.Database.Migrate();
-                    Log.Information("迁移执行完成");
+                    logger.Information("[系统启动] 迁移执行完成");
 
                     // 迁移后初始化种子数据
                     InitializeSeedData(db);
-                    Log.Information("数据库初始化完成");
+                    logger.Information("[系统启动] 数据库初始化完成");
                     return;
                 }
 
                 // 2. 没有迁移时，直接尝试创建表（如果表已存在，EnsureCreated 不会做任何事）
-                Log.Information("【生产模式】检查/创建数据库表结构...");
+                logger.Information("[系统启动] 【生产模式】检查/创建数据库表结构");
                 var created = db.Database.EnsureCreated();
-                Log.Information("EnsureCreated 执行结果: {Created}", created);
+                logger.Information("[系统启动] EnsureCreated 执行结果: {Created}", created);
 
                 // 3. 初始化种子数据
                 InitializeSeedData(db);
 
-                Log.Information("【生产模式】数据库初始化完成");
+                logger.Information("[系统启动] 【生产模式】数据库初始化完成");
 #endif
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "数据库初始化失败");
+                Log.ForContext<Program>().Error(ex, "[系统启动] 数据库初始化失败");
 
 #if DEBUG
                 // DEBUG 模式下抛出异常，让开发者看到问题
@@ -407,11 +411,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
                 db.LogRecords.AddRange(records);
                 db.SaveChanges();
-                Log.Information("种子数据初始化完成");
+                Log.ForContext<Program>().Information("[系统启动] 种子数据初始化完成");
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "种子数据初始化失败");
+                Log.ForContext<Program>().Error(ex, "[系统启动] 种子数据初始化失败");
             }
         }
 

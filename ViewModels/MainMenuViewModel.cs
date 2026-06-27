@@ -42,19 +42,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                _logger.Information("用户点击运行界面按钮");
+                _logger.Information("[用户操作] 用户点击运行界面按钮");
                 var operatorName = _operatorStateService.CurrentOperatorName;
-                _logger.Information("当前作业员: {Operator} (已选择: {HasOperator})",
+                _logger.Information("[用户操作] 当前作业员: {Operator} (已选择: {HasOperator})",
                     operatorName, _operatorStateService.HasOperator);
                 if (!_operatorStateService.HasOperator)
                 {
-                    _logger.Information("未选择作业员，使用默认作业员: {Default}", operatorName);
+                    _logger.Information("[用户操作] 未选择作业员，使用默认作业员: {Default}", operatorName);
                 }
                 await _navigationService.NavigateToAsync<TestPageView>("Main", null);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "导航到运行界面失败");
+                _logger.Error(ex, "[导航] 导航到运行界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
@@ -64,12 +64,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                _logger.Information("用户点击作业员设定按钮");
+                _logger.Information("[用户操作] 用户点击作业员设定按钮");
                 await _navigationService.NavigateToAsync<OperatorSettingsView>();
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "导航到作业员设定界面失败");
+                _logger.Error(ex, "[导航] 导航到作业员设定界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
@@ -82,7 +82,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                _logger.Information("用户点击方案设定按钮");
+                _logger.Information("[用户操作] 用户点击方案设定按钮");
 
                 var mainWindow = Application.Current.MainWindow;
                 if (mainWindow == null) return;
@@ -90,17 +90,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow, PasswordDialogContext.PlanSettings);
                 if (isPasswordVerified)
                 {
-                    _logger.Information("密码验证通过，导航到方案设定界面");
+                    _logger.Information("[审计] 密码验证通过，导航到方案设定界面");
                     await _navigationService.NavigateToAsync<PlanSettingView>();
                 }
                 else
                 {
-                    _logger.Information("用户取消或密码验证失败，未进入方案设定");
+                    _logger.Information("[审计] 用户取消或密码验证失败，未进入方案设定");
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "导航到方案设定界面失败");
+                _logger.Error(ex, "[导航] 导航到方案设定界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
@@ -110,14 +110,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                _logger.Information("导航到日志数据界面");
-                
-                _logger.Information("用户点击日志数据按钮");
+                _logger.Information("[用户操作] 用户点击日志数据按钮");
                 await _navigationService.NavigateToAsync<LogDataView>("Main", null);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "导航到日志数据界面失败");
+                _logger.Error(ex, "[导航] 导航到日志数据界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
@@ -136,17 +134,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 bool isPasswordVerified = PasswordDialog.ShowPasswordDialog(mainWindow, PasswordDialogContext.SystemSettings);
                 if (isPasswordVerified)
                 {
-                    _logger.Information("密码验证通过，导航到系统设置界面");
+                    _logger.Information("[审计] 密码验证通过，导航到系统设置界面");
                     await _navigationService.NavigateToAsync<SystemSettingsView>("Main", null);
                 }
                 else
                 {
-                    _logger.Information("用户取消或密码验证失败，未进入系统设置");
+                    _logger.Information("[审计] 用户取消或密码验证失败，未进入系统设置");
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "导航到系统设置界面失败");
+                _logger.Error(ex, "[导航] 导航到系统设置界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
@@ -160,13 +158,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
-                _logger.Information("用户点击PLC通信测试按钮");
+                _logger.Information("[用户操作] 用户点击PLC通信测试按钮");
                 // TODO: 跳转到PLC通信测试页面或直接执行测试
                 await _notificationService.ShowInfoAsync("PLC通信测试功能开发中...\n该功能将在后续版本实现。", "提示");
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "PLC通信测试操作失败");
+                _logger.Error(ex, "[用户操作] PLC通信测试操作失败");
                 await _notificationService.ShowErrorAsync($"操作失败：{ex.Message}");
             }
         }
@@ -181,11 +179,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 var deviceSettings = _settingsService.LoadSettings();
                 IsPlcCommunicationTestVisible = deviceSettings.IsPlcCommunicationTestEnabled;
-                _logger.Debug("PLC通信测试按钮可见性: {IsVisible}", IsPlcCommunicationTestVisible);
+                _logger.Debug("[用户操作] PLC通信测试按钮可见性: {IsVisible}", IsPlcCommunicationTestVisible);
             }
             catch (Exception ex)
             {
-                _logger.Warning(ex, "读取PLC通信测试配置失败，默认隐藏按钮");
+                _logger.Warning(ex, "[用户操作] 读取PLC通信测试配置失败，默认隐藏按钮");
                 IsPlcCommunicationTestVisible = false;
             }
         }
@@ -199,26 +197,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var result = await _notificationService.ConfirmAsync("确定要退出系统吗？", "确认退出");
                 if (result)
                 {
-                    _logger.Information("用户确认退出系统");
+                    _logger.Information("[用户操作] 用户确认退出系统");
                     Application.Current.Shutdown();
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "退出操作失败");
+                _logger.Error(ex, "[用户操作] 退出操作失败");
             }
         }
 
         public Task OnNavigatedToAsync(object? parameter = null)
         {
-            _logger.Debug("进入主菜单");
+            _logger.Debug("[导航] 进入主菜单");
             RefreshPlcTestButtonVisibility();   // 刷新PLC通信测试按钮状态
             return Task.CompletedTask;
         }
 
         public Task OnNavigatedFromAsync()
         {
-            _logger.Debug("离开主菜单");
+            _logger.Debug("[导航] 离开主菜单");
             return Task.CompletedTask;
         }
 

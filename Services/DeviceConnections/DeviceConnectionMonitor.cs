@@ -38,13 +38,13 @@ public sealed class DeviceConnectionMonitor : IDisposable
     {
         if (_monitorCts is not null)
         {
-            _logger.LogDebug("后台监控已在运行，忽略重复启动");
+            _logger.LogDebug("[设备连接] 后台监控已在运行，忽略重复启动");
             return;
         }
 
         _monitorCts = new CancellationTokenSource();
         _monitorTask = Task.Run(() => MonitorLoopAsync(devices, onStateChangedAsync, onScannerConnectedAsync, _monitorCts.Token));
-        _logger.LogInformation("后台设备监控已启动，检查间隔 {Interval}ms", _options.MonitorIntervalMs);
+        _logger.LogInformation("[设备连接] 后台设备监控已启动，检查间隔 {Interval}ms", _options.MonitorIntervalMs);
     }
 
     /// <summary>
@@ -64,13 +64,13 @@ public sealed class DeviceConnectionMonitor : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "等待监控线程结束时出现异常");
+                _logger.LogDebug(ex, "[设备连接] 等待监控线程结束时出现异常");
             }
 
             _monitorTask = null;
         }
 
-        _logger.LogInformation("后台设备监控已停止");
+        _logger.LogInformation("[设备连接] 后台设备监控已停止");
     }
 
     private async Task MonitorLoopAsync(
@@ -94,11 +94,11 @@ public sealed class DeviceConnectionMonitor : IDisposable
         }
         catch (OperationCanceledException)
         {
-            _logger.LogDebug("后台监控被取消");
+            _logger.LogDebug("[设备连接] 后台监控被取消");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "后台监控异常");
+            _logger.LogError(ex, "[设备连接] 后台监控异常");
         }
     }
 
@@ -124,7 +124,7 @@ public sealed class DeviceConnectionMonitor : IDisposable
         }
 
         _stateStore.SetConnecting(deviceType);
-        _logger.LogWarning("后台监控检测到 {DeviceType} 未连接，开始重连", deviceType);
+        _logger.LogWarning("[设备连接][{DeviceType}] 后台监控检测到设备未连接，开始重连", deviceType);
 
         var connected = await _executor.ConnectWithRetryAsync(device, deviceType, ct).ConfigureAwait(false);
         await onStateChangedAsync(deviceType, connected).ConfigureAwait(false);

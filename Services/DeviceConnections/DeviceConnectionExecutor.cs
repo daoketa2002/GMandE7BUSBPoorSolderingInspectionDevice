@@ -35,14 +35,14 @@ public sealed class DeviceConnectionExecutor : IDisposable
         CancellationToken ct)
     {
         var deviceLock = GetLock(deviceType);
-        _logger.LogInformation("[{DeviceType}] 开始连接流程", deviceType);
+        _logger.LogInformation("[设备连接][{DeviceType}] 开始连接流程", deviceType);
 
         await deviceLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (device.IsConnected)
             {
-                _logger.LogInformation("[{DeviceType}] 硬件报告已连接", deviceType);
+                _logger.LogInformation("[设备连接][{DeviceType}] 硬件报告已连接", deviceType);
                 return true;
             }
 
@@ -57,21 +57,21 @@ public sealed class DeviceConnectionExecutor : IDisposable
                     var connected = await device.ConnectAsync(ct).ConfigureAwait(false);
                     if (connected)
                     {
-                        _logger.LogInformation("[{DeviceType}] 连接成功", deviceType);
+                        _logger.LogInformation("[设备连接][{DeviceType}] 连接成功", deviceType);
                         return true;
                     }
 
-                    _logger.LogWarning("[{DeviceType}] ConnectAsync 返回 false，尝试 {Attempt}/{MaxAttempts}",
+                    _logger.LogWarning("[设备连接][{DeviceType}] ConnectAsync 返回 false，尝试 {Attempt}/{MaxAttempts}",
                         deviceType, attempt, _options.MaxReconnectAttempts);
                 }
                 catch (OperationCanceledException)
                 {
-                    _logger.LogWarning("[{DeviceType}] 连接被取消", deviceType);
+                    _logger.LogWarning("[设备连接][{DeviceType}] 连接被取消", deviceType);
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "[{DeviceType}] 连接异常，尝试 {Attempt}/{MaxAttempts}",
+                    _logger.LogError(ex, "[设备连接][{DeviceType}] 连接异常，尝试 {Attempt}/{MaxAttempts}",
                         deviceType, attempt, _options.MaxReconnectAttempts);
                 }
 
@@ -84,13 +84,13 @@ public sealed class DeviceConnectionExecutor : IDisposable
                 }
             }
 
-            _logger.LogWarning("[{DeviceType}] 达到最大重试次数，连接失败", deviceType);
+            _logger.LogWarning("[设备连接][{DeviceType}] 达到最大重试次数，连接失败", deviceType);
             return false;
         }
         finally
         {
             deviceLock.Release();
-            _logger.LogInformation("[{DeviceType}] 连接流程结束", deviceType);
+            _logger.LogInformation("[设备连接][{DeviceType}] 连接流程结束", deviceType);
         }
     }
 
@@ -104,11 +104,11 @@ public sealed class DeviceConnectionExecutor : IDisposable
         try
         {
             await device.DisconnectAsync().ConfigureAwait(false);
-            _logger.LogInformation("[{DeviceType}] 已断开连接", deviceType);
+            _logger.LogInformation("[设备连接][{DeviceType}] 已断开连接", deviceType);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[{DeviceType}] 断开连接失败", deviceType);
+            _logger.LogWarning(ex, "[设备连接][{DeviceType}] 断开连接失败", deviceType);
         }
         finally
         {
@@ -129,21 +129,21 @@ public sealed class DeviceConnectionExecutor : IDisposable
     /// </summary>
     private void LogAttempt(ICommunicationDevice device, string deviceType, int attempt)
     {
-        _logger.LogInformation("[{DeviceType}] 连接尝试 {Attempt}/{MaxAttempts}",
+        _logger.LogInformation("[设备连接][{DeviceType}] 连接尝试 {Attempt}/{MaxAttempts}",
             deviceType, attempt, _options.MaxReconnectAttempts);
 
         if (deviceType == DeviceTypeNames.Scanner && device is HoneywellH1900Scanner scanner)
         {
-            _logger.LogInformation("[扫描枪] 当前配置 - 端口:{Port}, 波特率:{BaudRate}",
+            _logger.LogInformation("[设备连接][扫描枪] 当前配置 - 端口:{Port}, 波特率:{BaudRate}",
                 scanner.PortName, scanner.BaudRate);
             try
             {
                 var availablePorts = System.IO.Ports.SerialPort.GetPortNames();
-                _logger.LogInformation("[扫描枪] 系统可用串口: {Ports}", string.Join(", ", availablePorts));
+                _logger.LogInformation("[设备连接][扫描枪] 系统可用串口: {Ports}", string.Join(", ", availablePorts));
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[扫描枪] 无法枚举系统串口");
+                _logger.LogWarning(ex, "[设备连接][扫描枪] 无法枚举系统串口");
             }
         }
     }

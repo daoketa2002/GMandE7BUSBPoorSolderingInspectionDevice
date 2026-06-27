@@ -58,7 +58,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     {
         ArgumentNullException.ThrowIfNull(config);
         _config = config;
-        _logger.LogDebug("FP0H PLC 配置已接收: {Host}:{Port}", config.IpAddress, config.Port);
+        _logger.LogDebug("[设备连接][PLC] FP0H PLC 配置已接收: {Host}:{Port}", config.IpAddress, config.Port);
     }
 
     #endregion
@@ -72,20 +72,20 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     {
         if (_config is null)
         {
-            _logger.LogWarning("PLC 连接失败: 未调用 ApplyConfig，缺少连接参数");
+            _logger.LogWarning("[设备连接][PLC] 连接失败: 未调用 ApplyConfig，缺少连接参数");
             return false;
         }
 
         var options = ModbusTcpClientOptions.From(_config);
-        _logger.LogInformation("PLC 开始连接: {Host}:{Port}, UnitId={UnitId}",
+        _logger.LogInformation("[设备连接][PLC] 开始连接: {Host}:{Port}, UnitId={UnitId}",
             options.Host, options.Port, options.UnitId);
 
         bool result = await _modbusClient.ConnectAsync(options, ct).ConfigureAwait(false);
 
         if (result)
-            _logger.LogWarning("PLC 连接成功: {Host}:{Port}", options.Host, options.Port);
+            _logger.LogWarning("[设备连接][PLC] 连接成功: {Host}:{Port}", options.Host, options.Port);
         else
-            _logger.LogWarning("PLC 连接失败: {Host}:{Port}", options.Host, options.Port);
+            _logger.LogWarning("[设备连接][PLC] 连接失败: {Host}:{Port}", options.Host, options.Port);
 
         return result;
     }
@@ -95,7 +95,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task DisconnectAsync()
     {
-        _logger.LogWarning("PLC 断开连接");
+        _logger.LogWarning("[设备连接][PLC] 断开连接");
         await _modbusClient.DisconnectAsync().ConfigureAwait(false);
     }
 
@@ -123,7 +123,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "读取启动信号异常");
+            _logger.LogWarning(ex, "[PLC动作] 读取启动信号异常");
             return PlcOperationResult.Failure($"读取启动信号异常: {ex.Message}");
         }
     }
@@ -157,7 +157,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             ushort value = (ushort)(testPointIndex + 1);
-            _logger.LogWarning("PLC 选择测试点: 索引={Index}, D100值={Value}", testPointIndex, value);
+            _logger.LogWarning("[PLC动作] 选择测试点: 索引={Index}, D100值={Value}", testPointIndex, value);
 
             var response = await _modbusClient.WriteSingleRegisterAsync(
                 DefaultUnitId, _addressMap.TestPointSelectRegister, value, ct).ConfigureAwait(false);
@@ -175,7 +175,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "写入测试点选择异常");
+            _logger.LogWarning(ex, "[PLC动作] 写入测试点选择异常");
             return PlcOperationResult.Failure($"写入测试点选择异常: {ex.Message}");
         }
     }
@@ -188,12 +188,12 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     {
         if (channel < 0)
         {
-            _logger.LogWarning("继电器通道号无效: {Channel}", channel);
+            _logger.LogWarning("[PLC动作] 继电器通道号无效: {Channel}", channel);
             return PlcOperationResult.Failure($"继电器通道号无效: {channel}");
         }
 
         ushort address = (ushort)(_addressMap.RelayBaseAddress + channel);
-        _logger.LogWarning("PLC 继电器: 通道={Channel}, 地址=M{Address}, 值={Value}", channel, address, value);
+        _logger.LogWarning("[PLC动作] 继电器: 通道={Channel}, 地址=M{Address}, 值={Value}", channel, address, value);
 
         return await WriteCoilCoreAsync($"继电器{channel}", address, value, ct).ConfigureAwait(false);
     }
@@ -207,14 +207,14 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     {
         if (index < 0)
         {
-            _logger.LogWarning("检测结果索引无效: {Index}", index);
+            _logger.LogWarning("[PLC动作] 检测结果索引无效: {Index}", index);
             return PlcOperationResult.Failure($"检测结果索引无效: {index}");
         }
 
         try
         {
             ushort address = (ushort)(_addressMap.TestResultBaseRegister + index);
-            _logger.LogWarning("PLC 写入检测结果: 索引={Index}, D{Address}={Value}", index, address, resultValue);
+            _logger.LogWarning("[PLC动作] 写入检测结果: 索引={Index}, D{Address}={Value}", index, address, resultValue);
 
             var response = await _modbusClient.WriteSingleRegisterAsync(
                 DefaultUnitId, address, resultValue, ct).ConfigureAwait(false);
@@ -232,7 +232,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "检测结果[{Index}]写入异常", index);
+            _logger.LogWarning(ex, "[PLC动作] 检测结果[{Index}]写入异常", index);
             return PlcOperationResult.Failure($"检测结果[{index}]写入异常: {ex.Message}");
         }
     }
@@ -246,7 +246,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     private async Task<PlcOperationResult> WriteCoilAsync(string signalName, ushort address, bool value, CancellationToken ct)
     {
-        _logger.LogWarning("PLC 设置 {Signal} = {Value} (M{Address})", signalName, value, address);
+        _logger.LogWarning("[PLC动作] 设置 {Signal} = {Value} (M{Address})", signalName, value, address);
         return await WriteCoilCoreAsync(signalName, address, value, ct).ConfigureAwait(false);
     }
 
@@ -273,7 +273,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name}写入异常 (M{Address})", name, address);
+            _logger.LogWarning(ex, "[PLC动作] {Name}写入异常 (M{Address})", name, address);
             return PlcOperationResult.Failure($"{name}写入异常: {ex.Message}");
         }
     }

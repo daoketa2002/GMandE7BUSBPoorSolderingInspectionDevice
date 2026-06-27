@@ -101,7 +101,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             // 订阅底层硬件事件，统一管理状态变更
             SubscribeToHardwareEvents();
 
-            _logger.LogInformation("DeviceConnectionManager 初始化完成（硬件尚未连接，等待 StartAllAsync）");
+            _logger.LogInformation("[设备连接] DeviceConnectionManager 初始化完成（硬件尚未连接，等待 StartAllAsync）");
         }
 
         #endregion
@@ -119,7 +119,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         public async Task StartAllAsync()
         {
-            _logger.LogInformation("========== 开始自动连接所有设备 ==========");
+            _logger.LogInformation("[设备连接] 开始自动连接所有设备");
             _connectionCts = new CancellationTokenSource();
 
             // 第一步：加载并注入设备配置
@@ -134,7 +134,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             await Task.WhenAll(plcTask, dmmTask, scannerTask).ConfigureAwait(false);
 
-            _logger.LogInformation("设备连接初始化完成 - PLC:{Plc}, DMM:{Dmm}, Scanner:{Scanner}",
+            _logger.LogInformation("[设备连接] 设备连接初始化完成 - PLC:{Plc}, DMM:{Dmm}, Scanner:{Scanner}",
                 _stateStore.IsPlcConnected, _stateStore.IsDmmConnected, _stateStore.IsScannerConnected);
 
             // 第三步：扫描枪硬件就绪后初始化 ScannerBarcodeService
@@ -146,7 +146,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             // 第四步：启动后台监控
             _connectionMonitor.Start(CreateDeviceMap(), PublishStateChangeAsync, InitializeScannerBarcodeServiceAsync);
 
-            _logger.LogInformation("========== 设备连接管理器启动完成 ==========");
+            _logger.LogInformation("[设备连接] 设备连接管理器启动完成");
         }
 
         /// <summary>
@@ -154,7 +154,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         public async Task StopAllAsync()
         {
-            _logger.LogInformation("正在停止所有设备连接...");
+            _logger.LogInformation("[设备连接] 正在停止所有设备连接");
 
             _connectionMonitor.Stop();
             _connectionCts?.Cancel();
@@ -171,7 +171,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             _connectionCts?.Dispose();
             _connectionCts = null;
-            _logger.LogInformation("所有设备连接已停止");
+            _logger.LogInformation("[设备连接] 所有设备连接已停止");
         }
 
         /// <summary>
@@ -183,11 +183,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             if (!DeviceTypeNames.IsKnown(deviceType))
             {
-                _logger.LogWarning("未知设备类型: {DeviceType}", deviceType);
+                _logger.LogWarning("[设备连接] 未知设备类型: {DeviceType}", deviceType);
                 return;
             }
 
-            _logger.LogWarning("用户手动重连设备: {DeviceType}", deviceType);
+            _logger.LogWarning("[用户操作][设备连接][{DeviceType}] 用户手动重连设备", deviceType);
 
             // 重新加载并注入最新配置
             var settings = _settingsService.LoadSettings();
@@ -204,7 +204,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 await InitializeScannerBarcodeServiceAsync().ConfigureAwait(false);
             }
 
-            _logger.LogInformation("========== 手动重连 {DeviceType} 完成，结果: {Result} ==========",
+            _logger.LogInformation("[设备连接][{DeviceType}] 手动重连完成，结果: {Result}",
                 deviceType, _stateStore.IsConnected(deviceType) ? "成功" : "失败");
         }
 
@@ -215,17 +215,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             if (!DeviceTypeNames.IsKnown(deviceType))
             {
-                _logger.LogWarning("未知设备类型: {DeviceType}", deviceType);
+                _logger.LogWarning("[设备连接] 未知设备类型: {DeviceType}", deviceType);
                 return;
             }
 
             if (_stateStore.IsConnected(deviceType))
             {
-                _logger.LogInformation("{DeviceType} 已连接，跳过", deviceType);
+                _logger.LogInformation("[设备连接][{DeviceType}] 已连接，跳过", deviceType);
                 return;
             }
 
-            _logger.LogInformation("连接设备: {DeviceType}", deviceType);
+            _logger.LogInformation("[设备连接][{DeviceType}] 连接设备", deviceType);
 
             // 加载并注入最新配置
             var settings = _settingsService.LoadSettings();
@@ -249,11 +249,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             if (!DeviceTypeNames.IsKnown(deviceType))
             {
-                _logger.LogWarning("未知设备类型: {DeviceType}", deviceType);
+                _logger.LogWarning("[设备连接] 未知设备类型: {DeviceType}", deviceType);
                 return;
             }
 
-            _logger.LogInformation("断开设备: {DeviceType}", deviceType);
+            _logger.LogInformation("[设备连接][{DeviceType}] 断开设备", deviceType);
             var device = GetDevice(deviceType);
             await _connectionExecutor.DisconnectAsync(device, deviceType).ConfigureAwait(false);
             await PublishStateChangeAsync(deviceType, false).ConfigureAwait(false);
@@ -291,11 +291,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             try
             {
                 await _scannerBarcodeService.InitializeAsync().ConfigureAwait(false);
-                _logger.LogInformation("ScannerBarcodeService 初始化完成");
+                _logger.LogInformation("[设备连接][扫描枪] ScannerBarcodeService 初始化完成");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "ScannerBarcodeService 初始化失败");
+                _logger.LogError(ex, "[设备连接][扫描枪] ScannerBarcodeService 初始化失败");
             }
         }
 

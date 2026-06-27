@@ -43,6 +43,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         private volatile bool _isRunning;
         private volatile bool _isDisposed;
+        private string? _currentInspectionId;
 
         /// <summary>
         /// PLC 地址映射（由 Models.PLC动作控制.PlcAddressMap 提供，保持现有默认值）
@@ -167,8 +168,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 _isRunning = true;
                 _inspectionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
+                // 每次检测生成独立流水号，便于在日志中串起同一片产品的完整流程。
+                var inspectionId = CreateInspectionId();
+                _currentInspectionId = inspectionId;
+
                 var result = new InspectionResult
                 {
+                    InspectionId = inspectionId,
                     Barcode = barcode,
                     ModelName = modelName,
                     OperatorName = operatorName,
@@ -179,7 +185,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 {
                     // === 步骤1：初始化 ===
                     SetState(InspectionState.Initializing);
-                    LogInfo($"开始检测 - 条码:{barcode}, 机种:{modelName}, 作业员:{operatorName}");
+                    LogInfo($"开始检测 - InspectionId:{inspectionId}, 条码:{barcode}, 机种:{modelName}, 作业员:{operatorName}, 测试点数:{_config.TestPoints.Count}");
                     await InitializeInspectionAsync(_inspectionCts.Token).ConfigureAwait(false);
 
                     // === 步骤2：逐点检测 ===
@@ -249,7 +255,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     result.EndTime = DateTime.Now;
 
                     SetState(result.IsAllPassed ? InspectionState.CompletedPass : InspectionState.CompletedFail);
-                    LogInfo($"检测完成 - 总数:{result.TotalCount}, 良品:{result.PassCount}, 不良:{result.FailCount}");
+                    LogInfo($"检测完成 - InspectionId:{inspectionId}, 总数:{result.TotalCount}, 良品:{result.PassCount}, 不良:{result.FailCount}, 最终判定:{(result.IsAllPassed ? "OK" : "NG")}");
 
                     // 写入最终结果到PLC
                     await WriteFinalResultToPlcAsync(result.IsAllPassed, _inspectionCts.Token).ConfigureAwait(false);
@@ -265,7 +271,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "检测流程异常");
+                    _logger.LogError(ex, "[检测流程][{InspectionId}] 检测流程异常 - 条码:{Barcode}, 机种:{ModelName}",
+                        inspectionId, barcode, modelName);
                     SetState(InspectionState.Error);
                     result.ErrorMessage = ex.Message;
 
@@ -278,6 +285,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             finally
             {
                 _isRunning = false;
+                _currentInspectionId = null;
                 _engineLock.Release();
             }
         }
@@ -367,7 +375,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             if (!measurement.IsValid)
             {
-                _logger.LogWarning("测量值无效: {ErrorMessage}", measurement.ErrorMessage);
+                _logger.LogWarning("[检测流程][{InspectionId}] 测量值无效: {ErrorMessage}",
+                    _currentInspectionId ?? "-", measurement.ErrorMessage);
                 return "NG";
             }
 
@@ -448,13 +457,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             var oldState = CurrentState;
             CurrentState = newState;
+            _logger.LogDebug("[检测流程][{InspectionId}] 状态变更: {OldState} -> {NewState}",
+                _currentInspectionId ?? "-", oldState, newState);
             StateChanged?.Invoke(this, new InspectionStateChangedEventArgs(oldState, newState));
         }
 
         private void LogInfo(string message)
         {
-            _logger.LogInformation(message);
+            if (string.IsNullOrWhiteSpace(_currentInspectionId))
+            {
+                _logger.LogInformation("[检测流程] {Message}", message);
+            }
+            else
+            {
+                _logger.LogInformation("[检测流程][{InspectionId}] {Message}", _currentInspectionId, message);
+            }
+
             LogMessage?.Invoke(this, $"[{DateTime.Now:HH:mm:ss}] {message}");
+        }
+
+        private static string CreateInspectionId()
+        {
+            return $"INS-{DateTime.Now:yyyyMMddHHmmssfff}";
         }
 
         #endregion
@@ -685,6 +709,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     /// </summary>
     public class InspectionResult
     {
+        /// <summary>
+        /// 单次检测流水号，用于把检测开始、逐点测量、PLC写入和最终结果日志串联起来。
+        /// </summary>
+        public string InspectionId { get; set; } = string.Empty;
+
         public string Barcode { get; set; } = string.Empty;
         public string ModelName { get; set; } = string.Empty;
         public string OperatorName { get; set; } = string.Empty;

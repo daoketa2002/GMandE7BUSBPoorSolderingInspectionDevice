@@ -34,12 +34,12 @@ public sealed class DeviceConfigurationApplier
     {
         if (settings.FP0HCommunication is null)
         {
-            _logger.LogWarning("PLC配置注入跳过: 设置中无 FP0H 配置");
+            _logger.LogWarning("[设备连接][PLC] 配置注入跳过: 设置中无 FP0H 配置");
             return;
         }
 
         plcDevice.ApplyConfig(settings.FP0HCommunication);
-        _logger.LogDebug("已注入PLC配置: {Host}:{Port}",
+        _logger.LogDebug("[设备连接][PLC] 已注入配置: {Host}:{Port}",
             settings.FP0HCommunication.IpAddress, settings.FP0HCommunication.Port);
     }
 
@@ -47,7 +47,7 @@ public sealed class DeviceConfigurationApplier
     {
         if (settings.GDM9060Communication is null || dmmDevice is not GwInstekGDM9060Driver dmmDriver)
         {
-            _logger.LogWarning("万用表配置注入失败，Settings={HasSettings}, Device={DeviceType}",
+            _logger.LogWarning("[设备连接][DMM] 万用表配置注入失败，Settings={HasSettings}, Device={DeviceType}",
                 settings.GDM9060Communication is not null, dmmDevice.GetType().Name);
             return;
         }
@@ -55,21 +55,21 @@ public sealed class DeviceConfigurationApplier
         dmmDriver.Host = settings.GDM9060Communication.IpAddress;
         dmmDriver.Port = settings.GDM9060Communication.Port;
         dmmDriver.TimeoutMs = settings.GDM9060Communication.ReceiveTimeoutMs;
-        _logger.LogDebug("已注入万用表配置: {Host}:{Port}", dmmDriver.Host, dmmDriver.Port);
+        _logger.LogDebug("[设备连接][DMM] 已注入配置: {Host}:{Port}", dmmDriver.Host, dmmDriver.Port);
     }
 
     private void ApplyScanner(DeviceSettings settings, IScannerDevice scannerDevice)
     {
         if (settings.ScannerSerialCommunication is null || scannerDevice is not HoneywellH1900Scanner scanner)
         {
-            _logger.LogWarning("扫描枪配置注入失败，Settings={HasSettings}, Device={DeviceType}",
+            _logger.LogWarning("[设备连接][扫描枪] 配置注入失败，Settings={HasSettings}, Device={DeviceType}",
                 settings.ScannerSerialCommunication is not null, scannerDevice.GetType().Name);
             return;
         }
 
         scanner.PortName = settings.ScannerSerialCommunication.SerialNumber;
         scanner.BaudRate = settings.ScannerSerialCommunication.BaudRate;
-        _logger.LogInformation("已注入扫描枪配置: Port={Port}, BaudRate={BaudRate}",
+        _logger.LogInformation("[设备连接][扫描枪] 已注入配置: Port={Port}, BaudRate={BaudRate}",
             scanner.PortName, scanner.BaudRate);
     }
 }

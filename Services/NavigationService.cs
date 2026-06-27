@@ -170,7 +170,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             if (_isNavigating.Value)
             {
-                _logger.LogWarning("导航正在进行中，等待完成");
+                _logger.LogWarning("[导航] 导航正在进行中，等待完成");
                 // 等待一小段时间
                 try
                 {
@@ -183,7 +183,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                 if (_isNavigating.Value)
                 {
-                    _logger.LogWarning("导航仍在进行中，忽略重复请求");
+                    _logger.LogWarning("[导航] 导航仍在进行中，忽略重复请求");
                     return;
                 }
             }
@@ -208,13 +208,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                     if (!await interceptor.CanNavigateAsync(regionName, viewType, parameter))
                     {
-                        _logger.LogWarning("导航被拦截器 {Interceptor} 阻止", interceptor.GetType().Name);
+                        _logger.LogWarning("[导航] 导航被拦截器 {Interceptor} 阻止", interceptor.GetType().Name);
                         return;
                     }
                     await interceptor.OnNavigatingAsync(regionName, viewType, parameter);
                 }
 
-                _logger.LogInformation("开始导航到区域 {RegionName} 的视图 {ViewType}", regionName, viewType.Name);
+                _logger.LogInformation("[导航] 开始导航到区域 {RegionName} 的视图 {ViewType}", regionName, viewType.Name);
 
                 // 获取或创建视图（带取消支持）
                 var view = await GetOrCreateViewAsync(viewType, currentToken);
@@ -246,11 +246,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     await interceptor.OnNavigatedAsync(regionName, viewType, parameter, true);
                 }
 
-                _logger.LogInformation("导航完成到区域 {RegionName} 的视图 {ViewType}", regionName, viewType.Name);
+                _logger.LogInformation("[导航] 导航完成到区域 {RegionName} 的视图 {ViewType}", regionName, viewType.Name);
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("导航到区域 {RegionName} 的视图 {ViewType} 被取消", regionName, viewType.Name);
+                _logger.LogInformation("[导航] 导航到区域 {RegionName} 的视图 {ViewType} 被取消", regionName, viewType.Name);
 
                 // 通知拦截器导航取消
                 foreach (var interceptor in _interceptors)
@@ -260,11 +260,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             }
             catch (NavigationCanceledException ex)
             {
-                _logger.LogInformation("用户取消导航：{Message}", ex.Message);
+                _logger.LogInformation("[导航] 用户取消导航：{Message}", ex.Message);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "导航到区域 {RegionName} 的视图 {ViewType} 失败", regionName, viewType.Name);
+                _logger.LogError(ex, "[导航] 导航到区域 {RegionName} 的视图 {ViewType} 失败", regionName, viewType.Name);
 
                 // 通知拦截器导航失败
                 foreach (var interceptor in _interceptors)
@@ -422,30 +422,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             Type? viewModelType = null;
 
-            _logger.LogInformation("========== SetupViewModelAsync 开始 ==========");
-            _logger.LogInformation("视图类型: {ViewType}", view.GetType().FullName);
-            _logger.LogInformation("当前 DataContext: {DataContext}", view.DataContext?.GetType().FullName ?? "null");
+            _logger.LogDebug("[导航] SetupViewModelAsync 开始");
+            _logger.LogDebug("[导航] 视图类型: {ViewType}", view.GetType().FullName);
+            _logger.LogDebug("[导航] 当前 DataContext: {DataContext}", view.DataContext?.GetType().FullName ?? "null");
 
             // ⭐ 如果已经有 DataContext，直接使用它
             if (view.DataContext != null)
             {
-                _logger.LogInformation("✅ 视图已有 DataContext: {ViewModelType}，直接使用", view.DataContext.GetType().FullName);
+                _logger.LogDebug("[导航] 视图已有 DataContext: {ViewModelType}，直接使用", view.DataContext.GetType().FullName);
 
                 var existingViewModel = view.DataContext;
 
                 // 如果实现了 INavigationAware，调用导航方法
                 if (existingViewModel is INavigationAware existingNavAware)
                 {
-                    _logger.LogInformation("🎯 调用现有 ViewModel 的 OnNavigatedToAsync...");
+                    _logger.LogDebug("[导航] 调用现有 ViewModel 的 OnNavigatedToAsync");
                     await existingNavAware.OnNavigatedToAsync(parameter);
-                    _logger.LogInformation("✅ OnNavigatedToAsync 调用完成");
+                    _logger.LogDebug("[导航] OnNavigatedToAsync 调用完成");
                 }
                 else
                 {
-                    _logger.LogWarning("⚠️ 现有 ViewModel {ViewModelType} 未实现 INavigationAware", existingViewModel.GetType().Name);
+                    _logger.LogWarning("[导航] 现有 ViewModel {ViewModelType} 未实现 INavigationAware", existingViewModel.GetType().Name);
                 }
 
-                _logger.LogInformation("========== SetupViewModelAsync 完成 ==========");
+                _logger.LogDebug("[导航] SetupViewModelAsync 完成");
                 return;
             }
 
@@ -454,18 +454,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             if (navigationAttribute != null)
             {
                 viewModelType = navigationAttribute.ViewModelType;
-                _logger.LogInformation("✅ 通过特性找到 ViewModel 类型: {ViewModelType}", viewModelType?.FullName);
+                _logger.LogDebug("[导航] 通过特性找到 ViewModel 类型: {ViewModelType}", viewModelType?.FullName);
             }
             else
             {
-                _logger.LogWarning("❌ 未找到 NavigationViewModelAttribute");
+                _logger.LogWarning("[导航] 未找到 NavigationViewModelAttribute");
             }
 
             // 2. 检查手动映射配置
             if (viewModelType == null && _viewModelMappings.TryGetValue(view.GetType(), out var mappedType))
             {
                 viewModelType = mappedType;
-                _logger.LogInformation("✅ 通过映射找到 ViewModel 类型: {ViewModelType}", viewModelType?.FullName);
+                _logger.LogDebug("[导航] 通过映射找到 ViewModel 类型: {ViewModelType}", viewModelType?.FullName);
             }
 
             // 3. 命名约定
@@ -474,41 +474,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 viewModelType = FindViewModelByConvention(view.GetType());
                 if (viewModelType != null)
                 {
-                    _logger.LogInformation("✅ 通过命名约定找到 ViewModel 类型: {ViewModelType}", viewModelType?.FullName);
+                    _logger.LogDebug("[导航] 通过命名约定找到 ViewModel 类型: {ViewModelType}", viewModelType?.FullName);
                 }
                 else
                 {
-                    _logger.LogWarning("❌ 通过命名约定未找到 ViewModel 类型");
+                    _logger.LogWarning("[导航] 通过命名约定未找到 ViewModel 类型");
                 }
             }
 
             if (viewModelType == null)
             {
-                _logger.LogError("❌ 无法为视图 {ViewType} 找到 ViewModel 类型，导航将不会触发 OnNavigatedToAsync", view.GetType().Name);
+                _logger.LogError("[导航] 无法为视图 {ViewType} 找到 ViewModel 类型，导航将不会触发 OnNavigatedToAsync", view.GetType().Name);
                 return;
             }
 
-            _logger.LogInformation("开始创建 ViewModel 实例: {ViewModelType}", viewModelType.FullName);
+            _logger.LogDebug("[导航] 开始创建 ViewModel 实例: {ViewModelType}", viewModelType.FullName);
 
             // 创建并设置ViewModel
             var viewModel = _serviceProvider.GetRequiredService(viewModelType);
             view.DataContext = viewModel;
-            _logger.LogInformation("✅ 视图 {ViewType} 已绑定 ViewModel {ViewModelType} (实例Hash: {HashCode})",
+            _logger.LogDebug("[导航] 视图 {ViewType} 已绑定 ViewModel {ViewModelType} (实例Hash: {HashCode})",
                 view.GetType().Name, viewModelType.Name, viewModel.GetHashCode());
 
             // 如果ViewModel实现了INavigationAware，调用导航方法
             if (viewModel is INavigationAware newNavAware)
             {
-                _logger.LogInformation("🎯 ViewModel 实现了 INavigationAware，开始调用 OnNavigatedToAsync...");
+                _logger.LogDebug("[导航] ViewModel 实现了 INavigationAware，开始调用 OnNavigatedToAsync");
                 await newNavAware.OnNavigatedToAsync(parameter);
-                _logger.LogInformation("✅ OnNavigatedToAsync 调用完成");
+                _logger.LogDebug("[导航] OnNavigatedToAsync 调用完成");
             }
             else
             {
-                _logger.LogWarning("⚠️ ViewModel {ViewModelType} 未实现 INavigationAware", viewModelType.Name);
+                _logger.LogWarning("[导航] ViewModel {ViewModelType} 未实现 INavigationAware", viewModelType.Name);
             }
 
-            _logger.LogInformation("========== SetupViewModelAsync 完成 ==========");
+            _logger.LogDebug("[导航] SetupViewModelAsync 完成");
         }
 
         private Type? FindViewModelByConvention(Type viewType)
@@ -561,13 +561,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             if (!CanGoBack(regionName))
             {
-                _logger.LogWarning("区域 {RegionName} 无法后退", regionName);
+                _logger.LogWarning("[导航] 区域 {RegionName} 无法后退", regionName);
                 return false;
             }
 
             if (!TryGetRegion(regionName, out var region))
             {
-                _logger.LogWarning("区域 {RegionName} 未注册", regionName);
+                _logger.LogWarning("[导航] 区域 {RegionName} 未注册", regionName);
                 return false;
             }
 
@@ -579,7 +579,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 var stack = _navigationHistory[regionName];
                 var historyEntry = stack.Pop();
 
-                _logger.LogInformation("后退导航到区域 {RegionName} 的视图 {ViewType}", regionName, historyEntry.ViewType.Name);
+                _logger.LogInformation("[导航] 后退导航到区域 {RegionName} 的视图 {ViewType}", regionName, historyEntry.ViewType.Name);
 
                 // 重新创建视图
                 var view = await GetOrCreateViewAsync(historyEntry.ViewType, cancellationToken);
@@ -619,7 +619,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "后退导航失败");
+                _logger.LogError(ex, "[导航] 后退导航失败");
                 return false;
             }
             finally
@@ -646,7 +646,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 stack.Clear();
             }
-            _logger.LogInformation("已清除所有导航历史");
+            _logger.LogInformation("[导航] 已清除所有导航历史");
             OnNavigationStateChanged();
         }
 
@@ -658,7 +658,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             if (_navigationHistory.TryGetValue(regionName, out var stack))
             {
                 stack.Clear();
-                _logger.LogInformation("已清除区域 {RegionName} 的导航历史", regionName);
+                _logger.LogInformation("[导航] 已清除区域 {RegionName} 的导航历史", regionName);
                 OnNavigationStateChanged();
             }
         }
