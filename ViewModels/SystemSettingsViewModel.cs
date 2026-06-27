@@ -2,7 +2,6 @@
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
-using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
@@ -16,7 +15,6 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -39,6 +37,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly IServiceProvider _serviceProvider;
         private readonly ILoggerFactory _loggerFactory;
         private readonly IDeviceConnectionManager _deviceManager;
+        private readonly IModbusTcpClient _modbusClient;
 
         private readonly CsvStorageSettings _csvStorageSettings;
         private readonly CsvStoragePathManager _csvPathManager;
@@ -176,7 +175,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             IConfiguration configuration,
             IServiceProvider serviceProvider,
             ILoggerFactory loggerFactory,
-            IDeviceConnectionManager deviceManager)
+            IDeviceConnectionManager deviceManager,
+            IModbusTcpClient modbusClient)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
@@ -187,6 +187,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
+            _modbusClient = modbusClient ?? throw new ArgumentNullException(nameof(modbusClient));
             _logger = Log.ForContext<SystemSettingsViewModel>();
 
             LoadExistingSettings();
@@ -341,7 +342,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>
         /// 测试FP0H PLC连接。
         /// 生产已连接时直接返回成功，不干扰持久连接。
-        /// 未连接时创建独立TcpClient发送Modbus指令验证，测试完立即释放。
+        /// 未连接时委托 IModbusTcpClient.TestConnectionAsync 创建独立连接测试，不经过生产单例。
         /// </summary>
         [RelayCommand]
         private async Task TestPlcConnectionAsync()
@@ -380,42 +381,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // 创建独立TcpClient，不经过生产单例
-                bool success = false;
-                using (var tcpClient = new TcpClient())
-                {
-                    using var timeoutCts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
-                    var connectTask = tcpClient.ConnectAsync(Fp0hConfig.IpAddress, Fp0hConfig.Port);
-                    var timeoutTask = Task.Delay(TEST_CONNECTION_TIMEOUT_MS, timeoutCts.Token);
-                    var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(true);
-
-                    if (completedTask == connectTask)
-                    {
-                        await connectTask.ConfigureAwait(false);
-
-                        // TCP连上后发一条Modbus读保持寄存器请求验证通信
-                        using var stream = tcpClient.GetStream();
-                        stream.ReadTimeout = TEST_CONNECTION_TIMEOUT_MS / 2;
-                        stream.WriteTimeout = TEST_CONNECTION_TIMEOUT_MS / 2;
-
-                        var request = ModbusTcpMessageHelper.CreateReadHoldingRegistersRequest(
-                            transactionId: 1, unitId: 1, startAddress: 0, quantity: 1);
-                        await stream.WriteAsync(request, timeoutCts.Token).ConfigureAwait(false);
-                        await stream.FlushAsync(timeoutCts.Token).ConfigureAwait(false);
-
-                        var buffer = new byte[256];
-                        int totalRead = 0, bytesRead;
-                        do
-                        {
-                            bytesRead = await stream.ReadAsync(
-                                buffer.AsMemory(totalRead, buffer.Length - totalRead), timeoutCts.Token).ConfigureAwait(false);
-                            totalRead += bytesRead;
-                        }
-                        while (bytesRead > 0 && totalRead < buffer.Length);
-
-                        success = totalRead >= 9; // 最小有效Modbus TCP响应
-                    }
-                }
+                // 委托给 IModbusTcpClient.TestConnectionAsync，复用已验证的 Modbus TCP 握手逻辑
+                bool success = await _modbusClient.TestConnectionAsync(
+                    Fp0hConfig.IpAddress, Fp0hConfig.Port,
+                    TEST_CONNECTION_TIMEOUT_MS).ConfigureAwait(true);
 
                 if (success)
                 {

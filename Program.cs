@@ -1,6 +1,7 @@
 ﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 using GMandE7BUSBPoorSolderingInspectionDevice.Data;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Plc;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
@@ -217,10 +218,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddSingleton<TcpClientPLCMotionService>();
             services.AddSingleton<ITcpClientPLCMotionService>(sp =>
                 sp.GetRequiredService<TcpClientPLCMotionService>());
-            // ⭐ PLC 适配器（将 TcpClientPLCMotionService 适配为 IPlcDevice）
-            services.AddSingleton<PlcCommunicationAdapter>();
+
+            // ⭐ 新增：IModbusTcpClient 实现（包装现有 TcpClientPLCMotionService）
+            services.AddSingleton<IModbusTcpClient, ModbusTcpClient>();
+
+            // ⭐ 新增：Fp0hPlcDevice 作为 IPlcDevice 的新实现
+            services.AddSingleton<Fp0hPlcDevice>();
             services.AddSingleton<IPlcDevice>(sp =>
-                sp.GetRequiredService<PlcCommunicationAdapter>());
+                sp.GetRequiredService<Fp0hPlcDevice>());
+            // 旧 PlcCommunicationAdapter 注册已移除，由 Fp0hPlcDevice 替代
 
             // UI层封装
             services.AddSingleton<TcpPLCMotionWPFUIModbusService>();

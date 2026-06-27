@@ -54,7 +54,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly ITestRecordStorage _testRecordStorage;
 
         // 硬件服务
-        private readonly ITcpClientPLCMotionService _plcService;
         private readonly GwInstekGDM9060Driver _dmmDriver;
         private readonly IDeviceConnectionManager _deviceManager;
         private readonly InspectionEngine? _inspectionEngine;
@@ -75,7 +74,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INotificationService notificationService,
             IOperatorStateService operatorStateService,
             ILogger<TestPageViewModel> logger,
-            ITcpClientPLCMotionService plcService,
             GwInstekGDM9060Driver dmmDriver,
             IDeviceSettingsService settingsService,
             IPlanStorageService planStorageService,
@@ -89,7 +87,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-            _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));

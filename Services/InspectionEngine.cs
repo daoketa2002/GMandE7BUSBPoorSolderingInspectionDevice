@@ -6,9 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
-using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
-using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
@@ -34,7 +34,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         #region 字段
 
         private readonly ILogger<InspectionEngine> _logger;
-        private readonly ITcpClientPLCMotionService _plcService;
+        private readonly IPlcDevice _plcDevice;
         private readonly GwInstekGDM9060Driver _dmmDriver;
         private readonly HoneywellH1900Scanner? _scanner;
 
@@ -44,7 +44,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private volatile bool _isRunning;
         private volatile bool _isDisposed;
 
-        // PLC 地址映射（可根据实际PLC程序调整）
+        /// <summary>
+        /// PLC 地址映射（由 Models.PLC动作控制.PlcAddressMap 提供，保持现有默认值）
+        /// 后续可以从配置文件读取以支持地址自定义
+        /// </summary>
         private readonly PlcAddressMap _plcMap;
 
         // 检测配置
@@ -102,12 +105,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         public InspectionEngine(
             ILogger<InspectionEngine> logger,
-            ITcpClientPLCMotionService plcService,
+            IPlcDevice plcDevice,
             GwInstekGDM9060Driver dmmDriver,
             HoneywellH1900Scanner? scanner = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
+            _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
             _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
             _scanner = scanner;
 
@@ -267,7 +270,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     result.ErrorMessage = ex.Message;
 
                     // 异常时写入PLC错误信号
-                    await SafeWritePlcAsync(_plcMap.ErrorFlag, true).ConfigureAwait(false);
+                    await _plcDevice.SetErrorAsync(true).ConfigureAwait(false);
                 }
 
                 return result;
@@ -301,11 +304,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private async Task InitializeInspectionAsync(CancellationToken ct)
         {
             // 1. 重置PLC相关信号
-            await SafeWritePlcAsync(_plcMap.StartFlag, false).ConfigureAwait(false);
-            await SafeWritePlcAsync(_plcMap.OkFlag, false).ConfigureAwait(false);
-            await SafeWritePlcAsync(_plcMap.NgFlag, false).ConfigureAwait(false);
-            await SafeWritePlcAsync(_plcMap.ErrorFlag, false).ConfigureAwait(false);
-            await SafeWritePlcAsync(_plcMap.BusyFlag, true).ConfigureAwait(false);
+            // 注意：StartFlag (M0) 是 PLC→PC 的输入信号，由 PLC 自行管理，上位机不写入
+            await _plcDevice.SetOkAsync(false, ct).ConfigureAwait(false);
+            await _plcDevice.SetNgAsync(false, ct).ConfigureAwait(false);
+            await _plcDevice.SetErrorAsync(false, ct).ConfigureAwait(false);
+            await _plcDevice.SetBusyAsync(true, ct).ConfigureAwait(false);
 
             // 2. 切换万用表到电阻测量模式
             await _dmmDriver.SetMeasureFunctionAsync(MeasureFunction.Resistance2W, ct).ConfigureAwait(false);
@@ -324,7 +327,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             var testPoint = _config.TestPoints[index];
 
             // 方案1：使用保持寄存器写入测试点编号
-            await SafeWritePlcRegisterAsync(_plcMap.TestPointSelectRegister, (ushort)(index + 1)).ConfigureAwait(false);
+            await _plcDevice.SelectTestPointAsync(index, ct).ConfigureAwait(false);
 
             // 方案2：使用多个线圈控制继电器组
             if (testPoint.RelayChannel.HasValue)
@@ -334,16 +337,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 {
                     if (_config.TestPoints[i].RelayChannel.HasValue)
                     {
-                        // ✅ 修正：显式转换为 ushort
-                        ushort coilAddress = (ushort)(_plcMap.RelayBaseAddress + _config.TestPoints[i].RelayChannel!.Value);
-                        await SafeWritePlcAsync(coilAddress, false).ConfigureAwait(false);
+                        await _plcDevice.SetRelayAsync(_config.TestPoints[i].RelayChannel!.Value, false, ct).ConfigureAwait(false);
                     }
                 }
 
                 // 再打开目标继电器
-                // ✅ 修正：显式转换为 ushort
-                ushort targetCoilAddress = (ushort)(_plcMap.RelayBaseAddress + testPoint.RelayChannel.Value);
-                await SafeWritePlcAsync(targetCoilAddress, true).ConfigureAwait(false);
+                await _plcDevice.SetRelayAsync(testPoint.RelayChannel.Value, true, ct).ConfigureAwait(false);
             }
 
             _logger.LogDebug("已切换到测试点: {TestPointName} (通道:{Channel})",
@@ -410,9 +409,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             // 将结果写入PLC的保持寄存器区域
             // 例如：D100开始存放每个点的判定结果 (1=OK, 0=NG)
             ushort value = judgment == "OK" ? (ushort)1 : (ushort)0;
-            ushort registerAddress = (ushort)(_plcMap.TestResultBaseRegister + index);
-
-            await SafeWritePlcRegisterAsync(registerAddress, value).ConfigureAwait(false);
+            await _plcDevice.WriteTestResultAsync(index, value, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -420,57 +417,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         private async Task WriteFinalResultToPlcAsync(bool isAllPassed, CancellationToken ct)
         {
-            await SafeWritePlcAsync(_plcMap.BusyFlag, false).ConfigureAwait(false);
+            await _plcDevice.SetBusyAsync(false, ct).ConfigureAwait(false);
 
             if (isAllPassed)
             {
-                await SafeWritePlcAsync(_plcMap.OkFlag, true).ConfigureAwait(false);
-                await SafeWritePlcAsync(_plcMap.NgFlag, false).ConfigureAwait(false);
+                await _plcDevice.SetOkAsync(true, ct).ConfigureAwait(false);
+                await _plcDevice.SetNgAsync(false, ct).ConfigureAwait(false);
             }
             else
             {
-                await SafeWritePlcAsync(_plcMap.OkFlag, false).ConfigureAwait(false);
-                await SafeWritePlcAsync(_plcMap.NgFlag, true).ConfigureAwait(false);
-            }
-        }
-
-        #endregion
-
-        #region PLC安全写入辅助
-
-        private async Task SafeWritePlcAsync(ushort coilAddress, bool value)
-        {
-            try
-            {
-                await _plcService.ExecuteWriteOperationAsync(
-                    functionCode: 0x05,        // 写单个线圈
-                    unitId: 1,
-                    startAddress: coilAddress,
-                    data: new ushort[] { value ? (ushort)0xFF00 : (ushort)0x0000 },
-                    timeoutMs: 3000
-                ).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "PLC写入失败 (地址:{Address}, 值:{Value})", coilAddress, value);
-            }
-        }
-
-        private async Task SafeWritePlcRegisterAsync(ushort registerAddress, ushort value)
-        {
-            try
-            {
-                await _plcService.ExecuteWriteOperationAsync(
-                    functionCode: 0x06,        // 写单个保持寄存器
-                    unitId: 1,
-                    startAddress: registerAddress,
-                    data: new ushort[] { value },
-                    timeoutMs: 3000
-                ).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "PLC寄存器写入失败 (地址:{Address}, 值:{Value})", registerAddress, value);
+                await _plcDevice.SetOkAsync(false, ct).ConfigureAwait(false);
+                await _plcDevice.SetNgAsync(true, ct).ConfigureAwait(false);
             }
         }
 
@@ -641,29 +598,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         public TimeSpan Duration => EndTime - StartTime;
     }
-
-    /// <summary>
-    /// PLC地址映射（松下FP0H Modbus地址）
-    /// ⚠️ 请根据实际PLC程序修改
-    /// </summary>
-    public class PlcAddressMap
-    {
-        // 线圈地址 (0x05功能码)
-        public ushort StartFlag { get; set; } = 0;       // M0: 启动信号
-        public ushort OkFlag { get; set; } = 1;          // M1: OK信号
-        public ushort NgFlag { get; set; } = 2;          // M2: NG信号
-        public ushort ErrorFlag { get; set; } = 3;       // M3: 错误信号
-        public ushort BusyFlag { get; set; } = 4;        // M4: 忙碌信号
-        public ushort RelayBaseAddress { get; set; } = 10; // M10开始: 继电器控制
-
-        // 保持寄存器地址 (0x06/0x10功能码)
-        public ushort TestPointSelectRegister { get; set; } = 100;  // D100: 测试点选择
-        public ushort TestResultBaseRegister { get; set; } = 200;   // D200开始: 测试结果存储
-    }
-
-    #endregion
-
-    #region 事件参数
 
     /// <summary>
     /// 检测状态变更事件参数

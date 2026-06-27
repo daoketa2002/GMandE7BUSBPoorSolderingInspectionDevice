@@ -2,7 +2,6 @@ using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
-using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 using Microsoft.Extensions.Logging;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.DeviceConnections;
@@ -33,14 +32,13 @@ public sealed class DeviceConfigurationApplier
 
     private void ApplyPlc(DeviceSettings settings, IPlcDevice plcDevice)
     {
-        if (settings.FP0HCommunication is null || plcDevice is not PlcCommunicationAdapter plcAdapter)
+        if (settings.FP0HCommunication is null)
         {
-            _logger.LogWarning("PLC配置注入失败，Settings={HasSettings}, Device={DeviceType}",
-                settings.FP0HCommunication is not null, plcDevice.GetType().Name);
+            _logger.LogWarning("PLC配置注入跳过: 设置中无 FP0H 配置");
             return;
         }
 
-        plcAdapter.ApplyConfig(settings.FP0HCommunication);
+        plcDevice.ApplyConfig(settings.FP0HCommunication);
         _logger.LogDebug("已注入PLC配置: {Host}:{Port}",
             settings.FP0HCommunication.IpAddress, settings.FP0HCommunication.Port);
     }
