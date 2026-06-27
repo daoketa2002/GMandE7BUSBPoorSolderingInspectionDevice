@@ -530,12 +530,49 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     ///
     /// 改动说明（方案需求变动）：
     /// 新增 CheckMode / LowerLimit / UpperLimit / ModeValue 字段
+    /// 新增左右引脚极性和 PLC 编码字段；当前先随检测配置流转，待电气地址表确认后再写入 PLC。
     /// 判定逻辑从全局阈值改为每项独立阈值
     /// </summary>
     public class TestPointConfig
     {
         /// <summary>项目名称（如 "A4-A5"）</summary>
         public string Name { get; set; } = string.Empty;
+
+        /// <summary>左引脚名称（如 A1）</summary>
+        public string PinLeft { get; set; } = string.Empty;
+
+        /// <summary>右引脚名称（如 A2）</summary>
+        public string PinRight { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 左引脚 PLC 编码。
+        /// 编码规则：A1-A20 = 1-20，B1-B20 = 21-40。
+        /// </summary>
+        public ushort PinLeftCode { get; set; }
+
+        /// <summary>
+        /// 右引脚 PLC 编码。
+        /// 编码规则：A1-A20 = 1-20，B1-B20 = 21-40。
+        /// </summary>
+        public ushort PinRightCode { get; set; }
+
+        /// <summary>左引脚极性（正极/负极）</summary>
+        public string PinLeftPolarity { get; set; } = PinPolarityConstants.Positive;
+
+        /// <summary>右引脚极性（正极/负极）</summary>
+        public string PinRightPolarity { get; set; } = PinPolarityConstants.Negative;
+
+        /// <summary>
+        /// 左引脚极性 PLC 编码。
+        /// 编码规则：正极=1，负极=0。
+        /// </summary>
+        public ushort PinLeftPolarityCode { get; set; } = 1;
+
+        /// <summary>
+        /// 右引脚极性 PLC 编码。
+        /// 编码规则：正极=1，负极=0。
+        /// </summary>
+        public ushort PinRightPolarityCode { get; set; }
 
         /// <summary>
         /// 检测方式（中文存储，与 CheckModeConstants 保持一致）
@@ -563,6 +600,70 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public double ActualValue { get; set; }
         public string Judgment { get; set; } = string.Empty;
         public bool IsTested { get; set; }
+
+        /// <summary>
+        /// 从方案项目创建检测配置。
+        /// 这里集中完成引脚拆分和 PLC 编码，避免 UI 层散落硬件编码规则。
+        /// </summary>
+        public static TestPointConfig FromPlanItem(PlanItem item)
+        {
+            ArgumentNullException.ThrowIfNull(item);
+
+            var (pinLeft, pinRight) = SplitItemName(item.ItemName);
+            var leftPolarity = PinPolarityConstants.Normalize(
+                item.PinLeftPolarity, PinPolarityConstants.Positive);
+            var rightPolarity = PinPolarityConstants.Normalize(
+                item.PinRightPolarity, PinPolarityConstants.Negative);
+
+            return new TestPointConfig
+            {
+                Name = item.ItemName,
+                PinLeft = pinLeft,
+                PinRight = pinRight,
+                PinLeftCode = EncodePin(pinLeft),
+                PinRightCode = EncodePin(pinRight),
+                PinLeftPolarity = leftPolarity,
+                PinRightPolarity = rightPolarity,
+                PinLeftPolarityCode = PinPolarityConstants.ToPlcCode(leftPolarity),
+                PinRightPolarityCode = PinPolarityConstants.ToPlcCode(rightPolarity),
+                CheckMode = item.CheckMode,
+                LowerLimit = item.LowerLimit,
+                UpperLimit = item.UpperLimit,
+                ModeValue = item.ModeValue
+            };
+        }
+
+        /// <summary>
+        /// 拆分方案项目名。项目名仍保持 A1-A2 形式，不把正负极拼入名称。
+        /// </summary>
+        private static (string Left, string Right) SplitItemName(string itemName)
+        {
+            var parts = (itemName ?? string.Empty).Split('-', 2);
+            var left = parts.Length > 0 ? parts[0].Trim() : string.Empty;
+            var right = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+            return (left, right);
+        }
+
+        /// <summary>
+        /// 将 A/B 引脚转换为 PLC 数值编码。
+        /// A1-A20 = 1-20，B1-B20 = 21-40；异常格式返回 0，便于后续 PLC 写入前识别无效值。
+        /// </summary>
+        private static ushort EncodePin(string pinName)
+        {
+            if (string.IsNullOrWhiteSpace(pinName) || pinName.Length < 2)
+                return 0;
+
+            char group = char.ToUpperInvariant(pinName[0]);
+            if (!int.TryParse(pinName[1..], out int number) || number < 1 || number > 20)
+                return 0;
+
+            return group switch
+            {
+                'A' => (ushort)number,
+                'B' => (ushort)(20 + number),
+                _ => (ushort)0
+            };
+        }
     }
 
     /// <summary>

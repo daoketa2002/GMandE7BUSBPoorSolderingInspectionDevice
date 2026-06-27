@@ -99,6 +99,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             PinOptions = new ObservableCollection<string>(PlanStorageService.PinList);
             // ★ CheckMode 下拉选项使用中文（不再需要单独的 CheckModeOptions，已内聚到 PlanItemViewModel）
             ContinuityUnitOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
+            PinPolarityOptions = new ObservableCollection<string>
+            {
+                PinPolarityConstants.Positive,
+                PinPolarityConstants.Negative
+            };
 
             _logger.LogDebug("PlanEditViewModel 构造完成");
         }
@@ -149,6 +154,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// SHORT — 期望短路（回路导通）
         /// </summary>
         public ObservableCollection<string> ContinuityUnitOptions { get; }
+
+        /// <summary>
+        /// 引脚极性下拉选项。
+        /// 方案编辑页使用中文显示和保存，后续传 PLC 时再转换为 1/0 编码。
+        /// </summary>
+        public ObservableCollection<string> PinPolarityOptions { get; }
 
         #endregion
 
@@ -202,6 +213,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 Index = Items.Count + 1,
                 PinLeft = string.Empty,
                 PinRight = string.Empty,
+                PinLeftPolarity = PinPolarityConstants.Positive,
+                PinRightPolarity = PinPolarityConstants.Negative,
                 CheckMode = CheckModeConstants.Continuity,  // ★ 使用常量
                 ModeValue = "OPEN"
             };
@@ -353,6 +366,32 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
+                // ========== 校验左右引脚极性：必须一正一负，避免后续 PLC 接线方向不明确 ==========
+                var polarityErrors = new List<string>();
+
+                for (int i = 0; i < Items.Count; i++)
+                {
+                    var item = Items[i];
+                    item.PinLeftPolarity = PinPolarityConstants.Normalize(
+                        item.PinLeftPolarity, PinPolarityConstants.Positive);
+                    item.PinRightPolarity = PinPolarityConstants.Normalize(
+                        item.PinRightPolarity, PinPolarityConstants.Negative);
+
+                    if (item.PinLeftPolarity == item.PinRightPolarity)
+                    {
+                        polarityErrors.Add($"第{item.Index}项 左右引脚极性不能相同，请设置为一正一负");
+                    }
+                }
+
+                if (polarityErrors.Count > 0)
+                {
+                    string errorMessage = "以下检测项目极性设置有误，请修正后再保存：\n\n"
+                                        + string.Join("\n", polarityErrors);
+                    await _notificationService.ShowWarningAsync(errorMessage, "极性校验失败");
+                    _logger.LogWarning("方案保存被拒绝：存在左右极性相同的检测项目，数量={Count}", polarityErrors.Count);
+                    return;
+                }
+
                 // ========== 校验电阻值阈值（电阻值模式下的 LowerLimit / UpperLimit） ==========
                 var resistanceErrors = new List<string>();
 
@@ -404,6 +443,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         Id = Guid.NewGuid().ToString(),
                         Index = item.Index,
                         ItemName = $"{item.PinLeft}-{item.PinRight}",
+                        PinLeftPolarity = item.PinLeftPolarity,
+                        PinRightPolarity = item.PinRightPolarity,
                         CheckMode = item.CheckMode,  // ★ 中文 "导通" 或 "电阻值"
                         LowerLimit = item.CheckMode == CheckModeConstants.Resistance ? item.LowerLimit : null,
                         UpperLimit = item.CheckMode == CheckModeConstants.Resistance ? item.UpperLimit : null,
@@ -513,6 +554,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         Index = item.Index,
                         PinLeft = parts.Length > 0 ? parts[0] : string.Empty,
                         PinRight = parts.Length > 1 ? parts[1] : string.Empty,
+                        // 旧方案没有极性字段时，默认按左正右负补齐，避免打开历史方案后需要逐项手工设置。
+                        PinLeftPolarity = PinPolarityConstants.Normalize(
+                            item.PinLeftPolarity, PinPolarityConstants.Positive),
+                        PinRightPolarity = PinPolarityConstants.Normalize(
+                            item.PinRightPolarity, PinPolarityConstants.Negative),
                         CheckMode = item.CheckMode,  // 已是标准中文值
                         LowerLimit = item.LowerLimit,
                         UpperLimit = item.UpperLimit,
@@ -596,6 +642,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>右引脚（如 A2）</summary>
         [ObservableProperty]
         private string _pinRight = string.Empty;
+
+        /// <summary>
+        /// 左引脚极性。只在方案编辑页展示，保存后供检测配置和后续 PLC 写入使用。
+        /// </summary>
+        [ObservableProperty]
+        private string _pinLeftPolarity = PinPolarityConstants.Positive;
+
+        /// <summary>
+        /// 右引脚极性。只在方案编辑页展示，保存后供检测配置和后续 PLC 写入使用。
+        /// </summary>
+        [ObservableProperty]
+        private string _pinRightPolarity = PinPolarityConstants.Negative;
 
         /// <summary>
         /// 检测方式（中文存储）

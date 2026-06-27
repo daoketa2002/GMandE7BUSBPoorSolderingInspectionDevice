@@ -485,7 +485,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             AddLog($"📋 已加载方案: {currentPlan.MachineType} - {currentPlan.PlanName}");
 
-            foreach (var item in currentPlan.Items.OrderBy(i => i.Index))
+            var orderedItems = currentPlan.Items.OrderBy(i => i.Index).ToList();
+
+            // 方案极性不在运行界面展示，但必须随检测配置进入 InspectionEngine。
+            // 后续 PLC 地址表确认后，PLC 写入逻辑可直接使用 TestPointConfig 中的引脚编码和极性编码。
+            _inspectionEngine?.SetConfig(new InspectionConfig
+            {
+                TestPoints = orderedItems
+                    .Select(TestPointConfig.FromPlanItem)
+                    .ToList()
+            });
+
+            foreach (var item in orderedItems)
             {
                 // ★ CheckMode 已是中文 "导通"/"电阻值"，无需转换
                 TestItems.Add(new TestItemModel

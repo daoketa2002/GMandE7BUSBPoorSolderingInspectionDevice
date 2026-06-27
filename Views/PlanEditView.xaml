@@ -252,12 +252,27 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTemplateColumn Header="引脚(左)" Width="150">
+                    <DataGridTemplateColumn Header="引脚(左)" Width="120">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <ComboBox IsEditable="True"
                                           Text="{Binding PinLeft, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding DataContext.PinOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                          FontSize="15"
+                                          Height="30"
+                                          VerticalContentAlignment="Center"
+                                          BorderThickness="1"
+                                          BorderBrush="#CED4DA"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <DataGridTemplateColumn Header="左极性" Width="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ComboBox IsEditable="False"
+                                          SelectedItem="{Binding PinLeftPolarity, UpdateSourceTrigger=PropertyChanged}"
+                                          ItemsSource="{Binding DataContext.PinPolarityOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
                                           Height="30"
                                           VerticalContentAlignment="Center"
@@ -280,7 +295,7 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTemplateColumn Header="引脚(右)" Width="150">
+                    <DataGridTemplateColumn Header="引脚(右)" Width="120">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <ComboBox IsEditable="True"
@@ -295,7 +310,22 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTextColumn Header="项目名称" Width="180">
+                    <DataGridTemplateColumn Header="右极性" Width="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ComboBox IsEditable="False"
+                                          SelectedItem="{Binding PinRightPolarity, UpdateSourceTrigger=PropertyChanged}"
+                                          ItemsSource="{Binding DataContext.PinPolarityOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                          FontSize="15"
+                                          Height="30"
+                                          VerticalContentAlignment="Center"
+                                          BorderThickness="1"
+                                          BorderBrush="#CED4DA"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <DataGridTextColumn Header="项目名称" Width="150">
                         <DataGridTextColumn.Binding>
                             <MultiBinding StringFormat="{}{0}-{1}">
                                 <Binding Path="PinLeft"/>

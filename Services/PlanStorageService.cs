@@ -192,6 +192,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// <summary>
         /// 规范化方案中所有检测项目的 CheckMode 值
         /// 兼容旧数据：英文 "Continuity"/"Resistance" → 中文 "导通"/"电阻值"
+        /// 同时兼容旧方案缺失极性字段：默认左正右负。
         /// </summary>
         /// <param name="plan">方案对象</param>
         private static void NormalizeCheckModeInPlan(PlanModel plan)
@@ -202,6 +203,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             foreach (var item in plan.Items)
             {
                 item.CheckMode = NormalizeCheckMode(item.CheckMode);
+                item.PinLeftPolarity = PinPolarityConstants.Normalize(
+                    item.PinLeftPolarity, PinPolarityConstants.Positive);
+                item.PinRightPolarity = PinPolarityConstants.Normalize(
+                    item.PinRightPolarity, PinPolarityConstants.Negative);
             }
         }
 

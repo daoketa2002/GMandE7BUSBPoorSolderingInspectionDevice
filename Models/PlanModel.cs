@@ -78,6 +78,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         public string ItemName { get; set; } = string.Empty;
 
         /// <summary>
+        /// 左引脚极性。
+        /// 仅在方案编辑页展示；运行时会随检测配置流转，待 PLC 地址表确认后用于写入当前测试点信息。
+        /// </summary>
+        [JsonPropertyName("PinLeftPolarity")]
+        public string PinLeftPolarity { get; set; } = PinPolarityConstants.Positive;
+
+        /// <summary>
+        /// 右引脚极性。
+        /// 仅在方案编辑页展示；运行时会随检测配置流转，待 PLC 地址表确认后用于写入当前测试点信息。
+        /// </summary>
+        [JsonPropertyName("PinRightPolarity")]
+        public string PinRightPolarity { get; set; } = PinPolarityConstants.Negative;
+
+        /// <summary>
         /// 序号（从1开始，连续编排）
         /// </summary>
         [JsonPropertyName("Order")]
@@ -133,5 +147,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
 
         /// <summary>电阻值检测</summary>
         public const string Resistance = "电阻值";
+    }
+
+    /// <summary>
+    /// 引脚极性常量。
+    /// 方案编辑页使用中文值保存，PLC 编码规则为：正极=1、负极=0。
+    /// </summary>
+    public static class PinPolarityConstants
+    {
+        /// <summary>正极</summary>
+        public const string Positive = "正极";
+
+        /// <summary>负极</summary>
+        public const string Negative = "负极";
+
+        /// <summary>
+        /// 将方案中的中文极性转换为 PLC 数值编码。
+        /// </summary>
+        public static ushort ToPlcCode(string? polarity)
+        {
+            return polarity == Positive ? (ushort)1 : (ushort)0;
+        }
+
+        /// <summary>
+        /// 规范化极性值，兼容旧方案缺失字段或异常空值。
+        /// </summary>
+        public static string Normalize(string? polarity, string defaultValue)
+        {
+            return polarity == Positive || polarity == Negative ? polarity : defaultValue;
+        }
     }
 }
