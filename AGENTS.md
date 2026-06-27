@@ -167,9 +167,11 @@ PlanModel                      LogRecord
 - **Dispatcher** — 所有 UI 绑定状态更新通过 `Application.Current.Dispatcher.Invoke()` 路由（见 `DeviceConnectionManager` 事件处理）
 - **文件范围命名空间** — 使用 .NET 文件范围命名空间
 - **日志记录** — 所有用户操作、校验拒绝和设备事件均使用 Serilog 记录。安全审计使用 `Warning` 级别
-- **密码弹窗** — 使用 `PasswordDialogContext` 枚举区分入口上下文，不同上下文使用不同图标/标题/说明/强调色
 - **CSV 编码** — 日志文件使用 UTF-8 BOM 编码，确保中文正常显示
 - **代码要尽量解耦，属性和方法还有类名的命名要见名知义，必要的地方要有日志**
+- **不谄媚，不夸"这是个很好的问题"，不以"当然可以"开头**
+- **给真实判断——方案有问题直接指出，发现更好做法主动说明**
+- 
 
 ## 遗留/未使用代码
 
