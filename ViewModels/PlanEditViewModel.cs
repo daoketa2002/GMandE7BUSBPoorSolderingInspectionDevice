@@ -446,8 +446,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         PinLeftPolarity = item.PinLeftPolarity,
                         PinRightPolarity = item.PinRightPolarity,
                         CheckMode = item.CheckMode,  // ★ 中文 "导通" 或 "电阻值"
-                        LowerLimit = item.CheckMode == CheckModeConstants.Resistance ? item.LowerLimit : null,
-                        UpperLimit = item.CheckMode == CheckModeConstants.Resistance ? item.UpperLimit : null,
+                        LowerLimit = item.CheckMode == CheckModeConstants.Resistance
+                            ? (item.LowerLimit.HasValue ? Math.Round(item.LowerLimit.Value, 4, MidpointRounding.AwayFromZero) : null)
+                            : null,
+                        UpperLimit = item.CheckMode == CheckModeConstants.Resistance
+                            ? (item.UpperLimit.HasValue ? Math.Round(item.UpperLimit.Value, 4, MidpointRounding.AwayFromZero) : null)
+                            : null,
                         ModeValue = item.CheckMode == CheckModeConstants.Resistance
                             ? null                          // 电阻模式：实际值运行时由万用表填充
                             : item.ModeValue                // 导通模式：保存用户选择的 OPEN/SHORT

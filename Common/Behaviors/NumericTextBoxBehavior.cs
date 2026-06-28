@@ -156,6 +156,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Behaviors
 
         #endregion
 
+        #region 附加属性：MaxDecimalPlaces
+
+        /// <summary>
+        /// 最大小数位数（默认 -1 表示不限制）
+        /// >= 0 时，键盘输入和粘贴时小数部分不能超过此位数
+        /// </summary>
+        public static readonly DependencyProperty MaxDecimalPlacesProperty =
+            DependencyProperty.RegisterAttached(
+                "MaxDecimalPlaces",
+                typeof(int),
+                typeof(NumericTextBoxBehavior),
+                new PropertyMetadata(-1));
+
+        public static int GetMaxDecimalPlaces(DependencyObject obj)
+        {
+            return (int)obj.GetValue(MaxDecimalPlacesProperty);
+        }
+
+        public static void SetMaxDecimalPlaces(DependencyObject obj, int value)
+        {
+            obj.SetValue(MaxDecimalPlacesProperty, value);
+        }
+
+        #endregion
+
         #region 事件订阅 / 取消订阅
 
         /// <summary>
@@ -209,6 +234,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Behaviors
             if (!IsValidNumericText(resultText, textBox))
             {
                 e.Handled = true; // 拦截：不合法
+                return;
+            }
+
+            // 检查小数位数是否超过 MaxDecimalPlaces 限制
+            int maxDec = GetMaxDecimalPlaces(textBox);
+            if (maxDec >= 0)
+            {
+                int dotIndex = resultText.IndexOf('.');
+                if (dotIndex >= 0 && resultText.Length - dotIndex - 1 > maxDec)
+                {
+                    e.Handled = true; // 拦截：小数位超限
+                }
             }
         }
 
@@ -265,6 +302,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Behaviors
 
             // 范围校验（超出范围则修正）
             resultText = ClampToRange(resultText, textBox);
+
+            // 小数位数截断（粘贴内容超出 MaxDecimalPlaces 时截断）
+            int maxDec = GetMaxDecimalPlaces(textBox);
+            if (maxDec >= 0 && !string.IsNullOrEmpty(resultText))
+            {
+                int dotIndex = resultText.IndexOf('.');
+                if (dotIndex >= 0 && resultText.Length - dotIndex - 1 > maxDec)
+                {
+                    resultText = resultText.Substring(0, dotIndex + 1 + maxDec);
+                }
+            }
 
             // 手动设置文本并取消默认粘贴
             e.CancelCommand();

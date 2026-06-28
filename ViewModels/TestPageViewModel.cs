@@ -522,7 +522,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private static string FormatLowerLimit(PlanItem item)
         {
             if (item.CheckMode == CheckModeConstants.Resistance)
-                return item.LowerLimit?.ToString("F1") ?? "-";
+                return item.LowerLimit?.ToString("F4") ?? "-";
 
             // 导通模式：显示期望结果（ModeValue 替代旧 Unit 字段）
             return item.ModeValue switch
@@ -541,7 +541,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private static string FormatUpperLimit(PlanItem item)
         {
             if (item.CheckMode == CheckModeConstants.Resistance)
-                return item.UpperLimit?.ToString("F1") ?? "-";
+                return item.UpperLimit?.ToString("F4") ?? "-";
 
             // 导通模式：上限无意义，用 "-" 占位
             return "-";

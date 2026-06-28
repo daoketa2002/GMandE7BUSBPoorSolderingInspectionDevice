@@ -389,7 +389,7 @@
                                     </ComboBox>
 
                                     <!-- 电阻值模式：TextBox（输入下限阈值数值，仅允许数字输入） -->
-                                    <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
+                                    <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
                                              FontSize="15"
                                              Height="30"
                                              MaxLength="12"
@@ -398,6 +398,7 @@
                                              behaviors:NumericTextBoxBehavior.AllowNegative="False"
                                              behaviors:NumericTextBoxBehavior.MinValue="0"
                                              behaviors:NumericTextBoxBehavior.MaxValue="99999999"
+                                             behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
                                              VerticalContentAlignment="Center"
                                              BorderThickness="1"
                                              BorderBrush="#CED4DA"
@@ -421,7 +422,7 @@
                     <DataGridTemplateColumn Header="上限 (Ω)" Width="130">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBox Text="{Binding UpperLimit, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
+                                <TextBox Text="{Binding UpperLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
                                          IsEnabled="{Binding IsResistanceMode}"
                                          FontSize="15"
                                          Height="30"
@@ -431,6 +432,7 @@
                                          behaviors:NumericTextBoxBehavior.AllowNegative="False"
                                          behaviors:NumericTextBoxBehavior.MinValue="0"
                                          behaviors:NumericTextBoxBehavior.MaxValue="99999999"
+                                         behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
                                          VerticalContentAlignment="Center"
                                          BorderThickness="1"
                                          BorderBrush="#CED4DA"
