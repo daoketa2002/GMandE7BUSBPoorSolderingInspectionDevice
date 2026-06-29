@@ -1,5 +1,6 @@
 ﻿// 📁 Devices/Multimeter/GwInstekGDM9060Driver.cs
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -632,7 +633,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         public string ErrorMessage { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; } = DateTime.Now;
 
-        public override string ToString() => IsValid ? Value.ToString("F4") : $"Error: {ErrorMessage}";
+        public override string ToString() => IsValid
+            ? InputValidationHelper.FormatResistanceValue(Value)
+            : $"Error: {ErrorMessage}";
     }
 
     /// <summary>

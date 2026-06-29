@@ -14,6 +14,7 @@
 
     <UserControl.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <converters:ResistanceInputHintConverter x:Key="ResistanceInputHintConverter"/>
 
         <Style x:Key="ActionButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="100"/>
@@ -362,7 +363,7 @@
                     <!-- ★ "下限"列：根据 CheckMode 条件渲染
                          导通模式 → ComboBox 绑定 ModeValue（OPEN/SHORT）
                          电阻值模式 → TextBox 绑定 LowerLimit（配置阈值） -->
-                    <DataGridTemplateColumn Header="下限 (Ω)" Width="130">
+                    <DataGridTemplateColumn Header="下限 (Ω)" Width="210">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Grid>
@@ -388,23 +389,10 @@
                                         </ComboBox.Style>
                                     </ComboBox>
 
-                                    <!-- 电阻值模式：TextBox（输入下限阈值数值，仅允许数字输入） -->
-                                    <TextBox Text="{Binding LowerLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
-                                             FontSize="15"
-                                             Height="30"
-                                             MaxLength="12"
-                                             behaviors:NumericTextBoxBehavior.IsEnabled="True"
-                                             behaviors:NumericTextBoxBehavior.AllowDecimal="True"
-                                             behaviors:NumericTextBoxBehavior.AllowNegative="False"
-                                             behaviors:NumericTextBoxBehavior.MinValue="0"
-                                             behaviors:NumericTextBoxBehavior.MaxValue="99999999"
-                                             behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
-                                             VerticalContentAlignment="Center"
-                                             BorderThickness="1"
-                                             BorderBrush="#CED4DA"
-                                             HorizontalContentAlignment="Center">
-                                        <TextBox.Style>
-                                            <Style TargetType="TextBox">
+                                    <!-- 电阻值模式：输入框获得焦点时弹出量程分辨率提醒，避免行内提示被选中高亮遮挡 -->
+                                    <StackPanel>
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding CheckMode}" Value="电阻值">
@@ -412,44 +400,96 @@
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
-                                        </TextBox.Style>
-                                    </TextBox>
+                                        </StackPanel.Style>
+                                        <TextBox x:Name="LowerLimitInput"
+                                                 Text="{Binding LowerLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
+                                                 FontSize="15"
+                                                 Height="28"
+                                                 MaxLength="12"
+                                                 behaviors:NumericTextBoxBehavior.IsEnabled="True"
+                                                 behaviors:NumericTextBoxBehavior.AllowDecimal="True"
+                                                 behaviors:NumericTextBoxBehavior.AllowNegative="False"
+                                                 behaviors:NumericTextBoxBehavior.MinValue="0"
+                                                 behaviors:NumericTextBoxBehavior.MaxValue="119999900"
+                                                 behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
+                                                 VerticalContentAlignment="Center"
+                                                 BorderThickness="1"
+                                                 BorderBrush="#CED4DA"
+                                                 HorizontalContentAlignment="Center"/>
+                                        <Popup PlacementTarget="{Binding ElementName=LowerLimitInput}"
+                                               Placement="Bottom"
+                                               IsOpen="{Binding IsKeyboardFocusWithin, ElementName=LowerLimitInput, Mode=OneWay}"
+                                               AllowsTransparency="True"
+                                               Focusable="False">
+                                            <Border Background="#FFF3CD"
+                                                    BorderBrush="#F1C40F"
+                                                    BorderThickness="1"
+                                                    CornerRadius="4"
+                                                    Padding="8,5"
+                                                    MaxWidth="280">
+                                                <TextBlock Text="{Binding Text, ElementName=LowerLimitInput, Converter={StaticResource ResistanceInputHintConverter}}"
+                                                           FontSize="12"
+                                                           Foreground="#856404"
+                                                           TextWrapping="Wrap"/>
+                                            </Border>
+                                        </Popup>
+                                    </StackPanel>
                                 </Grid>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTemplateColumn Header="上限 (Ω)" Width="130">
+                    <DataGridTemplateColumn Header="上限 (Ω)" Width="210">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBox Text="{Binding UpperLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
-                                         IsEnabled="{Binding IsResistanceMode}"
-                                         FontSize="15"
-                                         Height="30"
-                                         MaxLength="12"
-                                         behaviors:NumericTextBoxBehavior.IsEnabled="True"
-                                         behaviors:NumericTextBoxBehavior.AllowDecimal="True"
-                                         behaviors:NumericTextBoxBehavior.AllowNegative="False"
-                                         behaviors:NumericTextBoxBehavior.MinValue="0"
-                                         behaviors:NumericTextBoxBehavior.MaxValue="99999999"
-                                         behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
-                                         VerticalContentAlignment="Center"
-                                         BorderThickness="1"
-                                         BorderBrush="#CED4DA"
-                                         HorizontalContentAlignment="Center">
-                                    <TextBox.Style>
-                                        <Style TargetType="TextBox">
-                                            <Setter Property="Background" Value="White"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsResistanceMode}" Value="False">
-                                                    <Setter Property="Background" Value="#E9ECEF"/>
-                                                    <Setter Property="Foreground" Value="#ADB5BD"/>
-                                                    <Setter Property="Text" Value=""/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBox.Style>
-                                </TextBox>
+                                <StackPanel>
+                                    <TextBox x:Name="UpperLimitInput"
+                                             Text="{Binding UpperLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
+                                             IsEnabled="{Binding IsResistanceMode}"
+                                             FontSize="15"
+                                             Height="28"
+                                             MaxLength="12"
+                                             behaviors:NumericTextBoxBehavior.IsEnabled="True"
+                                             behaviors:NumericTextBoxBehavior.AllowDecimal="True"
+                                             behaviors:NumericTextBoxBehavior.AllowNegative="False"
+                                             behaviors:NumericTextBoxBehavior.MinValue="0"
+                                             behaviors:NumericTextBoxBehavior.MaxValue="119999900"
+                                             behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
+                                             VerticalContentAlignment="Center"
+                                             BorderThickness="1"
+                                             BorderBrush="#CED4DA"
+                                             HorizontalContentAlignment="Center">
+                                        <TextBox.Style>
+                                            <Style TargetType="TextBox">
+                                                <Setter Property="Background" Value="White"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsResistanceMode}" Value="False">
+                                                        <Setter Property="Background" Value="#E9ECEF"/>
+                                                        <Setter Property="Foreground" Value="#ADB5BD"/>
+                                                        <Setter Property="Text" Value=""/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBox.Style>
+                                    </TextBox>
+                                    <Popup PlacementTarget="{Binding ElementName=UpperLimitInput}"
+                                           Placement="Bottom"
+                                           IsOpen="{Binding IsKeyboardFocusWithin, ElementName=UpperLimitInput, Mode=OneWay}"
+                                           AllowsTransparency="True"
+                                           Focusable="False">
+                                        <Border Background="#FFF3CD"
+                                                BorderBrush="#F1C40F"
+                                                BorderThickness="1"
+                                                CornerRadius="4"
+                                                Padding="8,5"
+                                                MaxWidth="280">
+                                            <TextBlock Text="{Binding Text, ElementName=UpperLimitInput, Converter={StaticResource ResistanceInputHintConverter}}"
+                                                       FontSize="12"
+                                                       Foreground="#856404"
+                                                       TextWrapping="Wrap"/>
+                                        </Border>
+                                    </Popup>
+                                </StackPanel>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>

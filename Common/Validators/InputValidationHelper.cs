@@ -6,6 +6,7 @@
 // ============================================================
 
 using System;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
@@ -131,12 +132,32 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
         #region 电阻值范围校验
 
         /// <summary>
-        /// 电阻值下限有效范围（Ω）
-        /// 导通模式：无（null）
-        /// 电阻模式：0 ~ 99999999（1MΩ 以内）
+        /// 电阻值下限有效范围（Ω）。
+        /// 电阻值统一按 Ω 输入，最大值按 GDM-9060 100MΩ 档满量程展开。
         /// </summary>
         public const double ResistanceMinValue = 0.0;
-        public const double ResistanceMaxValue = 99_999_999.0;
+        public const double ResistanceMaxValue = 119_999_900.0;
+
+        /// <summary>
+        /// 万用表电阻量程信息。界面仍然只让用户输入 Ω，此结构用于自动提示和保存校验。
+        /// </summary>
+        public sealed record ResistanceRangeInfo(
+            string RangeName,
+            double MaxOhms,
+            double ResolutionOhms,
+            int DecimalPlaces,
+            int RequiredMultiple);
+
+        private static readonly ResistanceRangeInfo[] ResistanceRanges =
+        [
+            new("100Ω", 119.9999, 0.0001, 4, 0),
+            new("1kΩ", 1_199.999, 0.001, 3, 0),
+            new("10kΩ", 11_999.99, 0.01, 2, 0),
+            new("100kΩ", 119_999.9, 0.1, 1, 0),
+            new("1MΩ", 1_199_999, 1, 0, 1),
+            new("10MΩ", 11_999_990, 10, 0, 10),
+            new("100MΩ", 119_999_900, 100, 0, 100)
+        ];
 
         /// <summary>
         /// 校验电阻值是否在合理范围内
@@ -160,7 +181,83 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
             if (v > ResistanceMaxValue)
                 return $"电阻值过大（最大 {ResistanceMaxValue:N0} Ω），当前值: {v}";
 
+            var range = GetResistanceRangeInfo(v);
+            if (!IsAlignedToResistanceResolution(v, range))
+            {
+                if (range.RequiredMultiple > 1)
+                    return $"当前值预计使用 {range.RangeName} 量程，仪器分辨率约 {FormatResolution(range)}，请输入 {range.RequiredMultiple}Ω 的整数倍";
+
+                return $"当前值预计使用 {range.RangeName} 量程，仪器分辨率约 {FormatResolution(range)}，最多保留 {range.DecimalPlaces} 位小数";
+            }
+
             return null; // 合法
+        }
+
+        /// <summary>
+        /// 根据 Ω 数值自动推断万用表预计量程。
+        /// </summary>
+        public static ResistanceRangeInfo GetResistanceRangeInfo(double value)
+        {
+            foreach (var range in ResistanceRanges)
+            {
+                if (value <= range.MaxOhms)
+                    return range;
+            }
+
+            return ResistanceRanges[^1];
+        }
+
+        /// <summary>
+        /// 生成方案编辑页下限/上限输入框下方的智能提示文案。
+        /// </summary>
+        public static string GetResistanceInputHint(double? value)
+        {
+            if (value == null)
+                return "提示：输入电阻值后，将自动判断预计量程和仪器分辨率。";
+
+            double v = value.Value;
+            if (double.IsNaN(v) || double.IsInfinity(v) || v < ResistanceMinValue)
+                return "提示：请输入不小于 0 的有效电阻值。";
+            if (v > ResistanceMaxValue)
+                return $"提示：电阻值不能超过 {ResistanceMaxValue:N0} Ω。";
+
+            var range = GetResistanceRangeInfo(v);
+            if (range.RequiredMultiple > 1)
+                return $"提示：当前电阻预计使用{range.RangeName}量程，仪器分辨率约{FormatResolution(range)}，请按{range.RequiredMultiple}Ω整数倍输入。";
+
+            if (range.DecimalPlaces == 0)
+                return $"提示：当前电阻预计使用{range.RangeName}量程，仪器分辨率约{FormatResolution(range)}，请输入整数 Ω。";
+
+            return $"提示：当前电阻预计使用{range.RangeName}量程，仪器分辨率约{FormatResolution(range)}，最多保留{range.DecimalPlaces}位小数。";
+        }
+
+        /// <summary>
+        /// 按预计量程分辨率格式化电阻值，保证运行页和 CSV 中显示规则一致。
+        /// </summary>
+        public static string FormatResistanceValue(double value)
+        {
+            var range = GetResistanceRangeInfo(Math.Abs(value));
+            double rounded = RoundToResolution(value, range.ResolutionOhms);
+            return rounded.ToString($"F{range.DecimalPlaces}", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatResolution(ResistanceRangeInfo range)
+        {
+            return range.ResolutionOhms >= 1
+                ? $"{range.ResolutionOhms:0}Ω"
+                : $"{range.ResolutionOhms.ToString($"F{range.DecimalPlaces}", CultureInfo.InvariantCulture)}Ω";
+        }
+
+        private static bool IsAlignedToResistanceResolution(double value, ResistanceRangeInfo range)
+        {
+            double scaled = value / range.ResolutionOhms;
+            return Math.Abs(scaled - Math.Round(scaled)) < 0.000_001;
+        }
+
+        private static double RoundToResolution(double value, double resolution)
+        {
+            // 只用于显示测量值；方案阈值保存前仍要求用户输入符合分辨率的原始数值。
+            return Math.Round(value / resolution, MidpointRounding.AwayFromZero) * resolution;
         }
 
         /// <summary>

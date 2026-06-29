@@ -23,6 +23,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
@@ -488,7 +489,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private static string FormatLowerLimit(PlanItem item)
     {
         if (item.CheckMode == CheckModeConstants.Resistance)
-            return item.LowerLimit?.ToString("F4") ?? "-";
+            return item.LowerLimit.HasValue
+                ? InputValidationHelper.FormatResistanceValue(item.LowerLimit.Value)
+                : "-";
 
         return item.ModeValue switch
         {
@@ -500,7 +503,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private static string FormatUpperLimit(PlanItem item)
     {
         if (item.CheckMode == CheckModeConstants.Resistance)
-            return item.UpperLimit?.ToString("F4") ?? "-";
+            return item.UpperLimit.HasValue
+                ? InputValidationHelper.FormatResistanceValue(item.UpperLimit.Value)
+                : "-";
 
         return "-";
     }
@@ -1036,10 +1041,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             if (value > 1_000_000.0) return "开路";
             if (value < 1.0) return "短路";
-            return $"{value:F4} Ω";
+            return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";
         }
 
-        return $"{value:F4} Ω";
+        return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 // 📁 Services/InspectionEngine.cs
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
@@ -274,16 +275,16 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     if (judgment == "OK")
                     {
                         passCount++;
-                        LogInfo($"  ✅ {testPoint.Name}: {measurement.Value:F4}Ω → OK");
+                        LogInfo($"  ✅ {testPoint.Name}: {InputValidationHelper.FormatResistanceValue(measurement.Value)}Ω → OK");
                     }
                     else
                     {
                         failCount++;
                         if (firstNgIndex < 0) firstNgIndex = i;
                         var detail = testPoint.CheckMode == CheckModeConstants.Resistance
-                            ? $" (范围:{testPoint.LowerLimit}~{testPoint.UpperLimit}Ω)"
+                            ? $" (范围:{FormatNullableResistance(testPoint.LowerLimit)}~{FormatNullableResistance(testPoint.UpperLimit)}Ω)"
                             : $" (期望:{testPoint.ModeValue})";
-                        LogInfo($"  ❌ {testPoint.Name}: {measurement.Value:F4}Ω → NG{detail}");
+                        LogInfo($"  ❌ {testPoint.Name}: {InputValidationHelper.FormatResistanceValue(measurement.Value)}Ω → NG{detail}");
                     }
 
                     // ─── 2.6 写单点结果到 PLC ───
@@ -503,6 +504,13 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         return testPoint.ModeValue == "SHORT"
             ? (value < 1.0 ? "OK" : "NG")
             : (value > 1_000_000.0 ? "OK" : "NG");
+    }
+
+    private static string FormatNullableResistance(double? value)
+    {
+        return value.HasValue
+            ? InputValidationHelper.FormatResistanceValue(value.Value)
+            : "-";
     }
 
     #endregion

@@ -11,6 +11,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
@@ -355,6 +356,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string? rightError = ValidateSinglePin(item.PinRight, "右引脚");
                     if (rightError != null)
                         pinErrors.Add($"第{displayIndex}项 {rightError}");
+
+                    // 左右引脚必须不同，否则会形成无意义的自测点，后续 PLC 切换也难以判断接线意图。
+                    if (leftError == null
+                        && rightError == null
+                        && string.Equals(item.PinLeft.Trim(), item.PinRight.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        pinErrors.Add($"第{displayIndex}项 左右引脚不能相同，请选择两个不同引脚");
+                    }
                 }
 
                 // 如果有任何引脚错误，一次性汇总提示
@@ -363,6 +372,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string errorMessage = "以下检测项目引脚有问题，请修正后再保存：\n\n"
                                         + string.Join("\n", pinErrors);
                     await _notificationService.ShowWarningAsync(errorMessage, "引脚校验失败");
+                    _logger.LogWarning("方案保存被拒绝：存在引脚配置错误，数量={Count}", pinErrors.Count);
                     return;
                 }
 
@@ -406,12 +416,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     int displayIndex = item.Index;
 
                     // 校验下限电阻值范围（NaN / Infinity / 负数 / 过大）
-                    string? lowerError = Common.Validators.InputValidationHelper.ValidateResistanceValue(item.LowerLimit);
+                    string? lowerError = InputValidationHelper.ValidateResistanceValue(item.LowerLimit);
                     if (lowerError != null)
                         resistanceErrors.Add($"第{displayIndex}项 下限: {lowerError}");
 
                     // 校验上限电阻值范围
-                    string? upperError = Common.Validators.InputValidationHelper.ValidateResistanceValue(item.UpperLimit);
+                    string? upperError = InputValidationHelper.ValidateResistanceValue(item.UpperLimit);
                     if (upperError != null)
                         resistanceErrors.Add($"第{displayIndex}项 上限: {upperError}");
 
@@ -428,6 +438,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string errorMessage = "以下检测项目电阻值设置有误，请修正后再保存：\n\n"
                                         + string.Join("\n", resistanceErrors);
                     await _notificationService.ShowWarningAsync(errorMessage, "阈值校验失败");
+                    _logger.LogWarning("方案保存被拒绝：存在不符合万用表量程分辨率的电阻阈值，数量={Count}", resistanceErrors.Count);
                     return;
                 }
 
@@ -447,10 +458,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         PinRightPolarity = item.PinRightPolarity,
                         CheckMode = item.CheckMode,  // ★ 中文 "导通" 或 "电阻值"
                         LowerLimit = item.CheckMode == CheckModeConstants.Resistance
-                            ? (item.LowerLimit.HasValue ? Math.Round(item.LowerLimit.Value, 4, MidpointRounding.AwayFromZero) : null)
+                            ? item.LowerLimit
                             : null,
                         UpperLimit = item.CheckMode == CheckModeConstants.Resistance
-                            ? (item.UpperLimit.HasValue ? Math.Round(item.UpperLimit.Value, 4, MidpointRounding.AwayFromZero) : null)
+                            ? item.UpperLimit
                             : null,
                         ModeValue = item.CheckMode == CheckModeConstants.Resistance
                             ? null                          // 电阻模式：实际值运行时由万用表填充
@@ -705,6 +716,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         public bool IsResistanceMode => CheckMode == CheckModeConstants.Resistance;
 
         /// <summary>
+        /// 下限输入框智能提醒：按当前 Ω 数值自动说明预计量程和分辨率。
+        /// </summary>
+        public string LowerLimitHintText => IsResistanceMode
+            ? InputValidationHelper.GetResistanceInputHint(LowerLimit)
+            : string.Empty;
+
+        /// <summary>
+        /// 上限输入框智能提醒：按当前 Ω 数值自动说明预计量程和分辨率。
+        /// </summary>
+        public string UpperLimitHintText => IsResistanceMode
+            ? InputValidationHelper.GetResistanceInputHint(UpperLimit)
+            : string.Empty;
+
+        /// <summary>
         /// 完整的检测项目名称（如 A1-A2）
         /// </summary>
         public string FullItemName => $"{PinLeft}-{PinRight}";
@@ -741,6 +766,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 通知条件渲染绑定属性已变更
             OnPropertyChanged(nameof(IsResistanceMode));
             OnPropertyChanged(nameof(IsContinuityMode));
+            OnPropertyChanged(nameof(LowerLimitHintText));
+            OnPropertyChanged(nameof(UpperLimitHintText));
+        }
+
+        partial void OnLowerLimitChanged(double? value)
+        {
+            // 输入过程中只刷新提示，最终是否符合分辨率由保存校验统一拒绝。
+            OnPropertyChanged(nameof(LowerLimitHintText));
+        }
+
+        partial void OnUpperLimitChanged(double? value)
+        {
+            // 输入过程中只刷新提示，最终是否符合分辨率由保存校验统一拒绝。
+            OnPropertyChanged(nameof(UpperLimitHintText));
         }
     }
 }
