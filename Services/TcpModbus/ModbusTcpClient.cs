@@ -8,7 +8,8 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 
 /// <summary>
-/// Modbus TCP 客户端实现 — 包装现有的 TcpClientPLCMotionService 单例。
+/// Modbus TCP 客户端实现 — Fp0hPlcDevice 内部使用的 TcpClientPLCMotionService 适配器。
+/// 不作为业务层入口，不直接注入 ViewModel。
 ///
 /// 职责：
 ///   1. 将 TcpClientPLCMotionService 的 Action&lt;bool&gt; 事件适配为 EventHandler&lt;bool&gt;
@@ -16,7 +17,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 ///   3. 将 ModbusTcpClientOptions 应用到内部的 TcpClientPLCMotionService 属性
 ///   4. 提供 IModbusTcpClient 接口的标准 Modbus 操作委托
 ///
-/// 不重写 TcpClientPLCMotionService 的 1758 行成熟收发逻辑，
+/// 不重写 TcpClientPLCMotionService 的成熟收发逻辑，
 /// 仅做接口适配以分离 Modbus TCP 通信层与 FP0H PLC 业务层。
 /// </summary>
 public class ModbusTcpClient : IModbusTcpClient, IDisposable
@@ -170,7 +171,8 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
         _inner.ReceiveTimeoutMs = options.ReceiveTimeoutMs;
         _inner.SendTimeoutMs = options.SendTimeoutMs;
         _inner.ReconnectDelayMs = options.ReconnectDelayMs;
-        _inner.MaxReconnectAttempts = options.MaxReconnectAttempts;
+        // 重连节奏由 DeviceConnectionService 统一调度；底层只做一次 TCP 尝试，避免外层和内层 12x12 叠加阻塞其他设备恢复。
+        _inner.MaxReconnectAttempts = 1;
         _inner.HealthCheckMode = options.HealthCheckMode;
         _inner.HealthCheckIntervalSeconds = options.HealthCheckIntervalSeconds;
         _inner.LastDataTimeoutSeconds = options.LastDataTimeoutSeconds;

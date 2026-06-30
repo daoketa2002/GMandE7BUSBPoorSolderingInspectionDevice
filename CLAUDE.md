@@ -19,7 +19,7 @@
 
 | 设备 | 厂商/型号 | 接口 | 协议 |
 |---|---|---|---|
-| PLC | 松下 FP0H（AFP0HC32ET） | `IPlcDevice` → `PlcCommunicationAdapter` → `TcpClientPLCMotionService` | Modbus TCP :502 |
+| PLC | 松下 FP0H（AFP0HC32ET） | `IPlcDevice` → `Fp0hPlcDevice` → `IModbusTcpClient` → `TcpClientPLCMotionService` | Modbus TCP :502 |
 | 万用表 | 固纬 GDM-9060 | `IMultimeterDevice` → `GwInstekGDM9060Driver` | SCPI over TCP :5025 |
 | 扫描枪 | 霍尼韦尔 H1900 | `IScannerDevice` → `HoneywellH1900Scanner` | 串口（USB虚拟串口） |
 
@@ -30,6 +30,12 @@
 > **必须在输出代码前先输出改动方案，等老板确认后再执行。**
 > 代码要有中文注释说明意图，属性和方法名、类名要见名知义。
 > 代码要尽量解耦，必要的地方要有日志（Serilog，关键操作使用 Warning 级别做审计）。
+>
+> 项目不大，不要过度设计
+>
+> 不谄媚，不夸"这是个很好的问题"，不以"当然可以"开头 
+>
+> 给真实判断——方案有问题直接指出，发现更好做法主动说明
 
 ---
 
@@ -91,9 +97,9 @@ dotnet run
 
 ### 通信层
 
-3 个硬件设备由统一的 `IDeviceConnectionManager` 管理，所有设备实现 `ICommunicationDevice` 接口（`ConnectAsync`/`DisconnectAsync`/`IsConnected`/`ConnectionStateChanged`）。`DeviceConnectionManager`（单例）启动时从 `IDeviceSettingsService` 加载配置，注入到各驱动后并行连接三台设备，带指数退避重试。ViewModel 通过订阅事件而非直接管理连接。
+3 个硬件设备由统一的 `IDeviceConnectionManager` 管理，所有设备实现 `ICommunicationDevice` 接口（`ConnectAsync`/`DisconnectAsync`/`IsConnected`/`ConnectionStateChanged`）。`DeviceConnectionService`（单例）启动时从 `IDeviceSettingsService` 加载配置，注入到各驱动后并行连接三台设备，带指数退避重试。ViewModel 通过订阅事件而非直接管理连接。
 
-`PlcCommunicationAdapter` 适配 `TcpClientPLCMotionService`（`Action<bool>` 委托）到 `ICommunicationDevice` 接口（`EventHandler<bool>`）。
+PLC 的调用链：`InspectionEngine` → `IPlcDevice` → `Fp0hPlcDevice`（业务动作翻译）→ `IModbusTcpClient` → `ModbusTcpClient`（事件适配）→ `TcpClientPLCMotionService`（TCP/Modbus 收发）。
 
 ### 检测流程
 
@@ -133,47 +139,8 @@ dotnet run
 
 位置：`设置/设备设置/DeviceSettings.json`
 
-
-
-#### 核心模型关系
-
-```
-PlanModel                      LogRecord
- ├── MachineType (机种名)        ├── Timestamp (检测时间)
- ├── PlanName   (方案名)         ├── SerialNumber (序列号)
- └── Items[]   (检测项目)        ├── FinalResult (OK/NG)
-     ├── CheckMode (导通/电阻值)  ├── Operator (作业员)
-     ├── LowerLimit               └── PinResults[] (检测明细)
-     ├── UpperLimit                    ├── PinName (如 A1-A2)
-     └── ModeValue (OPEN/SHORT/实测值) └── Result (测量值/判定)
-```
-
-
-
-## 配置
-
-- `appsettings.json` — 数据库连接串、Serilog 设置、`CsvStorage`（根路径/最大行数/编码）、`PlanStorage`（每个机种最大方案数）
-- `DeviceSettings.json`（`设置/设备设置/`）— 各设备通信参数（IP、端口、串口、超时等）
-- 数据库：`app.db`（SQLite，仓库根目录）。DEBUG 模式下 `Program.cs` 设置 `RECREATE_DATABASE_ON_EACH_RUN = true`，每次启动重建并填充种子数据
-
----
-
 ## 关键约定
 
 - **先出方案再执行** — 任何改动必须先输出方案，让老板确认后再写代码
-- **中文 UI/注释** — 用户界面和代码注释使用中文。这是一个中文工业检测系统
-- **ObservableProperty** — 全项目 ViewModel 和 Model 使用 CommunityToolkit.Mvvm 源生成器（例如 `[ObservableProperty]` 私有字段）
-- **异步模式** — 服务使用 `async`/`await` + `CancellationToken`。导航生命周期：`INavigationAware.OnNavigatedToAsync` / `OnNavigatedFromAsync`
-- **Dispatcher** — 所有 UI 绑定状态更新通过 `Application.Current.Dispatcher.Invoke()` 路由（见 `DeviceConnectionManager` 事件处理）
-- **文件范围命名空间** — 使用 .NET 文件范围命名空间
-- **日志记录** — 所有用户操作、校验拒绝和设备事件均使用 Serilog 记录。安全审计使用 `Warning` 级别
-- **密码弹窗** — 使用 `PasswordDialogContext` 枚举区分入口上下文，不同上下文使用不同图标/标题/说明/强调色
-- **CSV 编码** — 日志文件使用 UTF-8 BOM 编码，确保中文正常显示
-- **代码要尽量解耦，属性和方法还有类名的命名要见名知义，必要的地方要有日志**
-
-## 遗留/未使用代码
-
-- `FinsTcpUtil.cs`（欧姆龙 FINS 协议）— 未使用，当前 PLC 使用 Modbus TCP
-- `ITcpServerPLCMotionService` — 预留的服务器模式，未实现
-- `MainViewModel.cs` / `MainWindowViewModel.cs` — 空桩代码
-- `SqliteTestRecordStorage` — 已注册但未通过 `ITestRecordStorage` 注入；CSV 实现为活跃使用
+- **代码要尽量解耦，属性和方法还有类名的命名要见名知义，必要的地方要有日志，代码要有注释**
+- 项目不大，设计不要太复杂

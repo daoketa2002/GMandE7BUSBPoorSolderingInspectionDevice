@@ -219,8 +219,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // 1. Modbus TCP PLC 服务（动作控制）
             services.AddSingleton<TcpClientPLCMotionService>();
-            services.AddSingleton<ITcpClientPLCMotionService>(sp =>
-                sp.GetRequiredService<TcpClientPLCMotionService>());
 
             // ⭐ 新增：IModbusTcpClient 实现（包装现有 TcpClientPLCMotionService）
             services.AddSingleton<IModbusTcpClient, ModbusTcpClient>();
@@ -230,9 +228,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddSingleton<IPlcDevice>(sp =>
                 sp.GetRequiredService<Fp0hPlcDevice>());
             // 旧 PlcCommunicationAdapter 注册已移除，由 Fp0hPlcDevice 替代
-
-            // UI层封装
-            services.AddSingleton<TcpPLCMotionWPFUIModbusService>();
 
             // 2. 固纬 GDM-9060 万用表驱动
             services.AddSingleton<GwInstekGDM9060Driver>();
@@ -252,15 +247,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // 5. 扫描枪条码服务（保留，因为 DeviceConnectionManager 依赖它转发扫码事件）
             services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>();
 
-            // 6. 设备连接内部组件（DeviceConnectionManager 的依赖）
-            services.AddSingleton<DeviceConnectionRetryOptions>();
-            services.AddSingleton<DeviceConnectionStateStore>();
-            services.AddSingleton<DeviceConfigurationApplier>();
-            services.AddSingleton<DeviceConnectionExecutor>();
-            services.AddSingleton<DeviceConnectionMonitor>();
-
-            // 7. 设备连接管理器（对外门面，依赖三个不同设备接口和上述内部组件）
-            services.AddSingleton<IDeviceConnectionManager, DeviceConnectionManager>();
+            // 6. 设备连接管理器（统一管理 PLC、万用表、扫描枪的连接/重连/状态发布）
+            services.AddSingleton<IDeviceConnectionManager, DeviceConnectionService>();
 
             // ⭐⭐⭐ ====== 硬件驱动服务注册结束 ====== ⭐⭐⭐
 

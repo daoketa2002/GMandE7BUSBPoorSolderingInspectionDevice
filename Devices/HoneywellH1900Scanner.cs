@@ -469,17 +469,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                             _disconnectDetectedCount);
                         Notify(NotificationType.Warning, $"扫描枪已断开（端口 {_portName} 消失）");
 
-                        _ = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                await DisconnectAsync().ConfigureAwait(false);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogDebug(ex, "热插拔断开时异常（可忽略）");
-                            }
-                        });
+                        HandlePortLostByWatchdog();
                     }
                 }
                 else
@@ -590,6 +580,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 热插拔检测确认端口消失后的断开处理。
+        /// 这里不能调用 DisconnectAsync，因为 DisconnectAsync 会停止 PortWatchdog，
+        /// 停止后就无法继续检测端口重新出现。
+        /// </summary>
+        private void HandlePortLostByWatchdog()
+        {
+            lock (_lockObject)
+            {
+                if (!_isConnected)
+                {
+                    return;
+                }
+
+                CloseSerialPort();
+                _isConnected = false;
+                _connectionStableTime = DateTime.MinValue;
+                _disconnectDetectedCount = 0;
+
+                _barcodeCompleteTimer?.Stop();
+                _barcodeCompleteTimer?.Dispose();
+                _barcodeCompleteTimer = null;
+
+                ConnectionStateChanged?.Invoke(this, false);
+                _logger.LogInformation("扫描枪已断开连接，继续保持热插拔检测等待恢复");
+            }
         }
 
         /// <summary>

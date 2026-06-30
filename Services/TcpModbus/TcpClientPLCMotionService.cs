@@ -15,7 +15,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
     /// <summary>
     /// TCP Modbus PLC动作控制客户端通信服务 - 支持中断操作
     /// </summary>
-    public class TcpClientPLCMotionService : ITcpClientPLCMotionService, IAsyncDisposable, IDisposable
+    public class TcpClientPLCMotionService : IAsyncDisposable, IDisposable
     {
         /// <summary>
         /// 连接状态枚举
