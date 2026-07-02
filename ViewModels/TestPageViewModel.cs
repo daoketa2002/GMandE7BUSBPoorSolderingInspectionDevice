@@ -29,14 +29,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
 /// <summary>
 /// 运行界面 UI 状态枚举（8种，直接服务运行页"测试状态"大面板显示）
-/// Ready:        待机中 — 灰色
-/// CanStart:     可启用 — 绿色
-/// Testing:      测试中 — 橙色
-/// Paused:       已暂停 — 黄色
-/// EmergencyStop:急停中 — 红色
-/// Resetting:    复位中 — 紫色
-/// PendingSave:  待保存 — 蓝色
-/// Error:        异常 — 深红色
+/// Ready:        待机中 — 信息不全或设备未就绪
+/// CanStart:     可启动 — 人工启动条件满足
+/// Testing:      测试中 — 检测引擎运行中
+/// Paused:       已停止 — DT122 停止，保留断点
+/// EmergencyStop:急停中 — DT123 急停，必须复位
+/// Resetting:    复位中 — DT121 复位处理中
+/// PendingSave:  待保存 — 检测完成等待保存
+/// Error:        异常 — 板离或不可继续错误
 /// </summary>
 public enum TestUIState
 {
@@ -91,6 +91,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>是否正在显示急停对话框（防止轮询重复弹窗）</summary>
     private bool _isShowingEmergencyDialog;
+
+    /// <summary>DT122 停止信号是否已处理，防止轮询期间重复刷日志。</summary>
+    private bool _stopSignalHandled;
+
+    /// <summary>DT121 复位信号是否已处理，防止复位按钮保持时重复处理。</summary>
+    private bool _resetSignalHandled;
+
+    /// <summary>复位或中止后，忽略上一轮检测流程晚到的 StepStarted/StepCompleted/Completed 回调。</summary>
+    private bool _ignoreInspectionCallbacksUntilNextStart;
 
     #endregion
 
@@ -301,12 +310,38 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private bool _isInputEnabled = true;
 
     /// <summary>
-    /// 根据所有设备和 PLC 状态更新 UI 状态。
-    /// 不再依赖传感器模拟，由 PLC 轮询定时器驱动。
+    /// 判断界面上下文是否已经具备人工启动条件。
+    /// 扫描仪只是序列号输入方式之一，不作为启动强依赖。
+    /// Fake 调试按钮使用该条件，不强依赖 DT120。
     /// </summary>
-    private void UpdateUIState()
+    private bool CanManualStartInspection()
     {
-        // 检测中/暂停/急停/待保存/复位中/异常等状态不自动覆写
+        return !string.IsNullOrWhiteSpace(ModelName)
+               && !string.IsNullOrWhiteSpace(SerialNumber)
+               && !IsSchemeNameInvalid
+               && !string.IsNullOrWhiteSpace(SchemeName)
+               && !string.IsNullOrWhiteSpace(OperatorName)
+               && IsPlcConnected
+               && IsDmmConnected;
+    }
+
+    /// <summary>
+    /// 复位结束、保存结束等明确流程收口时使用，强制重新计算待机/可启动。
+    /// 不受 Resetting 等状态保护条件拦截。
+    /// </summary>
+    private void ForceRefreshReadyOrCanStartState()
+    {
+        bool canStart = CanManualStartInspection();
+        UiState = canStart ? TestUIState.CanStart : TestUIState.Ready;
+        SensorStatusText = canStart ? "可启动" : "待机中";
+        IsInputEnabled = true;
+    }
+
+    /// <summary>
+    /// 根据当前上下文刷新为待机或可启动，不覆盖检测中、停止、急停、复位、待保存、异常。
+    /// </summary>
+    private void RefreshReadyOrCanStartState()
+    {
         if (UiState == TestUIState.Testing
             || UiState == TestUIState.Paused
             || UiState == TestUIState.EmergencyStop
@@ -315,29 +350,30 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             || UiState == TestUIState.Error)
             return;
 
-        // 检查所有前置条件
-        bool hasProductInfo = !string.IsNullOrWhiteSpace(ModelName)
-                              && !string.IsNullOrWhiteSpace(SerialNumber);
-        bool hasValidPlan = !IsSchemeNameInvalid
-                            && !string.IsNullOrWhiteSpace(SchemeName);
-        bool hasOperator = !string.IsNullOrWhiteSpace(OperatorName);
-        bool allDevicesReady = IsPlcConnected && IsScannerConnected && IsDmmConnected;
-        bool plcStartRequested = IsPlcStartRequested;  // DT120=1
-
-        // CanStart 条件：产品信息 + 方案 + 作业员 + 设备就绪 + PLC 启动请求
-        bool canStart = hasProductInfo && hasValidPlan && hasOperator
-                        && allDevicesReady && plcStartRequested;
-
+        bool canStart = CanManualStartInspection();
         UiState = canStart ? TestUIState.CanStart : TestUIState.Ready;
-        SensorStatusText = canStart ? "可启用" : "待机中";
+        SensorStatusText = canStart ? "可启动" : "待机中";
+        IsInputEnabled = true;
+    }
+
+    /// <summary>
+    /// 根据所有设备和 PLC 状态更新 UI 状态。
+    /// 使用 RefreshReadyOrCanStartState 统一收口，不再强制依赖 DT120。
+    /// </summary>
+    private void UpdateUIState()
+    {
+        RefreshReadyOrCanStartState();
 
         // 当条件不足但 PLC 已请求启动时，拒绝启动并提示原因
-        if (plcStartRequested && !canStart && !_startupCleared)
+        bool plcStartRequested = IsPlcStartRequested;
+        if (plcStartRequested && !CanManualStartInspection() && !_startupCleared)
         {
-            RejectStartCondition(hasProductInfo, hasValidPlan, hasOperator, allDevicesReady);
+            RejectStartCondition(
+                !string.IsNullOrWhiteSpace(ModelName) && !string.IsNullOrWhiteSpace(SerialNumber),
+                !IsSchemeNameInvalid && !string.IsNullOrWhiteSpace(SchemeName),
+                !string.IsNullOrWhiteSpace(OperatorName),
+                IsPlcConnected && IsDmmConnected);
         }
-
-        IsInputEnabled = (UiState == TestUIState.Ready || UiState == TestUIState.CanStart);
     }
 
     /// <summary>
@@ -388,12 +424,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
     }
 
-    /// <summary>检查未就绪设备列表</summary>
+    /// <summary>检查影响检测启动的未就绪设备。扫描仪不作为启动强依赖。</summary>
     private List<string> GetNotReadyDevices()
     {
         var notReady = new List<string>();
         if (!IsPlcConnected) notReady.Add("PLC未连接");
-        if (!IsScannerConnected) notReady.Add("扫描仪未连接");
         if (!IsDmmConnected) notReady.Add("万用表未连接");
         return notReady;
     }
@@ -487,7 +522,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 CheckMode = item.CheckMode,
                 LowerLimitText = FormatLowerLimit(item),
                 UpperLimitText = FormatUpperLimit(item),
-                CheckResult = "未测试",
+                CheckResult = "未检测",
                 Judgment = string.Empty
             });
         }
@@ -569,12 +604,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
             else
             {
-                foreach (var item in TestItems)
-                {
-                    item.CheckResult = string.Empty;
-                    item.Judgment = string.Empty;
-                }
-                UiState = TestUIState.CanStart;
+                ClearTestItemsForRestart();
+                ForceRefreshReadyOrCanStartState();
                 AddLog("📝 操作员取消保存，检测结果已清空，可重新测试");
             }
         }
@@ -621,20 +652,28 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 回到准备态。
+    /// 清空检测项目的运行结果，用于复位、取消保存和准备重新检测。
+    /// </summary>
+    private void ClearTestItemsForRestart()
+    {
+        foreach (var item in TestItems)
+        {
+            item.CheckResult = "未检测";
+            item.Judgment = string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// 回到准备态，使用强制收口自动计算待机/可启动。
     /// </summary>
     private void ResetToReadyState()
     {
         SerialNumber = string.Empty;
-        foreach (var item in TestItems)
-        {
-            item.CheckResult = "未测试";
-            item.Judgment = string.Empty;
-        }
+        ClearTestItemsForRestart();
         IsPlcStartRequested = false;
         _inspectionStarted = false;
         _startupCleared = false;
-        UiState = TestUIState.Ready;
+        ForceRefreshReadyOrCanStartState();
         AddLog("✅ 准备就绪，可进行下一次检测");
     }
 
@@ -760,7 +799,48 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private void UpdateUiStateFromPlcInputs(PlcMachineInputs inputs)
     {
-        // 急停信号（检测中也能触发）
+        // 复位信号优先于其他信号（急停状态下也能触发复位，解除锁定）
+        // 使用边沿检测，确保 DT121 保持期间只处理一次
+        if (!inputs.IsResetRequested)
+        {
+            _resetSignalHandled = false;
+        }
+
+        if (inputs.IsResetRequested)
+        {
+            if (_resetSignalHandled)
+                return;
+
+            _resetSignalHandled = true;
+            _ignoreInspectionCallbacksUntilNextStart = true;
+
+            UiState = TestUIState.Resetting;
+            SensorStatusText = "复位中";
+            AddLog("PLC 复位信号(DT121)，正在复位...");
+
+            if (_inspectionEngine!.IsRunning)
+                _inspectionEngine.Stop();
+            _ = _plcDevice.RequestRelayDisconnectAsync(CancellationToken.None);
+            _ = _plcDevice.ClearResetRequestAsync(CancellationToken.None);
+            if (_plcDevice is Devices.Fakes.FakeInspectionHardware fake)
+            {
+                fake.WriteInputRegisterAsync(PlcAddressMap.StopSignal, 0, CancellationToken.None);
+                fake.WriteInputRegisterAsync(PlcAddressMap.EmergencyStopSignal, 0, CancellationToken.None);
+                fake.WriteInputRegisterAsync(PlcAddressMap.BoardRemovedAlarm, 0, CancellationToken.None);
+            }
+            ClearTestItemsForRestart();
+            _inspectionStarted = false;
+            _startupCleared = false;
+            _isShowingEmergencyDialog = false;
+            IsPlcStartRequested = false;
+            _inspectionEngine.ClearResetState();
+
+            ForceRefreshReadyOrCanStartState();
+            AddLog("✅ 复位完成，已清空检测结果");
+            return;
+        }
+
+        // 急停信号（不锁定检测中状态，检测中也能触发）
         if (inputs.IsEmergencyStop)
         {
             if (UiState != TestUIState.EmergencyStop)
@@ -770,51 +850,27 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 _logger.LogWarning("[PLC轮询] 检测到急停信号(DT123)");
                 if (_inspectionEngine!.IsRunning)
                     _inspectionEngine.Stop();
-                if (!_isShowingEmergencyDialog)
-                {
-                    _isShowingEmergencyDialog = true;
-                    _ = _notificationService.ShowWarningAsync("急停触发！请先点击复位，再开始检测。", "急停");
-                }
+                // 轮询层不再弹窗，避免与按钮层重复
             }
             return;
         }
 
-        // 复位信号（急停、停止、异常、检测完成等状态下均可触发）
-        if (inputs.IsResetRequested)
+        // 停止信号 — 边沿处理，只在 0->1 时触发一次，防止轮询期间重复刷日志
+        if (!inputs.IsStopRequested)
         {
-            UiState = TestUIState.Resetting;
-            SensorStatusText = "复位中";
-            AddLog("PLC 复位信号(DT121)，正在复位...");
-            // 停止引擎检测（如果正在运行）
-            if (_inspectionEngine!.IsRunning)
-                _inspectionEngine.Stop();
-            // 通知 PLC 断开引脚输出
-            _ = _plcDevice.RequestRelayDisconnectAsync(CancellationToken.None);
-            // 清除复位请求
-            _ = _plcDevice.ClearResetRequestAsync(CancellationToken.None);
-            // 清空测试项目表格的显示内容
-            foreach (var item in TestItems)
+            _stopSignalHandled = false;
+        }
+
+        if (inputs.IsStopRequested)
+        {
+            if (!_stopSignalHandled)
             {
-                item.CheckResult = "未测试";
-                item.Judgment = string.Empty;
+                _stopSignalHandled = true;
+                UiState = TestUIState.Paused;
+                SensorStatusText = "已停止";
+                _inspectionEngine?.PauseWithCheckpoint();
             }
-            // 复位状态
-            _inspectionStarted = false;
-            _startupCleared = false;
-            _isShowingEmergencyDialog = false;
-            IsPlcStartRequested = false;
-            _inspectionEngine.ClearResetState();
-            // 回到待机
-            UiState = TestUIState.Ready;
-            SensorStatusText = "待机中";
-            AddLog("✅ 复位完成，已清空检测结果，等待下次启动");
             return;
-        }
-
-        // 停止信号（不在检测中时忽略）
-        if (inputs.IsStopRequested && UiState != TestUIState.Testing)
-        {
-            // 不处理，仅更新文本
         }
 
         // 板离设备报警
@@ -888,7 +944,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return "当前方案无效或不属于当前机种，无法启动";
         if (string.IsNullOrWhiteSpace(OperatorName))
             return "未指定作业员，无法启动";
-        if (!_deviceManager.AreAllDevicesReady)
+        if (!IsPlcConnected || !IsDmmConnected)
         {
             var notReady = GetNotReadyDevices();
             return $"设备未就绪：{string.Join(", ", notReady)}，无法启动";
@@ -938,14 +994,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         _logger.LogWarning("[Fake最小闭环][审计] 操作员手动点击开始检测(Fake)");
         AddLog("开始 Fake 最小闭环检测");
+        _ignoreInspectionCallbacksUntilNextStart = false;
 
         // 清除残留的 PLC 信号（模拟 PLC 启动时自动清零的行为）
+        // 注意：不清除 DT123（急停），急停后必须先复位才能启动
         if (_plcDevice is Devices.Fakes.FakeInspectionHardware fake)
         {
             await fake.WriteInputRegisterAsync(PlcAddressMap.StopSignal, 0);
-            await fake.WriteInputRegisterAsync(PlcAddressMap.EmergencyStopSignal, 0);
             await fake.WriteInputRegisterAsync(PlcAddressMap.BoardRemovedAlarm, 0);
-            AddLog("⚠️ [Fake调试] 已清除 DT122/DT123/DT161 信号");
+            AddLog("⚠️ [Fake调试] 已清除 DT122/DT161 信号");
         }
 
         await RunInspectionAsync(SerialNumber, ModelName, OperatorName);
@@ -966,10 +1023,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _inspectionEngine?.PauseWithCheckpoint();
         await fake.WriteInputRegisterAsync(PlcAddressMap.StopSignal, 1);
-        AddLog("⚠️ [Fake调试] 已写入 DT122=1（停止信号）");
-        await _notificationService.ShowWarningAsync("已触发停止信号(DT122)，检测暂停，保留断点。", "Fake 触发");
+        await _notificationService.ShowWarningAsync(
+            "已触发停止信号(DT122)，检测暂停，保留断点。",
+            "Fake 触发");
     }
 
     [RelayCommand]
@@ -981,10 +1038,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _inspectionEngine?.Stop();
+        // 只写寄存器，由 PLC 轮询和 InspectionEngine 处理信号，不直接取消引擎
         await fake.WriteInputRegisterAsync(PlcAddressMap.ResetSignal, 1);
-        AddLog("⚠️ [Fake调试] 已写入 DT121=1（复位信号）");
-        await _notificationService.ShowWarningAsync("已触发复位信号(DT121)，检测中止，清空所有结果。", "Fake 触发");
+        await _notificationService.ShowWarningAsync(
+            "已触发复位信号(DT121)，检测中止，清空所有结果。",
+            "Fake 触发");
     }
 
     [RelayCommand]
@@ -996,7 +1054,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _inspectionEngine?.Stop();
+        // 只写寄存器，由 PLC 轮询和 InspectionEngine 处理信号
         await fake.WriteInputRegisterAsync(PlcAddressMap.EmergencyStopSignal, 1);
         AddLog("⚠️ [Fake调试] 已写入 DT123=1（急停信号）");
         await _notificationService.ShowWarningAsync("已触发急停信号(DT123)，检测中止，必须复位后再启动。", "Fake 触发");
@@ -1011,7 +1069,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _inspectionEngine?.Stop();
+        // 只写寄存器，由 PLC 轮询和 InspectionEngine 处理信号
         await fake.WriteInputRegisterAsync(PlcAddressMap.BoardRemovedAlarm, 1);
         AddLog("⚠️ [Fake调试] 已写入 DT161=1（板离报警）");
         await _notificationService.ShowWarningAsync("已触发板离报警(DT161)，检测中止。", "Fake 触发");
@@ -1119,7 +1177,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 InspectionState.PausedByStop => TestUIState.Paused,
                 InspectionState.PausedByEmergencyStop => TestUIState.EmergencyStop,
                 InspectionState.ResetRequested => TestUIState.Resetting,
-                InspectionState.Aborted => TestUIState.Ready,
+                InspectionState.Aborted => UiState switch
+                {
+                    TestUIState.Paused => TestUIState.Paused,
+                    TestUIState.Resetting => TestUIState.Resetting,
+                    TestUIState.EmergencyStop => TestUIState.EmergencyStop,
+                    _ => TestUIState.Error
+                },
                 InspectionState.Error => TestUIState.Error,
                 _ => UiState
             };
@@ -1129,10 +1193,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 InspectionState.Testing => "测试中",
                 InspectionState.CompletedPass => "待保存",
                 InspectionState.CompletedFail => "待保存",
-                InspectionState.PausedByStop => "已暂停",
+                InspectionState.PausedByStop => "已停止",
                 InspectionState.PausedByEmergencyStop => "急停中",
                 InspectionState.ResetRequested => "复位中",
-                InspectionState.Aborted => "已中止",
+                InspectionState.Aborted => UiState switch
+                {
+                    TestUIState.Paused => "已停止",
+                    TestUIState.Resetting => "复位中",
+                    TestUIState.EmergencyStop => "急停中",
+                    _ => "已中止"
+                },
                 InspectionState.Error => "异常",
                 _ => SensorStatusText
             };
@@ -1151,6 +1221,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
+            if (_ignoreInspectionCallbacksUntilNextStart)
+                return;
+
             var item = TestItems.ElementAtOrDefault(e.StepIndex);
             if (item != null)
             {
@@ -1173,6 +1246,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
+            if (_ignoreInspectionCallbacksUntilNextStart)
+                return;
+
             var item = TestItems.ElementAtOrDefault(e.StepIndex);
             if (item != null)
             {
@@ -1206,6 +1282,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         Application.Current.Dispatcher.InvokeAsync(async () =>
         {
+            if (_ignoreInspectionCallbacksUntilNextStart)
+                return;
+
             if (e.Result.IsAborted)
             {
                 AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
@@ -1276,10 +1355,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     #endregion
 
-    // ═══════════════════════════════════════════════════════════════
-    // 方案名称联动逻辑（机种 ↔ 方案）
-    // ═══════════════════════════════════════════════════════════════
-
+    #region 方案名称联动逻辑（机种 ↔ 方案）
+    
     private async Task RefreshPlanNameOptionsAsync(string machineType)
     {
         PlanNameOptions.Clear();
@@ -1334,6 +1411,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogWarning("方案名无效: 机种={ModelName}, 方案名={SchemeName}", ModelName, SchemeName);
         }
     }
+
+    #endregion
 
     #region 自动连接硬件
 

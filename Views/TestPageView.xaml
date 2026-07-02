@@ -104,6 +104,27 @@
             <Setter Property="BorderBrush" Value="#1A252F"/>
             <Setter Property="BorderThickness" Value="0,0,0,2"/>
         </Style>
+
+        <!-- 调试工具按钮统一样式，减少重复模板 -->
+        <Style x:Key="DebugButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="MinWidth" Value="110"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="6" BorderThickness="0">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid Background="#FFFFFF">
@@ -305,7 +326,7 @@
                                     <Setter Property="Text" Value="待机中"/>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding UiState}" Value="CanStart">
-                                            <Setter Property="Text" Value="可启用"/>
+                                            <Setter Property="Text" Value="可启动"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Testing">
                                             <Setter Property="Text" Value="测试中"/>
@@ -314,7 +335,7 @@
                                             <Setter Property="Text" Value="待保存"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Paused">
-                                            <Setter Property="Text" Value="已暂停"/>
+                                            <Setter Property="Text" Value="已停止"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
                                             <Setter Property="Text" Value="急停中"/>
@@ -663,96 +684,36 @@
                                 <UniformGrid Grid.Row="0" Rows="1" Columns="2" Margin="0,0,0,4">
                                     <Button Content="开始检测(Fake)"
                                             Command="{Binding StartFakeMinimalInspectionCommand}"
-                                            Height="38" MinWidth="110" Margin="0,0,2,0"
-                                            FontSize="13" FontWeight="Bold"
-                                            Foreground="White" Background="#2E86DE"
-                                            Cursor="Hand"
-                                            ToolTip="模拟 PLC 启动信号，触发完整检测流程">
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        CornerRadius="6" BorderThickness="0">
-                                                    <ContentPresenter HorizontalAlignment="Center"
-                                                                      VerticalAlignment="Center"/>
-                                                </Border>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
+                                            Style="{StaticResource DebugButtonStyle}"
+                                            Background="#2E86DE"
+                                            ToolTip="模拟 PLC 启动信号，触发完整检测流程"/>
                                     <Button Content="停止(DT122)"
                                             Command="{Binding FakeTriggerStopCommand}"
-                                            Height="38" MinWidth="110" Margin="2,0,0,0"
-                                            FontSize="13" FontWeight="Bold"
-                                            Foreground="White" Background="#F39C12"
-                                            Cursor="Hand"
-                                            ToolTip="写入 DT122=1，模拟 PLC 停止信号">
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        CornerRadius="6" BorderThickness="0">
-                                                    <ContentPresenter HorizontalAlignment="Center"
-                                                                      VerticalAlignment="Center"/>
-                                                </Border>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
+                                            Style="{StaticResource DebugButtonStyle}"
+                                            Background="#F39C12"
+                                            ToolTip="写入 DT122=1，模拟 PLC 停止信号"/>
                                 </UniformGrid>
 
                                 <!-- 第2行：复位(DT121) | 急停(DT123) -->
                                 <UniformGrid Grid.Row="1" Rows="1" Columns="2" Margin="0,0,0,4">
                                     <Button Content="复位(DT121)"
                                             Command="{Binding FakeTriggerResetCommand}"
-                                            Height="38" MinWidth="110" Margin="0,0,2,0"
-                                            FontSize="13" FontWeight="Bold"
-                                            Foreground="White" Background="#8E44AD"
-                                            Cursor="Hand"
-                                            ToolTip="写入 DT121=1，模拟 PLC 复位信号">
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        CornerRadius="6" BorderThickness="0">
-                                                    <ContentPresenter HorizontalAlignment="Center"
-                                                                      VerticalAlignment="Center"/>
-                                                </Border>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
+                                            Style="{StaticResource DebugButtonStyle}"
+                                            Background="#8E44AD"
+                                            ToolTip="写入 DT121=1，模拟 PLC 复位信号"/>
                                     <Button Content="急停(DT123)"
                                             Command="{Binding FakeTriggerEmergencyStopCommand}"
-                                            Height="38" MinWidth="110" Margin="2,0,0,0"
-                                            FontSize="13" FontWeight="Bold"
-                                            Foreground="White" Background="#E74C3C"
-                                            Cursor="Hand"
-                                            ToolTip="写入 DT123=1，模拟 PLC 急停信号">
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        CornerRadius="6" BorderThickness="0">
-                                                    <ContentPresenter HorizontalAlignment="Center"
-                                                                      VerticalAlignment="Center"/>
-                                                </Border>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
+                                            Style="{StaticResource DebugButtonStyle}"
+                                            Background="#E74C3C"
+                                            ToolTip="写入 DT123=1，模拟 PLC 急停信号"/>
                                 </UniformGrid>
 
                                 <!-- 第3行：板离(DT161) 独占一行 -->
                                 <Button Grid.Row="2" Content="板离(DT161)"
                                         Command="{Binding FakeTriggerBoardLeaveCommand}"
-                                        Height="38" Margin="0,0,0,0"
-                                        FontSize="13" FontWeight="Bold"
-                                        Foreground="White" Background="#95A5A6"
-                                        Cursor="Hand"
-                                        ToolTip="写入 DT161=1，模拟 PLC 板离设备报警">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border Background="{TemplateBinding Background}"
-                                                    CornerRadius="6" BorderThickness="0">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center"/>
-                                            </Border>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                </Button>
+                                        Style="{StaticResource DebugButtonStyle}"
+                                        Background="#95A5A6"
+                                        ToolTip="写入 DT161=1，模拟 PLC 板离设备报警"/>
                             </Grid>
                         </Border>
                     </Expander>

@@ -152,6 +152,20 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         return result;
                     }
 
+                    // 等待继电器稳定后、读取万用表前，再检查一次中断信号
+                    var postRelayInterrupt = await CheckPlcInterruptsAsync(_inspectionCts.Token).ConfigureAwait(false);
+                    if (postRelayInterrupt != PlcInterruptAction.Continue)
+                    {
+                        bool canContinue = await HandlePlcInterruptAsync(postRelayInterrupt, i, _inspectionCts.Token).ConfigureAwait(false);
+                        if (!canContinue)
+                        {
+                            result.IsAborted = true;
+                            result.ErrorMessage = _checkpoint.LastErrorMessage ?? "检测被 PLC 信号中断";
+                            result.EndTime = DateTime.Now;
+                            return result;
+                        }
+                    }
+
                     await Task.Delay(_config.RelaySettleTimeMs, _inspectionCts.Token).ConfigureAwait(false);
 
                     UpdateCheckpoint(i, "ReadMultimeter");
