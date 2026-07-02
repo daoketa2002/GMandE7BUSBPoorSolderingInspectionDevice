@@ -13,7 +13,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
     /// </summary>
     public interface IMultimeterDevice : ICommunicationDevice
     {
-        // 继承 ICommunicationDevice 全部成员
-        // 如需万用表特有方法（如设置测量模式），可在此扩展
+        /// <summary>
+        /// 初始化为电阻测量模式。最小闭环统一使用电阻模式读取原始值。
+        /// </summary>
+        Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// 读取万用表原始返回文本，例如 "+1.05000000E+01"、"OPEN"、"SHORT"。
+        /// 判定逻辑由 InspectionEngine 负责，驱动层不做业务判断。
+        /// </summary>
+        Task<string> ReadResistanceRawAsync(CancellationToken ct = default);
     }
 }

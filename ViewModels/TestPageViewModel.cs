@@ -63,7 +63,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private readonly ITestRecordStorage _testRecordStorage;
 
     // 硬件服务
-    private readonly GwInstekGDM9060Driver _dmmDriver;
+
     private readonly IDeviceConnectionManager _deviceManager;
     private readonly IPlcDevice _plcDevice;
     private readonly InspectionEngine? _inspectionEngine;
@@ -86,6 +86,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>启动失败后是否已清除 DT120（防止重复触发失败日志刷屏）</summary>
     private bool _startupCleared;
 
+    /// <summary>是否正在显示保存对话框（防止重复弹窗）</summary>
+    private bool _isShowingSaveDialog;
+
+    /// <summary>是否正在显示急停对话框（防止轮询重复弹窗）</summary>
+    private bool _isShowingEmergencyDialog;
+
     #endregion
 
     #region 构造函数
@@ -95,7 +101,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         INotificationService notificationService,
         IOperatorStateService operatorStateService,
         ILogger<TestPageViewModel> logger,
-        GwInstekGDM9060Driver dmmDriver,
+
         IDeviceSettingsService settingsService,
         IPlanStorageService planStorageService,
         IDeviceConnectionManager deviceManager,
@@ -109,7 +115,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
         _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-        _dmmDriver = dmmDriver ?? throw new ArgumentNullException(nameof(dmmDriver));
+
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
@@ -466,6 +472,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         _inspectionEngine?.SetConfig(new InspectionConfig
         {
+            PlanName = currentPlan.PlanName,
             TestPoints = orderedItems
                 .Select(TestPointConfig.FromPlanItem)
                 .ToList()
@@ -520,45 +527,60 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private async Task OnAllPinsTestedAsync()
     {
-        UiState = TestUIState.PendingSave;
-
-        var finalResult = TestItems.All(i => i.Judgment == "OK") ? "OK" : "NG";
-
-        TotalCount++;
-        if (finalResult == "OK") PassCount++;
-        else FailCount++;
-
-        // ★ 使用当前 ModelName + SchemeName 精确匹配，不再取 allPlans.FirstOrDefault()
-        var machineType = string.IsNullOrWhiteSpace(ModelName) ? "Unknown" : ModelName;
-        var planName = string.IsNullOrWhiteSpace(SchemeName) ? "Unknown" : SchemeName;
-
-        var ngItems = TestItems.Where(i => i.Judgment == "NG").ToList();
-        var ngDetail = ngItems.Any()
-            ? string.Join("\n", ngItems.Select(i => $"  • {i.ItemName}: {i.CheckResult} → NG"))
-            : "无";
-
-        var confirmed = await _notificationService.ConfirmAsync(
-            $"当前方案 [{planName}] 所有项目已检测完毕\n\n" +
-            $"综合判定: [{finalResult}]\n\n" +
-            $"NG项目:\n{ngDetail}\n\n" +
-            $"是否保存本次检测记录？",
-            "检测完成");
-
-        if (confirmed)
+        // 防重入：如果已经弹出保存对话框，直接返回，避免弹窗堆叠
+        if (_isShowingSaveDialog)
         {
-            await SaveLogToDatabaseAsync(machineType, planName, finalResult);
-            await _notificationService.ShowInfoAsync("检测记录已保存！", "保存成功");
-            ResetToReadyState();
+            _logger.LogWarning("[UI流程] 保存对话框已在显示中，跳过重复弹窗");
+            return;
         }
-        else
+
+        _isShowingSaveDialog = true;
+        try
         {
-            foreach (var item in TestItems)
+            UiState = TestUIState.PendingSave;
+
+            var finalResult = TestItems.All(i => i.Judgment == "OK") ? "OK" : "NG";
+
+            TotalCount++;
+            if (finalResult == "OK") PassCount++;
+            else FailCount++;
+
+            // ★ 使用当前 ModelName + SchemeName 精确匹配，不再取 allPlans.FirstOrDefault()
+            var machineType = string.IsNullOrWhiteSpace(ModelName) ? "Unknown" : ModelName;
+            var planName = string.IsNullOrWhiteSpace(SchemeName) ? "Unknown" : SchemeName;
+
+            var ngItems = TestItems.Where(i => i.Judgment == "NG").ToList();
+            var ngDetail = ngItems.Any()
+                ? string.Join("\n", ngItems.Select(i => $"  • {i.ItemName}: {i.CheckResult} → NG"))
+                : "无";
+
+            var confirmed = await _notificationService.ConfirmAsync(
+                $"当前方案 [{planName}] 所有项目已检测完毕\n\n" +
+                $"综合判定: [{finalResult}]\n\n" +
+                $"NG项目:\n{ngDetail}\n\n" +
+                $"是否保存本次检测记录？",
+                "检测完成");
+
+            if (confirmed)
             {
-                item.CheckResult = string.Empty;
-                item.Judgment = string.Empty;
+                await SaveLogToDatabaseAsync(machineType, planName, finalResult);
+                await _notificationService.ShowInfoAsync("检测记录已保存！", "保存成功");
+                ResetToReadyState();
             }
-            UiState = TestUIState.CanStart;
-            AddLog("📝 操作员取消保存，检测结果已清空，可重新测试");
+            else
+            {
+                foreach (var item in TestItems)
+                {
+                    item.CheckResult = string.Empty;
+                    item.Judgment = string.Empty;
+                }
+                UiState = TestUIState.CanStart;
+                AddLog("📝 操作员取消保存，检测结果已清空，可重新测试");
+            }
+        }
+        finally
+        {
+            _isShowingSaveDialog = false;
         }
     }
 
@@ -738,11 +760,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private void UpdateUiStateFromPlcInputs(PlcMachineInputs inputs)
     {
-        // 检测中或待保存状态不被打断
-        if (UiState == TestUIState.Testing || UiState == TestUIState.PendingSave)
-            return;
-
-        // 急停信号
+        // 急停信号（检测中也能触发）
         if (inputs.IsEmergencyStop)
         {
             if (UiState != TestUIState.EmergencyStop)
@@ -750,12 +768,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 UiState = TestUIState.EmergencyStop;
                 SensorStatusText = "急停中";
                 _logger.LogWarning("[PLC轮询] 检测到急停信号(DT123)");
-                _ = _notificationService.ShowWarningAsync("检测到急停信号！\n\n请先解除急停旋钮，关闭此弹窗后按下复位按钮，再按启动按钮。", "急停");
+                if (_inspectionEngine!.IsRunning)
+                    _inspectionEngine.Stop();
+                if (!_isShowingEmergencyDialog)
+                {
+                    _isShowingEmergencyDialog = true;
+                    _ = _notificationService.ShowWarningAsync("急停触发！请先点击复位，再开始检测。", "急停");
+                }
             }
             return;
         }
 
-        // 复位信号
+        // 复位信号（急停、停止、异常、检测完成等状态下均可触发）
         if (inputs.IsResetRequested)
         {
             UiState = TestUIState.Resetting;
@@ -768,15 +792,22 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _ = _plcDevice.RequestRelayDisconnectAsync(CancellationToken.None);
             // 清除复位请求
             _ = _plcDevice.ClearResetRequestAsync(CancellationToken.None);
+            // 清空测试项目表格的显示内容
+            foreach (var item in TestItems)
+            {
+                item.CheckResult = "未测试";
+                item.Judgment = string.Empty;
+            }
             // 复位状态
             _inspectionStarted = false;
             _startupCleared = false;
+            _isShowingEmergencyDialog = false;
             IsPlcStartRequested = false;
+            _inspectionEngine.ClearResetState();
             // 回到待机
             UiState = TestUIState.Ready;
             SensorStatusText = "待机中";
-            _inspectionEngine.ClearResetState();
-            AddLog("✅ 复位完成，等待下次启动");
+            AddLog("✅ 复位完成，已清空检测结果，等待下次启动");
             return;
         }
 
@@ -863,6 +894,127 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return $"设备未就绪：{string.Join(", ", notReady)}，无法启动";
         }
         return null;
+    }
+
+    /// <summary>
+    /// 临时 Fake 启动按钮：用于最小闭环调试。
+    /// 只负责复核界面上下文并调用 InspectionEngine，硬件流程仍由引擎负责。
+    /// </summary>
+    [RelayCommand]
+    private async Task StartFakeMinimalInspectionAsync()
+    {
+        if (_inspectionEngine == null)
+            return;
+
+        // 急停状态下禁止启动，必须复位后才能开始
+        if (UiState == TestUIState.EmergencyStop)
+        {
+            await _notificationService.ShowWarningAsync(
+                "急停状态中，请先点击复位后再启动检测。",
+                "启动拒绝");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(ModelName)
+            || string.IsNullOrWhiteSpace(SerialNumber)
+            || string.IsNullOrWhiteSpace(SchemeName)
+            || IsSchemeNameInvalid
+            || string.IsNullOrWhiteSpace(OperatorName))
+        {
+            await _notificationService.ShowWarningAsync(
+                "机种、序列号、方案、作业员必须完整后才能启动 Fake 检测。",
+                "Fake 启动拒绝");
+            return;
+        }
+
+        if (TestItems.Count == 0)
+            await LoadPlanItemsAsync();
+
+        if (TestItems.Count == 0)
+        {
+            await _notificationService.ShowWarningAsync("当前方案没有可检测项目。", "Fake 启动拒绝");
+            return;
+        }
+
+        _logger.LogWarning("[Fake最小闭环][审计] 操作员手动点击开始检测(Fake)");
+        AddLog("开始 Fake 最小闭环检测");
+
+        // 清除残留的 PLC 信号（模拟 PLC 启动时自动清零的行为）
+        if (_plcDevice is Devices.Fakes.FakeInspectionHardware fake)
+        {
+            await fake.WriteInputRegisterAsync(PlcAddressMap.StopSignal, 0);
+            await fake.WriteInputRegisterAsync(PlcAddressMap.EmergencyStopSignal, 0);
+            await fake.WriteInputRegisterAsync(PlcAddressMap.BoardRemovedAlarm, 0);
+            AddLog("⚠️ [Fake调试] 已清除 DT122/DT123/DT161 信号");
+        }
+
+        await RunInspectionAsync(SerialNumber, ModelName, OperatorName);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 临时异常信号触发按钮：仅 Fake 模式调试用。
+    // 通过 FakeInspectionHardware 直接写入 DT 寄存器，触发 PLC 信号中断路径。
+    // 接入真实 PLC 后删除这组命令和对应的 XAML 按钮。
+    // ═══════════════════════════════════════════════════════════════
+
+    [RelayCommand]
+    private async Task FakeTriggerStopAsync()
+    {
+        if (_plcDevice is not Devices.Fakes.FakeInspectionHardware fake)
+        {
+            AddLog("⚠️ 触发停止仅支持 Fake 模式");
+            return;
+        }
+
+        _inspectionEngine?.PauseWithCheckpoint();
+        await fake.WriteInputRegisterAsync(PlcAddressMap.StopSignal, 1);
+        AddLog("⚠️ [Fake调试] 已写入 DT122=1（停止信号）");
+        await _notificationService.ShowWarningAsync("已触发停止信号(DT122)，检测暂停，保留断点。", "Fake 触发");
+    }
+
+    [RelayCommand]
+    private async Task FakeTriggerResetAsync()
+    {
+        if (_plcDevice is not Devices.Fakes.FakeInspectionHardware fake)
+        {
+            AddLog("⚠️ 触发复位仅支持 Fake 模式");
+            return;
+        }
+
+        _inspectionEngine?.Stop();
+        await fake.WriteInputRegisterAsync(PlcAddressMap.ResetSignal, 1);
+        AddLog("⚠️ [Fake调试] 已写入 DT121=1（复位信号）");
+        await _notificationService.ShowWarningAsync("已触发复位信号(DT121)，检测中止，清空所有结果。", "Fake 触发");
+    }
+
+    [RelayCommand]
+    private async Task FakeTriggerEmergencyStopAsync()
+    {
+        if (_plcDevice is not Devices.Fakes.FakeInspectionHardware fake)
+        {
+            AddLog("⚠️ 触发急停仅支持 Fake 模式");
+            return;
+        }
+
+        _inspectionEngine?.Stop();
+        await fake.WriteInputRegisterAsync(PlcAddressMap.EmergencyStopSignal, 1);
+        AddLog("⚠️ [Fake调试] 已写入 DT123=1（急停信号）");
+        await _notificationService.ShowWarningAsync("已触发急停信号(DT123)，检测中止，必须复位后再启动。", "Fake 触发");
+    }
+
+    [RelayCommand]
+    private async Task FakeTriggerBoardLeaveAsync()
+    {
+        if (_plcDevice is not Devices.Fakes.FakeInspectionHardware fake)
+        {
+            AddLog("⚠️ 触发板离设备仅支持 Fake 模式");
+            return;
+        }
+
+        _inspectionEngine?.Stop();
+        await fake.WriteInputRegisterAsync(PlcAddressMap.BoardRemovedAlarm, 1);
+        AddLog("⚠️ [Fake调试] 已写入 DT161=1（板离报警）");
+        await _notificationService.ShowWarningAsync("已触发板离报警(DT161)，检测中止。", "Fake 触发");
     }
 
     /// <summary>
@@ -1052,8 +1204,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private void OnInspectionCompleted(object? sender, InspectionCompletedEventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(async () =>
+        Application.Current.Dispatcher.InvokeAsync(async () =>
         {
+            if (e.Result.IsAborted)
+            {
+                AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
+                return;
+            }
+
             var msg = e.Result.IsAllPassed
                 ? $"✅ 检测完成: 良品 (耗时{e.Result.Duration.TotalSeconds:F1}s)"
                 : $"❌ 检测完成: 不良 (耗时{e.Result.Duration.TotalSeconds:F1}s)";

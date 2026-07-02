@@ -389,6 +389,36 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
+        /// 初始化为 2 线电阻测量模式。最小闭环阶段统一由上位机按电阻值判定 OPEN/SHORT/范围。
+        /// </summary>
+        public async Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
+                await SendCommandAsync("CONF:RES", ct).ConfigureAwait(false);
+                await SendCommandAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
+                await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+                await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+                await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "初始化万用表电阻模式失败");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 读取 GDM-9060 READ? 原始返回文本，不在驱动层做 OPEN/SHORT/范围判定。
+        /// </summary>
+        public async Task<string> ReadResistanceRawAsync(CancellationToken ct = default)
+        {
+            return await SendCommandAsync("READ?", ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// 执行单次测量并返回结果
         /// </summary>
         public async Task<MeasurementResult> MeasureAsync(CancellationToken ct = default)

@@ -1,6 +1,7 @@
 ﻿using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Logging;
 using GMandE7BUSBPoorSolderingInspectionDevice.Data;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Plc;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
@@ -31,6 +32,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
     /// </summary>
     public class Program
     {
+        // 临时开关：用于最小检测闭环阶段。
+        // true 使用 Fake PLC 和 Fake 万用表；接入真实设备后改为 false 或删除该开关。
+        private static readonly bool UseFakeInspectionHardware = true;
+
         /// <summary>
         /// 应用程序的主入口点。
         /// </summary>
@@ -225,15 +230,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // ⭐ 新增：Fp0hPlcDevice 作为 IPlcDevice 的新实现
             services.AddSingleton<Fp0hPlcDevice>();
-            services.AddSingleton<IPlcDevice>(sp =>
-                sp.GetRequiredService<Fp0hPlcDevice>());
-            // 旧 PlcCommunicationAdapter 注册已移除，由 Fp0hPlcDevice 替代
 
             // 2. 固纬 GDM-9060 万用表驱动
             services.AddSingleton<GwInstekGDM9060Driver>();
-            // ⭐ 注册为 IMultimeterDevice（不冲突，因为接口不同）
-            services.AddSingleton<IMultimeterDevice>(sp =>
-                sp.GetRequiredService<GwInstekGDM9060Driver>());
+
+            if (UseFakeInspectionHardware)
+            {
+                services.AddSingleton<FakeInspectionHardware>();
+                services.AddSingleton<IPlcDevice>(sp => sp.GetRequiredService<FakeInspectionHardware>());
+                services.AddSingleton<IMultimeterDevice>(sp => sp.GetRequiredService<FakeInspectionHardware>());
+            }
+            else
+            {
+                services.AddSingleton<IPlcDevice>(sp => sp.GetRequiredService<Fp0hPlcDevice>());
+                services.AddSingleton<IMultimeterDevice>(sp => sp.GetRequiredService<GwInstekGDM9060Driver>());
+            }
 
             // 3. 霍尼韦尔 H1900 扫描枪驱动
             services.AddSingleton<HoneywellH1900Scanner>();

@@ -151,7 +151,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
 
     /// <summary>
     /// 引脚极性常量。
-    /// 方案编辑页使用中文值保存，PLC 编码规则为：正极=1、负极=0。
+    /// 方案编辑页使用中文值保存，PLC 编码规则为：正极=0、负极=1。
     /// </summary>
     public static class PinPolarityConstants
     {
@@ -166,7 +166,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         /// </summary>
         public static ushort ToPlcCode(string? polarity)
         {
-            return polarity == Positive ? (ushort)1 : (ushort)0;
+            return polarity == Negative ? (ushort)1 : (ushort)0;
         }
 
         /// <summary>

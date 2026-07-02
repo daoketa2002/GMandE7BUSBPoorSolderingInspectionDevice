@@ -10,6 +10,17 @@
 		<!-- 指定自定义入口点 -->
 		<StartupObject>GMandE7BUSBPoorSolderingInspectionDevice.Program</StartupObject>
 		<UseWindowsForms>False</UseWindowsForms>
+
+		<!-- ↓ 逐个禁用SDK自动生成的Assembly特性，避免与WPF _wpftmp临时项目冲突(CS0579) -->
+		<GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+		<GenerateAssemblyCompanyAttribute>false</GenerateAssemblyCompanyAttribute>
+		<GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+		<GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
+		<GenerateAssemblyInformationalVersionAttribute>false</GenerateAssemblyInformationalVersionAttribute>
+		<GenerateAssemblyProductAttribute>false</GenerateAssemblyProductAttribute>
+		<GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
+		<GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
+		<GenerateTargetPlatformAttribute>false</GenerateTargetPlatformAttribute>
 	</PropertyGroup>
 
 	<ItemGroup>

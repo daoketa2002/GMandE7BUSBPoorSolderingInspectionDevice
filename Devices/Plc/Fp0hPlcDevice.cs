@@ -236,6 +236,55 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 写入当前测试点的左右引脚编号和极性到 DT130~DT133。
+    /// 真实 PLC 模式下只写 PC 可写寄存器，不写 DT160/DT161。
+    /// </summary>
+    public async Task<PlcOperationResult> WriteCurrentTestPointAsync(
+        ushort leftPinCode,
+        ushort rightPinCode,
+        ushort leftPolarityCode,
+        ushort rightPolarityCode,
+        CancellationToken ct = default)
+    {
+        if (!_addressMap.LeftPinCodeRegister.HasValue
+            || !_addressMap.RightPinCodeRegister.HasValue
+            || !_addressMap.LeftPinPolarityRegister.HasValue
+            || !_addressMap.RightPinPolarityRegister.HasValue)
+        {
+            return PlcOperationResult.Failure("当前测试点寄存器 DT130~DT133 未完整配置，禁止写入 PLC");
+        }
+
+        _logger.LogWarning(
+            "[PLC动作][审计] 写入测试点 DT130~DT133: Left={LeftCode}, Right={RightCode}, LeftPolarity={LeftPolarity}, RightPolarity={RightPolarity}",
+            leftPinCode, rightPinCode, leftPolarityCode, rightPolarityCode);
+
+        try
+        {
+            var response = await _modbusClient.WriteMultipleRegistersAsync(
+                DefaultUnitId,
+                _addressMap.LeftPinCodeRegister.Value,
+                new[] { leftPinCode, rightPinCode, leftPolarityCode, rightPolarityCode },
+                ct).ConfigureAwait(false);
+
+            if (response is null)
+                return PlcOperationResult.Failure("写入测试点 DT130~DT133 失败：无响应");
+            if (response.IsError)
+                return PlcOperationResult.Failure($"写入测试点 DT130~DT133 失败：Modbus错误码 {response.ErrorCode}", response);
+
+            return PlcOperationResult.Success("测试点 DT130~DT133 已写入", response);
+        }
+        catch (OperationCanceledException)
+        {
+            return PlcOperationResult.Failure("写入测试点 DT130~DT133 被取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PLC动作] 写入测试点 DT130~DT133 异常");
+            return PlcOperationResult.Failure($"写入测试点 DT130~DT133 异常：{ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// 等待 PLC 继电器切换完成。
     /// 轮询 RelaySwitchCompletedRegister 寄存器的值，直到不为 0 或超时。
     /// 轮询间隔 20ms，避免高频刷屏。

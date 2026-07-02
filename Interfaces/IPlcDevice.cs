@@ -49,6 +49,17 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> WriteCurrentTestPinsAsync(ushort leftPinCode, ushort rightPinCode, CancellationToken ct = default);
 
     /// <summary>
+    /// 写入当前测试点的左右引脚编号和左右极性到 DT130~DT133。
+    /// 极性编码按最小闭环规则：正极=0，负极=1。
+    /// </summary>
+    Task<PlcOperationResult> WriteCurrentTestPointAsync(
+        ushort leftPinCode,
+        ushort rightPinCode,
+        ushort leftPolarityCode,
+        ushort rightPolarityCode,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// 等待 PLC 继电器切换完成。
     /// 通过轮询 RelaySwitchCompletedRegister 判断继电器是否闭合到位。
     /// 超时未完成返回失败。
