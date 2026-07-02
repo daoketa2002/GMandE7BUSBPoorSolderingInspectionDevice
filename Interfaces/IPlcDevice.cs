@@ -24,7 +24,7 @@ public interface IPlcDevice : ICommunicationDevice
 
     /// <summary>
     /// 读取 PLC 机器输入信号快照。
-    /// 一次性读出 DT120/121/122/123/161 等信号，组装为 PlcMachineInputs。
+    /// 一次性读出 DT120/121/122/123/302/303 等信号，组装为 PlcMachineInputs。
     /// 取代逐信号读取，减少 Modbus 通信次数。
     /// </summary>
     Task<PlcOperationResult<PlcMachineInputs>> ReadMachineInputsAsync(CancellationToken ct = default);
@@ -37,37 +37,42 @@ public interface IPlcDevice : ICommunicationDevice
 
     /// <summary>
     /// 清除 PLC 复位请求（写 DT121 = 0）。
-    /// PC 在完成复位处理后调用（已写 DT160=1 通知断开引脚输出后）。
+    /// PC 在完成复位处理后调用。
     /// </summary>
     Task<PlcOperationResult> ClearResetRequestAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// 写入当前测试点的左右引脚编号到 PLC。
-    /// PLC 收到编号后控制对应继电器闭合引脚回路。
-    /// leftPinCode / rightPinCode 编码规则：A{n}=n, B{n}=20+n
-    /// </summary>
-    Task<PlcOperationResult> WriteCurrentTestPinsAsync(ushort leftPinCode, ushort rightPinCode, CancellationToken ct = default);
-
-    /// <summary>
-    /// 写入当前测试点的左右引脚编号和左右极性到 DT130~DT133。
-    /// 极性编码按最小闭环规则：正极=0，负极=1。
+    /// 写入当前测试点的两个引脚到 PLC（最新地址表：DT130~DT185 每脚独立选择区）。
+    /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。
+    /// 极性编码：正极=0，负极=1。
     /// </summary>
     Task<PlcOperationResult> WriteCurrentTestPointAsync(
-        ushort leftPinCode,
-        ushort rightPinCode,
+        string leftPinName,
+        string rightPinName,
         ushort leftPolarityCode,
         ushort rightPolarityCode,
         CancellationToken ct = default);
 
     /// <summary>
-    /// 等待 PLC 继电器切换完成。
-    /// 通过轮询 RelaySwitchCompletedRegister 判断继电器是否闭合到位。
+    /// 等待 PLC 继电器切换完成（读 DT302=1）。
     /// 超时未完成返回失败。
     /// </summary>
     Task<PlcOperationResult> WaitRelaySwitchCompletedAsync(TimeSpan timeout, CancellationToken ct = default);
 
     /// <summary>
-    /// 写入单点检测结果到 PLC。
+    /// 写入上位机允许开始检测信号（写 DT234 = 1）。
+    /// 启动前检查通过后调用。
+    /// </summary>
+    Task<PlcOperationResult> WritePcReadyAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 清除上位机允许开始检测信号（写 DT234 = 0）。
+    /// 检测结束或复位时调用。
+    /// </summary>
+    Task<PlcOperationResult> ClearPcReadyAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 写入单点检测结果到 PLC（PointResultBaseRegister + pointIndex）。
     /// pointIndex: 项目索引（0-based）
     /// isOk: true=OK, false=NG
     /// </summary>
@@ -75,21 +80,33 @@ public interface IPlcDevice : ICommunicationDevice
 
     /// <summary>
     /// 写入综合检测结果到 PLC。
-    /// isOk: true=所有项目OK, false=存在NG
-    /// ngPointIndex: 第一个NG项目的索引（isOk=false时有效），null 表示无NG
+    /// 写 DT304/DT305：全部 OK → DT304=1, DT305=0；存在 NG → DT304=0, DT305=1
     /// </summary>
     Task<PlcOperationResult> WriteFinalResultAsync(bool isOk, int? ngPointIndex, CancellationToken ct = default);
 
     /// <summary>
-    /// 通知 PLC 断开引脚输出（写 DT160 = 1）。
-    /// 测试完成、检测中止或复位时调用。
-    /// PLC 收到后负责断开当前继电器并复位 DT160。
+    /// 清空引脚输出寄存器（清 DT130~DT185 全部为 0）。
+    /// 单项完成、复位、急停、异常中止后调用。
+    /// </summary>
+    Task<PlcOperationResult> ClearPinOutputsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 通知 PLC 断开引脚输出（写 DT160 = 1 — 旧地址表语义）。
+    /// 已废弃，新流程使用 ClearPinOutputsAsync 清寄存器。
+    /// PLC 端收到 DT160=1 负责断开继电器并复位 DT160。
     /// </summary>
     Task<PlcOperationResult> RequestRelayDisconnectAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 清空报警解除信号（写 DT303 = 0）。
+    /// 用户点击急停弹窗"解除"按钮后调用。
+    /// 只清 DT303，不清 DT123。
+    /// </summary>
+    Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 向上位机异常状态写入 PLC。
-    /// 通信失败、板离设备报警、万用表无响应等异常时调用。
+    /// 通信失败、万用表无响应等异常时调用。
     /// </summary>
     Task<PlcOperationResult> WritePcErrorAsync(CancellationToken ct = default);
 

@@ -9,8 +9,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
 //
 // 目的：
 // 1. 在没有稳定 PLC / 万用表接入时，先跑通 InspectionEngine 主流程。
-// 2. 模拟 PLC DT 地址读写、DT160 引脚闭合完成、DT161 板离设备报警。
+// 2. 模拟 PLC DT 地址读写、DT130~DT185 引脚选择区、DT302 引脚继电器动作完成。
 // 3. 模拟 GDM-9060 READ? 返回值，包括数值、OPEN、SHORT。
+//
+// 最新地址表说明：
+// - DT130~DT185 为每引脚独立选择区，不再使用 DT130~DT133 通用左右脚模型。
+// - DT160/DT161 现在是 A12 引脚的 Select/Polarity 地址，不再是流程信号。
+// - DT302 替代旧 DT160 作为继电器动作完成信号。
 //
 // 后续接入真实设备后：
 // 1. 在 Program.cs 中关闭 UseFakeInspectionHardware。
@@ -38,8 +43,8 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
 
     /// <summary>
     /// 写入特定的输入信号寄存器值（仅 Fake 模式调试用）。
-    /// 用于模拟 PLC 写入 DT121/DT122/DT123/DT161 等信号，
-    /// 方便在 UI 上触发停止/复位/急停/板离等异常路径验证。
+    /// 用于模拟 PLC 写入 DT121/DT122/DT123 等信号，
+    /// 方便在 UI 上触发停止/复位/急停等异常路径验证。
     /// 接入真实 PLC 后删除该方法。
     /// </summary>
     public Task WriteInputRegisterAsync(ushort address, ushort value, CancellationToken ct = default)
@@ -80,8 +85,11 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
                 IsResetRequested = ReadRegister(PlcAddressMap.ResetSignal) == 1,
                 IsStopRequested = ReadRegister(PlcAddressMap.StopSignal) == 1,
                 IsEmergencyStop = ReadRegister(PlcAddressMap.EmergencyStopSignal) == 1,
-                IsBoardLeavingAlarm = ReadRegister(PlcAddressMap.BoardRemovedAlarm) == 1,
-                IsRelaySwitchCompleted = ReadRegister(PlcAddressMap.RelayClosedCompleted) == 1
+                // DT302 替代旧 DT160 作为继电器动作完成信号
+                IsRelayActionCompleted = ReadRegister(PlcAddressMap.RelayActionCompleted) == 1,
+                // DT303 报警解除
+                IsAlarmReleased = ReadRegister(PlcAddressMap.AlarmReleased) == 1,
+                HasAlarm = false
             };
 
             return Task.FromResult(PlcOperationResult<PlcMachineInputs>.Success(inputs, "Fake PLC 输入读取成功"));
@@ -100,55 +108,100 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT121 已清除"));
     }
 
-    public Task<PlcOperationResult> WriteCurrentTestPinsAsync(ushort leftPinCode, ushort rightPinCode, CancellationToken ct = default)
-    {
-        return WriteCurrentTestPointAsync(leftPinCode, rightPinCode, 0, 1, ct);
-    }
-
+    /// <summary>
+    /// 写入当前测试点的两个引脚到 Fake PLC（最新地址表：每引脚独立选择区）。
+    /// 模拟写入引脚选择区，200ms 后置 DT302=1 表示继电器动作完成。
+    /// </summary>
     public async Task<PlcOperationResult> WriteCurrentTestPointAsync(
-        ushort leftPinCode,
-        ushort rightPinCode,
+        string leftPinName,
+        string rightPinName,
         ushort leftPolarityCode,
         ushort rightPolarityCode,
         CancellationToken ct = default)
     {
+        // 查找左右引脚的 Select/Polarity 地址
+        var (leftSelectAddr, leftPolarAddr) = PlcAddressMap.GetPinAddresses(leftPinName);
+        var (rightSelectAddr, rightPolarAddr) = PlcAddressMap.GetPinAddresses(rightPinName);
+
+        bool isClearAll = string.IsNullOrWhiteSpace(leftPinName) && string.IsNullOrWhiteSpace(rightPinName);
+
         lock (_syncRoot)
         {
-            _registers[PlcAddressMap.LeftPinNumber] = leftPinCode;
-            _registers[PlcAddressMap.RightPinNumber] = rightPinCode;
-            _registers[PlcAddressMap.LeftPinPolarity] = leftPolarityCode;
-            _registers[PlcAddressMap.RightPinPolarity] = rightPolarityCode;
-            _registers[PlcAddressMap.RelayClosedCompleted] = 0;
+            if (isClearAll)
+            {
+                // 清空所有引脚输出区的标记（调用方后续会调 ClearPinOutputsAsync 真清空）
+                _registers[leftSelectAddr] = 0;
+                _registers[leftPolarAddr] = 0;
+                _registers[rightSelectAddr] = 0;
+                _registers[rightPolarAddr] = 0;
+            }
+            else
+            {
+                // 写入左引脚 Select=1, Polarity=值
+                _registers[leftSelectAddr] = 1;
+                _registers[leftPolarAddr] = leftPolarityCode;
+                // 写入右引脚 Select=1, Polarity=值
+                _registers[rightSelectAddr] = 1;
+                _registers[rightPolarAddr] = rightPolarityCode;
+            }
+
+            // 清除之前的 DT302 状态，模拟 PLC 清 0
+            _registers[PlcAddressMap.RelayActionCompleted] = 0;
         }
 
-        if (leftPinCode == 0 && rightPinCode == 0 && leftPolarityCode == 0 && rightPolarityCode == 0)
+        if (isClearAll)
         {
-            _logger.LogWarning("[Fake硬件][审计] 清空 DT130~DT133，Fake 内部清 DT160");
-            return PlcOperationResult.Success("Fake DT130~DT133 已清空");
+            _logger.LogWarning("[Fake硬件][审计] 清空引脚选择区（内部清 DT302）");
+            return PlcOperationResult.Success("Fake 引脚选择区已清空");
         }
 
         _logger.LogWarning(
-            "[Fake硬件][审计] 写入 DT130~DT133: {Left}, {Right}, {LeftPolarity}, {RightPolarity}",
-            leftPinCode, rightPinCode, leftPolarityCode, rightPolarityCode);
+            "[Fake硬件][审计] 写入引脚选择区: {LeftPin}(DT{LeftSel}=1,DT{LeftPol}={LeftPolVal}), {RightPin}(DT{RightSel}=1,DT{RightPol}={RightPolVal})",
+            leftPinName, leftSelectAddr, leftPolarAddr, leftPolarityCode,
+            rightPinName, rightSelectAddr, rightPolarAddr, rightPolarityCode);
 
+        // 模拟 PLC 引脚继电器动作延时
         await Task.Delay(200, ct).ConfigureAwait(false);
-        WriteRegister(PlcAddressMap.RelayClosedCompleted, 1);
-        return PlcOperationResult.Success("Fake 测试点已写入，DT160 已置 1");
+        WriteRegister(PlcAddressMap.RelayActionCompleted, 1);
+        return PlcOperationResult.Success($"Fake 测试点已写入，DT302 已置 1");
     }
 
+    /// <summary>
+    /// 等待继电器动作完成（轮询 DT302=1）。
+    /// </summary>
     public async Task<PlcOperationResult> WaitRelaySwitchCompletedAsync(TimeSpan timeout, CancellationToken ct = default)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
-            if (ReadRegister(PlcAddressMap.RelayClosedCompleted) == 1)
-                return PlcOperationResult.Success("Fake DT160=1");
+            if (ReadRegister(PlcAddressMap.RelayActionCompleted) == 1)
+                return PlcOperationResult.Success("Fake DT302=1");
 
             await Task.Delay(50, ct).ConfigureAwait(false);
         }
 
-        return PlcOperationResult.Failure("Fake 等待 DT160=1 超时");
+        return PlcOperationResult.Failure("Fake 等待 DT302=1 超时");
+    }
+
+    /// <summary>
+    /// 写入上位机允许开始检测信号（写 DT234 = 1）。
+    /// </summary>
+    public Task<PlcOperationResult> WritePcReadyAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.PcReadyToStart, 1);
+        _logger.LogWarning("[Fake硬件][审计] PC 允许开始检测 → DT234=1");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT234=1"));
+    }
+
+    /// <summary>
+    /// 清除上位机允许开始检测信号（写 DT234 = 0）。
+    /// </summary>
+    public Task<PlcOperationResult> ClearPcReadyAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.PcReadyToStart, 0);
+        _logger.LogWarning("[Fake硬件][审计] PC 清除允许开始 → DT234=0");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT234=0"));
     }
 
     public Task<PlcOperationResult> WritePointResultAsync(int pointIndex, bool isOk, CancellationToken ct = default)
@@ -159,23 +212,50 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
 
     public Task<PlcOperationResult> WriteFinalResultAsync(bool isOk, int? ngPointIndex, CancellationToken ct = default)
     {
-        _logger.LogWarning("[Fake硬件][审计] 综合结果 IsOk={IsOk}, NgPointIndex={NgPointIndex}", isOk, ngPointIndex);
+        lock (_syncRoot)
+        {
+            // 写 DT304/DT305
+            _registers[PlcAddressMap.ProductOk] = isOk ? (ushort)1 : (ushort)0;
+            _registers[PlcAddressMap.ProductNg] = isOk ? (ushort)0 : (ushort)1;
+        }
+
+        _logger.LogWarning("[Fake硬件][审计] 综合结果 DT304/DT305: IsOk={IsOk}, NgPointIndex={NgPointIndex}", isOk, ngPointIndex);
         return Task.FromResult(PlcOperationResult.Success("Fake 综合结果已记录"));
     }
 
-    public Task<PlcOperationResult> RequestRelayDisconnectAsync(CancellationToken ct = default)
+    /// <summary>
+    /// 清空引脚输出寄存器（清 DT130~DT185 全部为 0）。
+    /// </summary>
+    public Task<PlcOperationResult> ClearPinOutputsAsync(CancellationToken ct = default)
     {
         lock (_syncRoot)
         {
-            _registers[PlcAddressMap.LeftPinNumber] = 0;
-            _registers[PlcAddressMap.RightPinNumber] = 0;
-            _registers[PlcAddressMap.LeftPinPolarity] = 0;
-            _registers[PlcAddressMap.RightPinPolarity] = 0;
-            _registers[PlcAddressMap.RelayClosedCompleted] = 0;
-            _registers[PlcAddressMap.BoardRemovedAlarm] = 0;
+            for (ushort addr = PlcAddressMap.PinOutputStart; addr <= PlcAddressMap.PinOutputEnd; addr++)
+            {
+                _registers[addr] = 0;
+            }
         }
 
-        _logger.LogWarning("[Fake硬件][审计] 已清空 DT130~DT133，并由 Fake 内部清 DT160/DT161");
+        _logger.LogWarning("[Fake硬件][审计] 已清空 DT130~DT185");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT130~DT185 已清空"));
+    }
+
+    /// <summary>
+    /// 通知 PLC 断开引脚输出（旧语义，新流程使用 ClearPinOutputsAsync）。
+    /// </summary>
+    [Obsolete("请使用 ClearPinOutputsAsync 替代")]
+    public Task<PlcOperationResult> RequestRelayDisconnectAsync(CancellationToken ct = default)
+    {
+        // 兼容：调用 ClearPinOutputsAsync 内部逻辑
+        lock (_syncRoot)
+        {
+            for (ushort addr = PlcAddressMap.PinOutputStart; addr <= PlcAddressMap.PinOutputEnd; addr++)
+            {
+                _registers[addr] = 0;
+            }
+        }
+
+        _logger.LogWarning("[Fake硬件][审计] 已清空 DT130~DT185（通过旧 RequestRelayDisconnectAsync）");
         return Task.FromResult(PlcOperationResult.Success("Fake 引脚输出已断开"));
     }
 
@@ -183,6 +263,13 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     {
         _logger.LogWarning("[Fake硬件][审计] PC 异常已写入 Fake PLC");
         return Task.FromResult(PlcOperationResult.Success("Fake PC 异常已记录"));
+    }
+
+    public Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.AlarmReleased, 0);
+        _logger.LogWarning("[Fake硬件][审计] PC 清除 DT303 报警解除信号");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT303=0"));
     }
 
     public Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
@@ -203,6 +290,8 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         _logger.LogWarning("[Fake硬件][审计] Fake GDM-9060 READ? RawText={RawText}", raw);
         return Task.FromResult(raw);
     }
+
+    // ── 旧接口兼容实现 ──
 
     public Task<PlcOperationResult> ReadStartSignalAsync(CancellationToken ct = default)
         => Task.FromResult(ReadRegister(PlcAddressMap.StartSignal) == 1

@@ -707,13 +707,6 @@
                                             Background="#E74C3C"
                                             ToolTip="写入 DT123=1，模拟 PLC 急停信号"/>
                                 </UniformGrid>
-
-                                <!-- 第3行：板离(DT161) 独占一行 -->
-                                <Button Grid.Row="2" Content="板离(DT161)"
-                                        Command="{Binding FakeTriggerBoardLeaveCommand}"
-                                        Style="{StaticResource DebugButtonStyle}"
-                                        Background="#95A5A6"
-                                        ToolTip="写入 DT161=1，模拟 PLC 板离设备报警"/>
                             </Grid>
                         </Border>
                     </Expander>

@@ -1,0 +1,126 @@
+<!-- 急停锁定弹窗。模态显示，禁止关闭按钮/Esc/Alt+F4。
+     只能通过 DT303=1 后点击"解除"按钮关闭。
+     配色：浅灰工业风背景 + 白色卡片 + 红色警示，与主界面风格一致。 -->
+<Window x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.EmergencyStopDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
+        mc:Ignorable="d"
+        Title="急停中"
+        Width="440"
+        Height="Auto"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Background="#F0F2F5"
+        FontFamily="Microsoft YaHei"
+        PreviewKeyDown="OnPreviewKeyDown"
+        d:DataContext="{d:DesignInstance vm:EmergencyStopDialogViewModel}">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
+
+    <!-- 外层浅灰背景 -->
+    <Border Background="#F0F2F5" Padding="16">
+        <!-- 白色内容卡片 -->
+        <Border Background="#FFFFFF" BorderBrush="#DDE2E8" BorderThickness="1" CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- ══════ 标题区：浅红背景 ══════ -->
+                <Border Grid.Row="0" Background="#FDEDEC" CornerRadius="8,8,0,0" Padding="16,12">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <TextBlock Text="⛔" FontSize="22" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="急停中" Foreground="#C0392B" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ══════ 内容区 ══════ -->
+                <StackPanel Grid.Row="1" Margin="20,16,20,8">
+                    <!-- 状态说明 -->
+                    <TextBlock Text="设备已进入急停状态，请先在 PLC/设备侧解除报警。"
+                               Foreground="#2C3E50" FontSize="13"
+                               TextWrapping="Wrap" TextAlignment="Center"
+                               Margin="0,0,0,16"/>
+
+                    <!-- DT303 状态指示 -->
+                    <Border x:Name="Dt303StatusBorder" CornerRadius="6" Padding="12,8" BorderThickness="1"
+                            Background="#FFF4E5" BorderBrush="#F5C26B">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAlarmReleased}" Value="True">
+                                        <Setter Property="Background" Value="#EAF7EF"/>
+                                        <Setter Property="BorderBrush" Value="#58D68D"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="{Binding StatusText}" FontSize="13" TextAlignment="Center">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="#8A5A00"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsAlarmReleased}" Value="True">
+                                            <Setter Property="Foreground" Value="#1E8449"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Border>
+                </StackPanel>
+
+                <!-- ══════ 按钮区 ══════ -->
+                <StackPanel Grid.Row="2" HorizontalAlignment="Center" Margin="20,12,20,20">
+                    <!-- Fake 调试按钮：模拟 DT303=1 -->
+                    <Button Content="模拟 DT303=1（Fake调试）"
+                            Command="{Binding FakeTriggerAlarmReleaseCommand}"
+                            Visibility="{Binding IsFakeModeVisible, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Background="#8E44AD"
+                            Foreground="White"
+                            Padding="16,6"
+                            Margin="0,0,0,10"
+                            FontSize="13"
+                            Height="36"
+                            Cursor="Hand"/>
+
+                    <!-- 解除按钮 -->
+                    <Button Content="解除"
+                            Command="{Binding ReleaseCommand}"
+                            IsEnabled="{Binding IsAlarmReleased}"
+                            FontSize="15"
+                            FontWeight="Bold"
+                            Padding="40,8"
+                            Width="200"
+                            Height="38"
+                            Cursor="Hand"
+                            BorderThickness="0">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Background" Value="#D5D8DC"/>
+                                <Setter Property="Foreground" Value="#7F8C8D"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsEnabled" Value="True">
+                                        <Setter Property="Background" Value="#E74C3C"/>
+                                        <Setter Property="Foreground" Value="White"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Border>
+</Window>

@@ -11,7 +11,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services;
 
 /// <summary>
 /// GM/E78 USB 焊接不良检查流程引擎。
-/// 负责最小闭环：写 PLC 点位、等待 DT160、读取万用表、判定、维护内存断点。
+/// 负责最小闭环：写 PLC 每脚独立选择区 DT130~DT185、等待 DT302、读取万用表、判定、维护内存断点。
 /// </summary>
 public partial class InspectionEngine : IAsyncDisposable, IDisposable
 {
@@ -95,6 +95,9 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                 await InitializeInspectionAsync(_inspectionCts.Token).ConfigureAwait(false);
 
+                // 启动检查通过后，上位机写 DT234=1 通知 PLC 可以开始检测
+                await _plcDevice.WritePcReadyAsync(_inspectionCts.Token).ConfigureAwait(false);
+
                 int passCount = _checkpoint.FinishedResults.Count(r => r.Result == "OK");
                 int failCount = _checkpoint.FinishedResults.Count(r => r.Result == "NG");
                 int firstNgIndex = _checkpoint.FinishedResults.FindIndex(r => r.Result == "NG");
@@ -123,8 +126,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     UpdateCheckpoint(i, "WritePinsToPlc");
                     var writeResult = await _plcDevice.WriteCurrentTestPointAsync(
-                        testPoint.PinLeftCode,
-                        testPoint.PinRightCode,
+                        testPoint.PinLeft,
+                        testPoint.PinRight,
                         testPoint.PinLeftPolarityCode,
                         testPoint.PinRightPolarityCode,
                         _inspectionCts.Token).ConfigureAwait(false);
@@ -144,11 +147,11 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
                         _inspectionCts.Token).ConfigureAwait(false);
                     relaySw.Stop();
-                    LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT160", relaySw.ElapsedMilliseconds);
+                    LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT302", relaySw.ElapsedMilliseconds);
 
                     if (!relayResult.IsSuccess)
                     {
-                        await AbortCurrentRunAsync(result, "等待 DT160 = 1 超时", InspectionState.Aborted).ConfigureAwait(false);
+                        await AbortCurrentRunAsync(result, "等待 DT302 = 1 超时", InspectionState.Aborted).ConfigureAwait(false);
                         return result;
                     }
 
@@ -223,6 +226,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     firstNgIndex >= 0 ? firstNgIndex : null,
                     _inspectionCts.Token).ConfigureAwait(false);
 
+                // 通知 PLC 上位机检测结束，清 DT234
+                await _plcDevice.ClearPcReadyAsync(_inspectionCts.Token).ConfigureAwait(false);
                 await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
                 totalSw.Stop();
                 LogBeat(inspectionId, "单件总耗时", totalSw.ElapsedMilliseconds);
@@ -232,6 +237,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             catch (OperationCanceledException)
             {
                 await ClearWritablePlcOutputsSafelyAsync().ConfigureAwait(false);
+                await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
                 SetState(InspectionState.Aborted);
                 result.IsAborted = true;
                 result.ErrorMessage = "检测被取消";
@@ -308,8 +314,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         Continue,
         Stop,
         Reset,
-        EmergencyStop,
-        BoardLeaving
+        EmergencyStop
     }
 
     private async Task<PlcInterruptAction> CheckPlcInterruptsAsync(CancellationToken ct)
@@ -319,7 +324,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             return PlcInterruptAction.Continue;
 
         PlcMachineInputs inputs = result.Value;
-        if (inputs.IsBoardLeavingAlarm) return PlcInterruptAction.BoardLeaving;
         if (inputs.IsEmergencyStop) return PlcInterruptAction.EmergencyStop;
         if (inputs.IsResetRequested) return PlcInterruptAction.Reset;
         if (inputs.IsStopRequested) return PlcInterruptAction.Stop;
@@ -345,7 +349,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 SetState(InspectionState.ResetRequested);
                 _checkpoint.ResetProgress();
                 await ClearWritablePlcOutputsAsync(ct).ConfigureAwait(false);
-                await _plcDevice.ClearResetRequestAsync(CancellationToken.None).ConfigureAwait(false);
+                // DT121 由 TestPageViewModel 在界面结果、内部状态和 PLC 输出全部清理完成后统一清零。
+                // 引擎只负责中止当前检测，避免先清 DT121 导致运行界面轮询错过复位信号。
                 _checkpoint.LastErrorMessage = "复位触发，检测中止";
                 return false;
 
@@ -353,13 +358,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 SetState(InspectionState.PausedByEmergencyStop);
                 _checkpoint.HasBreakpoint = false;
                 _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
-                await ClearWritablePlcOutputsAsync(ct).ConfigureAwait(false);
-                return false;
-
-            case PlcInterruptAction.BoardLeaving:
-                SetState(InspectionState.Aborted);
-                _checkpoint.HasBreakpoint = false;
-                _checkpoint.LastErrorMessage = "测试过程中板离设备";
                 await ClearWritablePlcOutputsAsync(ct).ConfigureAwait(false);
                 return false;
 
@@ -438,14 +436,15 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         result.ErrorMessage = message;
         result.EndTime = DateTime.Now;
         await ClearWritablePlcOutputsSafelyAsync().ConfigureAwait(false);
+        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
         await _plcDevice.WritePcErrorAsync(CancellationToken.None).ConfigureAwait(false);
         SetState(state);
     }
 
     private async Task ClearWritablePlcOutputsAsync(CancellationToken ct)
     {
-        await _plcDevice.WriteCurrentTestPointAsync(0, 0, 0, 0, ct).ConfigureAwait(false);
-        LogInfo("已清空 DT130~DT133");
+        await _plcDevice.ClearPinOutputsAsync(ct).ConfigureAwait(false);
+        LogInfo("已清空 DT130~DT185");
     }
 
     private async Task ClearWritablePlcOutputsSafelyAsync()
@@ -456,7 +455,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[检测流程] 清空 DT130~DT133 失败");
+            _logger.LogWarning(ex, "[检测流程] 清空 DT130~DT185 失败");
         }
     }
 
