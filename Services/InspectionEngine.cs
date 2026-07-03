@@ -119,6 +119,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                             result.IsAborted = true;
                             result.ErrorMessage = _checkpoint.LastErrorMessage ?? "检测被 PLC 信号中断";
                             result.EndTime = DateTime.Now;
+                            InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                             return result;
                         }
                     }
@@ -147,17 +148,28 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
 
                     UpdateCheckpoint(i, "WaitDt302");
-                    var relaySw = Stopwatch.StartNew();
-                    var relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
-                        TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
-                        _inspectionCts.Token).ConfigureAwait(false);
-                    relaySw.Stop();
-                    LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT302", relaySw.ElapsedMilliseconds);
-
-                    if (!relayResult.IsSuccess)
+                    if (_config.BypassRelayActionCompletedForSemiPhysicalTest)
                     {
-                        await AbortCurrentRunAsync(result, "等待 DT302 = 1 超时", InspectionState.Aborted).ConfigureAwait(false);
-                        return result;
+                        _logger.LogWarning(
+                            "[检测流程][审计][{INS}] 半实物临时旁路 DT302：点位 {Name} 已跳过继电器动作完成等待。正式整机联调必须关闭 Hardware:BypassRelayActionCompletedForSemiPhysicalTest。",
+                            inspectionId, testPoint.Name);
+                        LogInfo($"半实物调试：点位 {testPoint.Name} 已跳过 DT302 等待");
+                    }
+                    else
+                    {
+                        var relaySw = Stopwatch.StartNew();
+                        var relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
+                            TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
+                            _inspectionCts.Token).ConfigureAwait(false);
+                        relaySw.Stop();
+                        LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT302", relaySw.ElapsedMilliseconds);
+
+                        if (!relayResult.IsSuccess)
+                        {
+                            await AbortCurrentRunAsync(result, "等待 DT302 = 1 超时", InspectionState.Aborted).ConfigureAwait(false);
+                            InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
+                            return result;
+                        }
                     }
 
                     // 等待继电器稳定后、读取万用表前，再检查一次中断信号
@@ -170,6 +182,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                             result.IsAborted = true;
                             result.ErrorMessage = _checkpoint.LastErrorMessage ?? "检测被 PLC 信号中断";
                             result.EndTime = DateTime.Now;
+                            InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                             return result;
                         }
                     }
@@ -266,12 +279,14 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 result.IsAborted = true;
                 result.ErrorMessage = "检测被取消";
                 result.EndTime = DateTime.Now;
+                InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                 return result;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[检测流程][{INS}] 检测流程异常", inspectionId);
                 await AbortCurrentRunAsync(result, ex.Message, InspectionState.Error).ConfigureAwait(false);
+                InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                 return result;
             }
         }
@@ -628,6 +643,12 @@ public class InspectionConfig
 
     /// <summary>导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。默认 10Ω，范围 1~1000Ω。</summary>
     public double ContinuityThresholdOhm { get; set; } = 10.0;
+
+    /// <summary>
+    /// 半实物联调临时开关：真实 PLC/万用表已连接但无夹具或继电器反馈时，可跳过 DT302 等待。
+    /// 正式整机联调和出厂版本必须保持 false，确保读取万用表前一定收到 PLC 的 DT302=1。
+    /// </summary>
+    public bool BypassRelayActionCompletedForSemiPhysicalTest { get; set; }
 }
 
 public class TestPointConfig

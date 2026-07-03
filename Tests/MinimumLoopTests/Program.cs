@@ -37,6 +37,14 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual("NG", InspectionEngine.JudgeContinuityResult(0.5, "OPEN", 10.0));
         AssertEqual("OK", InspectionEngine.JudgeContinuityResult(0.5, "SHORT", 10.0));
         AssertEqual("NG", InspectionEngine.JudgeContinuityResult(10.5, "SHORT", 10.0));
+    }),
+    ("半实物 DT302 旁路默认关闭且可显式开启", () =>
+    {
+        var config = new InspectionConfig();
+        AssertEqual(false, config.BypassRelayActionCompletedForSemiPhysicalTest);
+
+        config.BypassRelayActionCompletedForSemiPhysicalTest = true;
+        AssertEqual(true, config.BypassRelayActionCompletedForSemiPhysicalTest);
     })
 };
 

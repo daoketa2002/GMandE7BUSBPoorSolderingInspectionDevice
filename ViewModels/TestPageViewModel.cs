@@ -13,6 +13,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Threading;
@@ -61,6 +62,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private readonly IOperatorStateService _operatorStateService;
     private readonly IDeviceSettingsService _settingsService;
     private readonly ITestRecordStorage _testRecordStorage;
+    private readonly IConfiguration _configuration;
 
     // 硬件服务
 
@@ -129,6 +131,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         IScannerBarcodeService scannerBarcodeService,
         ITestRecordStorage testRecordStorage,
         IPlcDevice plcDevice,
+        IConfiguration configuration,
         InspectionEngine? inspectionEngine = null)
     {
         _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
@@ -141,6 +144,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _inspectionEngine = inspectionEngine;
 
         // 初始化 UiState 为待机
@@ -547,8 +551,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             TestPoints = orderedItems
                 .Select(TestPointConfig.FromPlanItem)
                 .ToList(),
-            ContinuityThresholdOhm = continuityThreshold
+            ContinuityThresholdOhm = continuityThreshold,
+            BypassRelayActionCompletedForSemiPhysicalTest = _configuration.GetValue<bool>(
+                "Hardware:BypassRelayActionCompletedForSemiPhysicalTest")
         });
+
+        if (_configuration.GetValue<bool>("Hardware:BypassRelayActionCompletedForSemiPhysicalTest"))
+        {
+            _logger.LogWarning("[运行页][审计] 半实物调试：已启用 DT302 临时旁路。正式整机联调必须关闭。");
+            AddLog("⚠️ 半实物调试：已启用 DT302 临时旁路");
+        }
 
         foreach (var item in orderedItems)
         {
@@ -1248,6 +1260,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return await _inspectionEngine.RunInspectionAsync(
                 barcode, modelName, operatorName, 0, CancellationToken.None);
         }).ConfigureAwait(false);
+
+        if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
+        {
+            string message = string.IsNullOrWhiteSpace(result.ErrorMessage)
+                ? "检测已中止，请查看运行日志。"
+                : $"检测中止：{result.ErrorMessage}";
+
+            _logger.LogWarning("[运行页][审计] {Message}", message);
+            await _notificationService.ShowWarningAsync(message, "检测中止").ConfigureAwait(false);
+        }
     }
 
     #endregion

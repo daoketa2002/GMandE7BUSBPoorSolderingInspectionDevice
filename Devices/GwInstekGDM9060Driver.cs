@@ -181,7 +181,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 _networkStream = _tcpClient.GetStream();
 
                 // 发送 *IDN? 验证连接
-                var idn = await SendCommandInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
+                var idn = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(idn))
                 {
                     throw new InvalidOperationException("万用表连接验证失败：未收到 *IDN? 响应");
@@ -264,24 +264,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         #region SCPI 核心指令
 
         /// <summary>
-        /// 发送SCPI命令并读取响应
+        /// SCPI 查询命令（以 ? 结尾）：发送后读取响应直到 \n 终止或超时。
+        /// 命令结束符使用 \r\n（CRLF），与 GDM-9060 参考文档一致。
         /// </summary>
-        private async Task<string> SendCommandInternalAsync(string command, CancellationToken ct)
+        private async Task<string> SendQueryInternalAsync(string command, CancellationToken ct)
         {
             if (_networkStream == null || _tcpClient == null || !_tcpClient.Connected)
             {
                 throw new InvalidOperationException("万用表未连接");
             }
 
-            // 确保命令以换行符结尾
-            var cmd = command.EndsWith("\n") ? command : command + "\n";
+            // 确保查询命令以 \r\n 结尾
+            var cmd = command.EndsWith("\n") ? command : command + "\r\n";
             var cmdBytes = Encoding.ASCII.GetBytes(cmd);
 
-            _logger.LogDebug("发送SCPI命令: {Command}", command);
+            _logger.LogDebug("SCPI查询命令: {Command}", command);
             await _networkStream.WriteAsync(cmdBytes, ct).ConfigureAwait(false);
             await _networkStream.FlushAsync(ct).ConfigureAwait(false);
 
-            // 读取响应
+            // 读取响应直到 \n 终止
             using var memoryStream = new MemoryStream();
             var buffer = new byte[RECEIVE_BUFFER_SIZE];
 
@@ -299,7 +300,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
                     memoryStream.Write(buffer, 0, bytesRead);
 
-                    // GDM-9060 响应通常以 \n 结尾
                     var response = Encoding.ASCII.GetString(memoryStream.ToArray());
                     if (response.Contains('\n'))
                         break;
@@ -309,7 +309,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 if (memoryStream.Length == 0)
                 {
-                    _logger.LogWarning("SCPI命令超时: {Command}", command);
+                    _logger.LogWarning("SCPI查询命令超时: {Command}", command);
                     return string.Empty;
                 }
             }
@@ -320,7 +320,33 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 发送SCPI命令（公共接口）
+        /// SCPI 设置命令（不以 ? 结尾）：只发送不等待响应。
+        /// GDM-9060 的 *CLS、CONF:RES、CONF:CONT、SENS、SAMP、TRIG 等设置命令
+        /// 正常不返回数据，不应等待响应以免每次超时。
+        /// 命令结束符使用 \r\n（CRLF）。
+        /// </summary>
+        private async Task SendSettingInternalAsync(string command, CancellationToken ct)
+        {
+            if (_networkStream == null || _tcpClient == null || !_tcpClient.Connected)
+            {
+                throw new InvalidOperationException("万用表未连接");
+            }
+
+            // 确保设置命令以 \r\n 结尾
+            var cmd = command.EndsWith("\n") ? command : command + "\r\n";
+            var cmdBytes = Encoding.ASCII.GetBytes(cmd);
+
+            _logger.LogDebug("SCPI设置命令（只写）: {Command}", command);
+            await _networkStream.WriteAsync(cmdBytes, ct).ConfigureAwait(false);
+            await _networkStream.FlushAsync(ct).ConfigureAwait(false);
+            // 设置命令不读取响应——GDM-9060 对这些命令不返回数据
+        }
+
+        /// <summary>
+        /// 发送SCPI命令（公共接口）。
+        /// 自动根据命令是否以 ? 结尾区分查询/设置：
+        /// - 查询命令（*IDN?、READ?、MEAS?、SYST:ERR?、*OPC? 等）：发送后读取响应
+        /// - 设置命令（*CLS、CONF:RES、CONF:CONT、SENS:...、SAMP:...、TRIG:... 等）：只发送不等待响应
         /// </summary>
         public async Task<string> SendCommandAsync(string command, CancellationToken ct = default)
         {
@@ -333,7 +359,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                return await SendCommandInternalAsync(command, ct).ConfigureAwait(false);
+                // 根据命令是否以 ? 结尾自动分发：查询命令读响应，设置命令只写
+                string trimmed = command.TrimEnd();
+                if (trimmed.EndsWith("?"))
+                {
+                    return await SendQueryInternalAsync(command, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    await SendSettingInternalAsync(command, ct).ConfigureAwait(false);
+                    return string.Empty;
+                }
             }
             catch (Exception ex)
             {

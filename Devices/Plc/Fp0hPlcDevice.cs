@@ -251,7 +251,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
 
     /// <summary>
     /// 等待 PLC 继电器切换完成（轮询 DT302=1）。
-    /// 轮询间隔 20ms，避免高频刷屏。
+    /// 轮询间隔 100ms，避免真实联调时高频读取和日志噪音。
     /// </summary>
     public async Task<PlcOperationResult> WaitRelaySwitchCompletedAsync(TimeSpan timeout, CancellationToken ct = default)
     {
@@ -285,7 +285,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
                 return PlcOperationResult.Failure($"读取 DT302 状态异常: {ex.Message}");
             }
 
-            await Task.Delay(20, ct).ConfigureAwait(false);
+            await Task.Delay(100, ct).ConfigureAwait(false);
         }
 
         return PlcOperationResult.Failure("等待继电器切换被取消");

@@ -1059,7 +1059,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         else
                         {
                             _logger.LogDebug($"读取操作成功: 返回数据长度={response.Data?.Length ?? 0}");
-                            Notify(NotificationType.Success, "读取操作成功", "ExecuteReadOperation");
                         }
                     }
                 }
