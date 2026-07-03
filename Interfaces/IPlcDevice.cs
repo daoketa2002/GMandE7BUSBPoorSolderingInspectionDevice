@@ -98,6 +98,13 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> RequestRelayDisconnectAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 清空继电器动作完成标志（写 DT302 = 0）。
+    /// 当前测试点完成读取万用表并判定后调用，表示上位机已取走结果。
+    /// 在下一项开始前、复位、停止、急停、异常中止路径中也必须清 DT302。
+    /// </summary>
+    Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 清空报警解除信号（写 DT303 = 0）。
     /// 用户点击急停弹窗"解除"按钮后调用。
     /// 只清 DT303，不清 DT123。

@@ -1,5 +1,6 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 
 var tests = new List<(string Name, Action Body)>
 {
@@ -23,6 +24,19 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual((ushort)0, PlcAddressMap.ConvertPolarityToValue(PinPolarityConstants.Positive));
         AssertEqual((ushort)1, PlcAddressMap.ConvertPolarityToValue(PinPolarityConstants.Negative));
         AssertThrows<ArgumentException>(() => PlcAddressMap.ConvertPolarityToValue("未知"));
+    }),
+    ("导通阈值按实测电阻转换 OPEN 或 SHORT", () =>
+    {
+        AssertEqual("OPEN", InspectionEngine.ResolveContinuityState(10.5, 10.0));
+        AssertEqual("SHORT", InspectionEngine.ResolveContinuityState(0.5, 10.0));
+        AssertEqual("OPEN", InspectionEngine.ResolveContinuityState(10.0, 10.0));
+    }),
+    ("导通判定使用阈值和期望状态", () =>
+    {
+        AssertEqual("OK", InspectionEngine.JudgeContinuityResult(10.5, "OPEN", 10.0));
+        AssertEqual("NG", InspectionEngine.JudgeContinuityResult(0.5, "OPEN", 10.0));
+        AssertEqual("OK", InspectionEngine.JudgeContinuityResult(0.5, "SHORT", 10.0));
+        AssertEqual("NG", InspectionEngine.JudgeContinuityResult(10.5, "SHORT", 10.0));
     })
 };
 

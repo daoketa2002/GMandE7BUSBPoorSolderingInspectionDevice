@@ -732,6 +732,16 @@
                                          Style="{StaticResource InputBoxStyle}"/>
                             </StackPanel>
 
+                            <!-- 导通阈值 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="导通阈值 (Ω)：" Style="{StaticResource LabelStyle}"/>
+                                <TextBox Text="{Binding Gdm9060Config.ContinuityThresholdOhm, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource InputBoxStyle}"/>
+                                <TextBlock Text="范围 1~1000Ω"
+                                           FontSize="11" Foreground="#95A5A6"
+                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            </StackPanel>
+
                             <!-- 分隔线 -->
                             <Separator Margin="0,15" Background="#ECF0F1"/>
 

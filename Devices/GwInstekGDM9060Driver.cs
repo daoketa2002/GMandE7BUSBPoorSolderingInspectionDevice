@@ -411,6 +411,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
+        /// 初始化为导通测量模式（Continuity），并设置导通阈值。
+        /// SCPI 序列：*CLS, CONF:CONT, SENS:CONT:THR {阈值}, SAMP:COUN 1, TRIG:COUN 1, TRIG:SOUR IMM
+        /// </summary>
+        /// <param name="thresholdOhm">导通阈值(Ω)，默认 10Ω</param>
+        public async Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
+        {
+            try
+            {
+                await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
+                await SendCommandAsync("CONF:CONT", ct).ConfigureAwait(false);
+                await SendCommandAsync($"SENS:CONT:THR {thresholdOhm:F2}", ct).ConfigureAwait(false);
+                await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+                await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+                await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                _logger.LogInformation("万用表已切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "初始化万用表导通模式失败");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 读取 GDM-9060 READ? 原始返回文本，不在驱动层做 OPEN/SHORT/范围判定。
         /// </summary>
         public async Task<string> ReadResistanceRawAsync(CancellationToken ct = default)

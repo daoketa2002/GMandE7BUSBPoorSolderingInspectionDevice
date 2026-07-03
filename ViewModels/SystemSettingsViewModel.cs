@@ -758,6 +758,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 errors.Add($"万用表心跳间隔 {Gdm9060Config.HealthCheckIntervalSeconds}秒 超出范围");
             if (!Common.Validators.InputValidationHelper.IsValidDataTimeout(Gdm9060Config.LastDataTimeoutSeconds))
                 errors.Add($"万用表数据超时 {Gdm9060Config.LastDataTimeoutSeconds}秒 超出范围");
+            if (Gdm9060Config.ContinuityThresholdOhm < 1.0 || Gdm9060Config.ContinuityThresholdOhm > 1000.0)
+                errors.Add($"万用表导通阈值 {Gdm9060Config.ContinuityThresholdOhm}Ω 超出范围（应为 1~1000Ω）");
 
             return errors;
         }

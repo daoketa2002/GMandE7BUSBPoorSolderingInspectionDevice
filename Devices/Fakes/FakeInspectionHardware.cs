@@ -278,6 +278,25 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(true);
     }
 
+    /// <summary>
+    /// 模拟导通模式初始化，记录导通阈值，直接返回成功。
+    /// </summary>
+    public Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
+    {
+        _logger.LogWarning("[Fake硬件][审计] Fake 万用表切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// 清 DT302=0，当前测试点继电器动作完成标志。
+    /// </summary>
+    public Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.RelayActionCompleted, 0);
+        _logger.LogWarning("[Fake硬件][审计] Fake 清 DT302=0");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT302=0"));
+    }
+
     public Task<string> ReadResistanceRawAsync(CancellationToken ct = default)
     {
         string raw;

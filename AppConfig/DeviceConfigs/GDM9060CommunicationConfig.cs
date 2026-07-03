@@ -11,6 +11,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
     /// </summary>
     public class GDM9060CommunicationConfig : INotifyPropertyChanged
     {
+        private double _continuityThresholdOhm = 10.0;
         private string _ipAddress = "192.168.1.4";
         private int _port = 5025;
         private int _receiveTimeoutMs = 5000;
@@ -80,6 +81,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         {
             get => _lastDataTimeoutSeconds;
             set { _lastDataTimeoutSeconds = value; OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// 导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。
+        /// 范围 1~1000Ω，由系统设置页保存前校验。
+        /// </summary>
+        public double ContinuityThresholdOhm
+        {
+            get => _continuityThresholdOhm;
+            set { _continuityThresholdOhm = value; OnPropertyChanged(); }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

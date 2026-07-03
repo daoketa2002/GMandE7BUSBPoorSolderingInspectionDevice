@@ -410,6 +410,17 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 清空继电器动作完成标志（写 DT302 = 0）。
+    /// 当前测试点完成读取万用表并判定后调用，表示上位机已取走结果并允许 PLC 进行下一步动作。
+    /// 在下一项开始前、复位、停止、急停、异常中止路径中也必须清 DT302。
+    /// </summary>
+    public async Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[PLC动作][审计] PC 清除继电器动作完成标志 → 写 DT302 = 0");
+        return await WriteRegisterSingleAsync("DT302(继电器动作完成)", _addressMap.RelayCompletedRegister, 0, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 清空报警解除信号（写 DT303 = 0）。
     /// 用户点击急停弹窗"解除"按钮后调用，只清 DT303，不清 DT123。
     /// </summary>

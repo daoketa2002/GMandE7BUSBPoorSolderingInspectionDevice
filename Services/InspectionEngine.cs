@@ -16,7 +16,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services;
 public partial class InspectionEngine : IAsyncDisposable, IDisposable
 {
     private const double TemporaryOpenThresholdOhm = 1_000_000.0;
-    private const double TemporaryShortThresholdOhm = 1.0;
 
     private readonly ILogger<InspectionEngine> _logger;
     private readonly IPlcDevice _plcDevice;
@@ -95,6 +94,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                 await InitializeInspectionAsync(_inspectionCts.Token).ConfigureAwait(false);
 
+                // ── 本轮检测开始时清上一轮残留 ──
+                // 清 DT130~DT185、DT302，确保引脚输出区和继电器完成标志为初始状态
+                await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
+
                 // 启动检查通过后，上位机写 DT234=1 通知 PLC 可以开始检测
                 await _plcDevice.WritePcReadyAsync(_inspectionCts.Token).ConfigureAwait(false);
 
@@ -121,6 +124,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
 
                     TestPointConfig testPoint = _config.TestPoints[i];
+                    testPoint.ContinuityThresholdOhm = _config.ContinuityThresholdOhm;
+                    testPoint.ActualContinuityState = string.Empty;
                     StepStarted?.Invoke(this, new StepStartedEventArgs(i, testPoint));
                     LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode})");
 
@@ -141,7 +146,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         continue;
                     }
 
-                    UpdateCheckpoint(i, "WaitDt160");
+                    UpdateCheckpoint(i, "WaitDt302");
                     var relaySw = Stopwatch.StartNew();
                     var relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
                         TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
@@ -170,6 +175,25 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
 
                     await Task.Delay(_config.RelaySettleTimeMs, _inspectionCts.Token).ConfigureAwait(false);
+
+                    // ── 按检查方式切换万用表模式 ──
+                    UpdateCheckpoint(i, "SetupMultimeterMode");
+                    bool modeReady;
+                    if (testPoint.CheckMode == CheckModeConstants.Continuity)
+                    {
+                        modeReady = await _multimeterDevice.InitializeContinuityModeAsync(
+                            _config.ContinuityThresholdOhm, _inspectionCts.Token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        modeReady = await _multimeterDevice.InitializeResistanceModeAsync(
+                            _inspectionCts.Token).ConfigureAwait(false);
+                    }
+                    if (!modeReady)
+                    {
+                        await AbortCurrentRunAsync(result, $"万用表模式切换失败：{testPoint.CheckMode}", InspectionState.Aborted).ConfigureAwait(false);
+                        return result;
+                    }
 
                     UpdateCheckpoint(i, "ReadMultimeter");
                     string rawText = await _multimeterDevice.ReadResistanceRawAsync(_inspectionCts.Token).ConfigureAwait(false);
@@ -206,7 +230,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
                     AddFinishedResult(testPoint);
 
-                    await ClearWritablePlcOutputsAsync(_inspectionCts.Token).ConfigureAwait(false);
+                    await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
                     _checkpoint.CurrentItemIndex = i + 1;
                     _checkpoint.LastUpdatedTime = DateTime.Now;
                 }
@@ -236,7 +260,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             }
             catch (OperationCanceledException)
             {
-                await ClearWritablePlcOutputsSafelyAsync().ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagSafelyAsync().ConfigureAwait(false);
                 await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
                 SetState(InspectionState.Aborted);
                 result.IsAborted = true;
@@ -300,13 +324,18 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         });
     }
 
+    /// <summary>
+    /// 检测初始化——验证万用表通信正常。
+    /// 实际模式切换在每项测试前根据 CheckMode 单独进行，不在全局固定为电阻模式。
+    /// </summary>
     private async Task InitializeInspectionAsync(CancellationToken ct)
     {
-        bool initialized = await _multimeterDevice.InitializeResistanceModeAsync(ct).ConfigureAwait(false);
-        if (!initialized)
-            throw new InvalidOperationException("万用表电阻模式初始化失败");
+        // 先以电阻模式做一次连通性验证
+        bool connected = await _multimeterDevice.InitializeResistanceModeAsync(ct).ConfigureAwait(false);
+        if (!connected)
+            throw new InvalidOperationException("万用表通信验证失败");
 
-        LogInfo("检测初始化完成：万用表已进入电阻测量模式");
+        LogInfo("检测初始化完成：万用表通信正常");
     }
 
     private enum PlcInterruptAction
@@ -341,14 +370,14 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 _checkpoint.CurrentStep = "Paused";
                 _checkpoint.HasBreakpoint = true;
                 _checkpoint.LastUpdatedTime = DateTime.Now;
-                await ClearWritablePlcOutputsAsync(ct).ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
                 LogInfo($"PLC 停止信号 DT122=1，已保留断点：第 {currentPointIndex + 1} 项");
                 return false;
 
             case PlcInterruptAction.Reset:
                 SetState(InspectionState.ResetRequested);
                 _checkpoint.ResetProgress();
-                await ClearWritablePlcOutputsAsync(ct).ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
                 // DT121 由 TestPageViewModel 在界面结果、内部状态和 PLC 输出全部清理完成后统一清零。
                 // 引擎只负责中止当前检测，避免先清 DT121 导致运行界面轮询错过复位信号。
                 _checkpoint.LastErrorMessage = "复位触发，检测中止";
@@ -358,7 +387,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 SetState(InspectionState.PausedByEmergencyStop);
                 _checkpoint.HasBreakpoint = false;
                 _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
-                await ClearWritablePlcOutputsAsync(ct).ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
                 return false;
 
             default:
@@ -381,6 +410,24 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         return FailedMeasurement($"无法解析万用表返回值：{rawText}", rawText);
     }
 
+    public static string ResolveContinuityState(double resistanceOhm, double thresholdOhm)
+    {
+        if (thresholdOhm < 1.0 || thresholdOhm > 1000.0)
+            throw new ArgumentOutOfRangeException(nameof(thresholdOhm), "导通阈值必须在 1~1000Ω 范围内。");
+
+        return resistanceOhm < thresholdOhm ? "SHORT" : "OPEN";
+    }
+
+    public static string JudgeContinuityResult(double resistanceOhm, string? expectedState, double thresholdOhm)
+    {
+        string actualState = ResolveContinuityState(resistanceOhm, thresholdOhm);
+        string expected = NormalizeContinuityState(expectedState);
+        return string.Equals(actualState, expected, StringComparison.OrdinalIgnoreCase) ? "OK" : "NG";
+    }
+
+    private static string NormalizeContinuityState(string? state)
+        => string.Equals(state, "SHORT", StringComparison.OrdinalIgnoreCase) ? "SHORT" : "OPEN";
+
     private static string JudgeResult(MeasurementResult measurement, TestPointConfig testPoint)
     {
         string raw = measurement.RawValue.Trim();
@@ -398,13 +445,20 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
         bool expectShort = string.Equals(testPoint.ModeValue, "SHORT", StringComparison.OrdinalIgnoreCase);
         if (raw.Equals("SHORT", StringComparison.OrdinalIgnoreCase))
+        {
+            testPoint.ActualContinuityState = "SHORT";
             return expectShort ? "OK" : "NG";
+        }
         if (raw.Equals("OPEN", StringComparison.OrdinalIgnoreCase))
+        {
+            testPoint.ActualContinuityState = "OPEN";
             return expectShort ? "NG" : "OK";
+        }
 
-        return expectShort
-            ? measurement.Value <= TemporaryShortThresholdOhm ? "OK" : "NG"
-            : measurement.Value >= TemporaryOpenThresholdOhm ? "OK" : "NG";
+        testPoint.ActualContinuityState = ResolveContinuityState(
+            measurement.Value, testPoint.ContinuityThresholdOhm);
+        return JudgeContinuityResult(
+            measurement.Value, testPoint.ModeValue, testPoint.ContinuityThresholdOhm);
     }
 
     private static void MarkNg(TestPointConfig testPoint, string message)
@@ -435,27 +489,32 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         result.IsAborted = true;
         result.ErrorMessage = message;
         result.EndTime = DateTime.Now;
-        await ClearWritablePlcOutputsSafelyAsync().ConfigureAwait(false);
+        await ClearPlcOutputsAndRelayFlagSafelyAsync().ConfigureAwait(false);
         await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
         await _plcDevice.WritePcErrorAsync(CancellationToken.None).ConfigureAwait(false);
         SetState(state);
     }
 
-    private async Task ClearWritablePlcOutputsAsync(CancellationToken ct)
+    /// <summary>
+    /// 统一清理引脚输出区(DT130~DT185)和继电器动作完成标志(DT302)。
+    /// 在每项完成后、复位、停止、急停、异常中止时调用。
+    /// </summary>
+    private async Task ClearPlcOutputsAndRelayFlagAsync(CancellationToken ct)
     {
         await _plcDevice.ClearPinOutputsAsync(ct).ConfigureAwait(false);
-        LogInfo("已清空 DT130~DT185");
+        await _plcDevice.ClearRelayActionCompletedAsync(ct).ConfigureAwait(false);
+        LogInfo("已清空 DT130~DT185 和 DT302");
     }
 
-    private async Task ClearWritablePlcOutputsSafelyAsync()
+    private async Task ClearPlcOutputsAndRelayFlagSafelyAsync()
     {
         try
         {
-            await ClearWritablePlcOutputsAsync(CancellationToken.None).ConfigureAwait(false);
+            await ClearPlcOutputsAndRelayFlagAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[检测流程] 清空 DT130~DT185 失败");
+            _logger.LogWarning(ex, "[检测流程] 清空 DT130~DT185 和 DT302 失败");
         }
     }
 
@@ -566,6 +625,9 @@ public class InspectionConfig
     public List<TestPointConfig> TestPoints { get; set; } = new();
     public int RelaySettleTimeMs { get; set; } = 150;
     public int RelaySwitchTimeoutMs { get; set; } = 3000;
+
+    /// <summary>导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。默认 10Ω，范围 1~1000Ω。</summary>
+    public double ContinuityThresholdOhm { get; set; } = 10.0;
 }
 
 public class TestPointConfig
@@ -583,6 +645,8 @@ public class TestPointConfig
     public double? LowerLimit { get; set; }
     public double? UpperLimit { get; set; }
     public string? ModeValue { get; set; } = "OPEN";
+    public double ContinuityThresholdOhm { get; set; } = 10.0;
+    public string ActualContinuityState { get; set; } = string.Empty;
     public int? RelayChannel { get; set; }
     public double ActualValue { get; set; }
     public string Judgment { get; set; } = string.Empty;

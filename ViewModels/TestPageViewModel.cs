@@ -517,12 +517,37 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         var orderedItems = currentPlan.Items.OrderBy(i => i.Index).ToList();
 
+        // 从设备设置读取导通阈值，传入 InspectionConfig
+        double continuityThreshold = 10.0;
+        try
+        {
+            var deviceSettings = _settingsService.LoadSettings();
+            if (deviceSettings?.GDM9060Communication != null)
+            {
+                double configuredThreshold = deviceSettings.GDM9060Communication.ContinuityThresholdOhm;
+                if (configuredThreshold >= 1.0 && configuredThreshold <= 1000.0)
+                {
+                    continuityThreshold = configuredThreshold;
+                }
+                else
+                {
+                    _logger.LogWarning("[运行页] 导通阈值配置非法：{Threshold}Ω，已使用默认值 10Ω", configuredThreshold);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // 加载失败使用默认值 10Ω，不影响后续流程
+            _logger.LogWarning(ex, "[运行页] 读取导通阈值失败，已使用默认值 10Ω");
+        }
+
         _inspectionEngine?.SetConfig(new InspectionConfig
         {
             PlanName = currentPlan.PlanName,
             TestPoints = orderedItems
                 .Select(TestPointConfig.FromPlanItem)
-                .ToList()
+                .ToList(),
+            ContinuityThresholdOhm = continuityThreshold
         });
 
         foreach (var item in orderedItems)
@@ -1396,9 +1421,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (testPoint.CheckMode == CheckModeConstants.Continuity)
         {
-            if (value > 1_000_000.0) return "开路";
-            if (value < 1.0) return "短路";
-            return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";
+            if (!string.IsNullOrWhiteSpace(testPoint.ActualContinuityState))
+                return testPoint.ActualContinuityState;
+
+            return InspectionEngine.ResolveContinuityState(value, testPoint.ContinuityThresholdOhm);
         }
 
         return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";

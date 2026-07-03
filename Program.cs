@@ -32,10 +32,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
     /// </summary>
     public class Program
     {
-        // 临时开关：用于最小检测闭环阶段。
-        // true 使用 Fake PLC 和 Fake 万用表；接入真实设备后改为 false 或删除该开关。
-        private static readonly bool UseFakeInspectionHardware = true;
-
         /// <summary>
         /// 应用程序的主入口点。
         /// </summary>
@@ -125,6 +121,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                 .ConfigureAppConfiguration((context, config) =>
                 {
                     // 默认已加载 appsettings.json、环境变量、命令行参数等
+                    // 显式加载 appsettings.Development.json，用于开发阶段配置（如 Fake 硬件开关）。
+                    // 生产机不携带该文件，config.AddJsonFile 使用 optional: true 静默跳过。
+                    config.AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true);
                 })
                 .ConfigureServices((context, services) =>
                 {
@@ -234,7 +233,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // 2. 固纬 GDM-9060 万用表驱动
             services.AddSingleton<GwInstekGDM9060Driver>();
 
-            if (UseFakeInspectionHardware)
+            // ⭐ Fake 硬件开关：从配置读取 Hardware:UseFakeInspectionHardware。
+            // appsettings.json 不写该字段 → GetValue<bool> 返回 false → 默认注册真实设备。
+            // appsettings.Development.json 可写入 {"Hardware": {"UseFakeInspectionHardware": true}} 启用 Fake。
+            bool useFake = configuration.GetValue<bool>("Hardware:UseFakeInspectionHardware");
+            if (useFake)
             {
                 services.AddSingleton<FakeInspectionHardware>();
                 services.AddSingleton<IPlcDevice>(sp => sp.GetRequiredService<FakeInspectionHardware>());
