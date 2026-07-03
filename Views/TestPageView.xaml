@@ -307,6 +307,9 @@
                                     <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
                                         <Setter Property="Background" Value="#E74C3C"/>
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding UiState}" Value="SingleItemNgStopped">
+                                        <Setter Property="Background" Value="#E74C3C"/>
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Resetting">
                                         <Setter Property="Background" Value="#8E44AD"/>
                                     </DataTrigger>
@@ -339,6 +342,9 @@
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
                                             <Setter Property="Text" Value="急停中"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding UiState}" Value="SingleItemNgStopped">
+                                            <Setter Property="Text" Value="NG"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Resetting">
                                             <Setter Property="Text" Value="复位中"/>

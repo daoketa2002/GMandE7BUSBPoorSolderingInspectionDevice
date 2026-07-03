@@ -48,7 +48,9 @@ public enum TestUIState
     EmergencyStop,
     Resetting,
     PendingSave,
-    Error
+    Error,
+    /// <summary>单项 NG 后按系统设置停止本轮，等待操作员复位或终了</summary>
+    SingleItemNgStopped
 }
 
 public partial class TestPageViewModel : ObservableObject, INavigationAware, IDisposable
@@ -354,7 +356,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 根据当前上下文刷新为待机或可启动，不覆盖检测中、停止、急停、复位、待保存、异常。
+    /// 根据当前上下文刷新为待机或可启动，不覆盖检测中、停止、急停、复位、待保存、单项 NG 停止、异常。
     /// </summary>
     private void RefreshReadyOrCanStartState()
     {
@@ -363,6 +365,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             || UiState == TestUIState.EmergencyStop
             || UiState == TestUIState.Resetting
             || UiState == TestUIState.PendingSave
+            || UiState == TestUIState.SingleItemNgStopped
             || UiState == TestUIState.Error)
             return;
 
@@ -545,6 +548,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogWarning(ex, "[运行页] 读取导通阈值失败，已使用默认值 10Ω");
         }
 
+        bool continueTestingAfterNg = _settingsService.LoadSettings().ContinueTestingAfterNg;
         _inspectionEngine?.SetConfig(new InspectionConfig
         {
             PlanName = currentPlan.PlanName,
@@ -553,7 +557,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 .ToList(),
             ContinuityThresholdOhm = continuityThreshold,
             BypassRelayActionCompletedForSemiPhysicalTest = _configuration.GetValue<bool>(
-                "Hardware:BypassRelayActionCompletedForSemiPhysicalTest")
+                "Hardware:BypassRelayActionCompletedForSemiPhysicalTest"),
+            ContinueTestingAfterNg = continueTestingAfterNg
         });
 
         if (_configuration.GetValue<bool>("Hardware:BypassRelayActionCompletedForSemiPhysicalTest"))
@@ -561,6 +566,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogWarning("[运行页][审计] 半实物调试：已启用 DT302 临时旁路。正式整机联调必须关闭。");
             AddLog("⚠️ 半实物调试：已启用 DT302 临时旁路");
         }
+
+        _logger.LogInformation("[运行页][审计] 检测配置已更新：单项 NG 后继续测试={ContinueAfterNg}", continueTestingAfterNg);
+        AddLog($"⚙ 单项 NG 后继续测试={(continueTestingAfterNg ? "开启" : "关闭")}");
 
         foreach (var item in orderedItems)
         {
@@ -1352,6 +1360,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 InspectionState.CompletedFail => TestUIState.PendingSave,
                 InspectionState.PausedByStop => TestUIState.Paused,
                 InspectionState.PausedByEmergencyStop => TestUIState.EmergencyStop,
+                InspectionState.StoppedBySingleItemNg => TestUIState.SingleItemNgStopped,
                 InspectionState.ResetRequested => TestUIState.Resetting,
                 InspectionState.Aborted => UiState switch
                 {
@@ -1371,6 +1380,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 InspectionState.CompletedFail => "待保存",
                 InspectionState.PausedByStop => "已停止",
                 InspectionState.PausedByEmergencyStop => "急停中",
+                InspectionState.StoppedBySingleItemNg => "NG",
                 InspectionState.ResetRequested => "复位中",
                 InspectionState.Aborted => UiState switch
                 {
@@ -1386,7 +1396,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             IsInputEnabled = (UiState != TestUIState.Testing
                               && UiState != TestUIState.PendingSave
                               && UiState != TestUIState.EmergencyStop
-                              && UiState != TestUIState.Paused);
+                              && UiState != TestUIState.Paused
+                              && UiState != TestUIState.SingleItemNgStopped);
         });
     }
 
@@ -1465,6 +1476,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (e.Result.IsAborted)
             {
                 AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
+                return;
+            }
+
+            if (e.Result.StopReason == InspectionStopReason.SingleItemNg)
+            {
+                AddLog($"❎ {e.Result.ErrorMessage}");
+                _logger.LogWarning("[运行页][审计] 单项 NG 停止: {ErrorMessage}", e.Result.ErrorMessage);
                 return;
             }
 

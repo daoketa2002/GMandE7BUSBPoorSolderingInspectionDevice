@@ -29,6 +29,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         public bool IsPlcCommunicationTestEnabled { get; set; } = false;
 
         /// <summary>
+        /// 单项 NG 后是否继续测试后续项目。
+        /// true（默认）：保持当前行为，继续测完整个方案；
+        /// false：首个 NG 后停止本轮，等待操作员复位或终了。
+        /// </summary>
+        public bool ContinueTestingAfterNg { get; set; } = true;
+
+        /// <summary>
         /// DAQ-9600
         /// </summary>
         public TcpClientGWInstekSettings TcpClientGWInstek { get; set; } = new TcpClientGWInstekSettings();

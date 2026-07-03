@@ -45,6 +45,24 @@ var tests = new List<(string Name, Action Body)>
 
         config.BypassRelayActionCompletedForSemiPhysicalTest = true;
         AssertEqual(true, config.BypassRelayActionCompletedForSemiPhysicalTest);
+    }),
+    ("单项 NG 后续默认继续测试", () =>
+    {
+        var config = new InspectionConfig();
+        AssertEqual(true, config.ContinueTestingAfterNg);
+
+        config.ContinueTestingAfterNg = false;
+        AssertEqual(false, config.ContinueTestingAfterNg);
+    }),
+    ("StoppedBySingleItemNg 状态和停止原因枚举存在", () =>
+    {
+        // 验证 InspectionState 有 StoppedBySingleItemNg
+        var state = InspectionState.StoppedBySingleItemNg;
+        AssertEqual("StoppedBySingleItemNg", state.ToString());
+
+        // 验证 InspectionStopReason 有 SingleItemNg
+        var reason = InspectionStopReason.SingleItemNg;
+        AssertEqual("SingleItemNg", reason.ToString());
     })
 };
 

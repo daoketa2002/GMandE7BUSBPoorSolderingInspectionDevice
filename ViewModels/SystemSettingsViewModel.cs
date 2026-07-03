@@ -62,6 +62,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private bool _isPlcCommunicationTestEnabled = false;
 
+        /// <summary>
+        /// 单项 NG 后是否继续测试后续项目。
+        /// true：记录该项 NG，继续测完整个方案；
+        /// false：首个 NG 后停止本轮，等待操作员复位或终了。
+        /// </summary>
+        [ObservableProperty]
+        private bool _continueTestingAfterNg = true;
+
         /// <summary>当前选中的Tab页索引（0=常规设置, 1=PLC, 2=扫描仪, 3=万用表）</summary>
         [ObservableProperty]
         private int _selectedTabIndex = 0;
@@ -244,13 +252,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     FP0HCommunication = Fp0hConfig,
                     ScannerSerialCommunication = ScannerConfig,
                     GDM9060Communication = Gdm9060Config,
-                    IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled
+                    IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled,
+                    ContinueTestingAfterNg = ContinueTestingAfterNg
                 };
 
                 _settingsService.SaveSettings(deviceSettings);
                 await SaveCsvStoragePathAsync();
 
-                _logger.Information("所有配置已保存成功");
+                _logger.Warning("[系统设置][审计] 单项 NG 后继续测试={ContinueTestingAfterNg}", ContinueTestingAfterNg);
                 await _notificationService.ShowInfoAsync("所有配置已保存成功！存储路径修改立即生效，无需重启。");
             }
             catch (Exception ex)
@@ -783,6 +792,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     Gdm9060Config = deviceSettings.GDM9060Communication;
 
                 IsPlcCommunicationTestEnabled = deviceSettings.IsPlcCommunicationTestEnabled;
+                ContinueTestingAfterNg = deviceSettings.ContinueTestingAfterNg;
                 LoadCsvStoragePath();
 
                 _logger.Debug("设备配置加载完成");

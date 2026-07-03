@@ -243,6 +243,29 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
                     AddFinishedResult(testPoint);
 
+                    // ── 单项 NG 后按系统设置选择继续或停止 ──
+                    if (judgment == "NG" && !_config.ContinueTestingAfterNg)
+                    {
+                        result.IsAborted = false;
+                        result.IsAllPassed = false;
+                        result.ErrorMessage = $"第 {i + 1} 项 {testPoint.Name} 判定 NG，系统设置为停止检测，已停止本轮，等待复位或终了";
+                        result.StopReason = InspectionStopReason.SingleItemNg;
+                        result.StopPointIndex = i;
+                        result.StopPointName = testPoint.Name;
+                        result.TotalCount = _config.TestPoints.Count;
+                        result.PassCount = passCount;
+                        result.FailCount = failCount;
+                        result.EndTime = DateTime.Now;
+
+                        await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
+                        await _plcDevice.WriteFinalResultAsync(false, i, CancellationToken.None).ConfigureAwait(false);
+
+                        SetState(InspectionState.StoppedBySingleItemNg);
+                        InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
+                        return result;
+                    }
+
                     await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
                     _checkpoint.CurrentItemIndex = i + 1;
                     _checkpoint.LastUpdatedTime = DateTime.Now;
@@ -626,12 +649,35 @@ public enum InspectionState
     Testing,
     PausedByStop,
     PausedByEmergencyStop,
+    /// <summary>单项 NG 后按系统设置停止本轮，等待操作员复位或终了</summary>
+    StoppedBySingleItemNg,
     ResetRequested,
     CompletedPendingSave,
     CompletedPass,
     CompletedFail,
     Aborted,
     Error
+}
+
+/// <summary>
+/// 检测停止原因（区分正常完成、单项 NG 停止、PLC 停止/急停/复位等）。
+/// </summary>
+public enum InspectionStopReason
+{
+    /// <summary>正常完成或未设定</summary>
+    None,
+    /// <summary>单项 NG 后按系统设置停止本轮</summary>
+    SingleItemNg,
+    /// <summary>PLC 停止信号 DT122</summary>
+    PlcStop,
+    /// <summary>PLC 复位信号 DT121</summary>
+    Reset,
+    /// <summary>PLC 急停信号 DT123</summary>
+    EmergencyStop,
+    /// <summary>无法恢复的异常</summary>
+    Error,
+    /// <summary>操作取消</summary>
+    Canceled
 }
 
 public class InspectionConfig
@@ -644,11 +690,17 @@ public class InspectionConfig
     /// <summary>导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。默认 10Ω，范围 1~1000Ω。</summary>
     public double ContinuityThresholdOhm { get; set; } = 10.0;
 
-    /// <summary>
-    /// 半实物联调临时开关：真实 PLC/万用表已连接但无夹具或继电器反馈时，可跳过 DT302 等待。
+    /// <summary>半实物联调临时开关：真实 PLC/万用表已连接但无夹具或继电器反馈时，可跳过 DT302 等待。
     /// 正式整机联调和出厂版本必须保持 false，确保读取万用表前一定收到 PLC 的 DT302=1。
     /// </summary>
     public bool BypassRelayActionCompletedForSemiPhysicalTest { get; set; }
+
+    /// <summary>
+    /// 单项 NG 后是否继续测试后续项目。
+    /// true（默认）：记录该项 NG，继续测完整个方案；
+    /// false：首个 NG 后停止本轮，等待操作员复位或终了。
+    /// </summary>
+    public bool ContinueTestingAfterNg { get; set; } = true;
 }
 
 public class TestPointConfig
@@ -723,6 +775,12 @@ public class InspectionResult
     public bool IsAllPassed { get; set; }
     public bool IsAborted { get; set; }
     public string ErrorMessage { get; set; } = string.Empty;
+    /// <summary>停止原因（正常完成、单项 NG 停止、PLC 停止/急停/复位等）</summary>
+    public InspectionStopReason StopReason { get; set; } = InspectionStopReason.None;
+    /// <summary>停止时的测试项索引（如有）</summary>
+    public int? StopPointIndex { get; set; }
+    /// <summary>停止时的测试项名称（如有）</summary>
+    public string StopPointName { get; set; } = string.Empty;
     public TimeSpan Duration => EndTime - StartTime;
 }
 
