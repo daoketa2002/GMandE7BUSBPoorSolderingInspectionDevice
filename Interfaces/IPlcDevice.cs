@@ -30,8 +30,17 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult<PlcMachineInputs>> ReadMachineInputsAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 上位机请求启动（写 DT120=1）。
+    /// 半实物联调临时入口：真实 PLC 接入但现场启动按钮链路未完整联通时，
+    /// 由上位机临时写 DT120=1 触发现有 PLC 轮询启动流程。
+    /// 正式整机联调后应删除，启动应由 PLC 或实体按钮触发。
+    /// </summary>
+    Task<PlcOperationResult> RequestStartAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 清除 PLC 启动请求（写 DT120 = 0）。
-    /// PC 在读到 DT120=1 并接管启动后调用，防止同一启动信号重复触发检测。
+    /// 正常完成时，在整轮检测结束且用户处理保存/取消弹窗后调用。
+    /// 启动复核失败、复位或异常安全收口时也可以调用，避免无效启动请求残留。
     /// </summary>
     Task<PlcOperationResult> ClearStartRequestAsync(CancellationToken ct = default);
 

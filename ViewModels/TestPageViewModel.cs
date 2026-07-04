@@ -333,8 +333,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>是否为 Fake 调试模式（_plcDevice 为 FakeInspectionHardware）</summary>
     public bool IsFakeMode => _plcDevice is FakeInspectionHardware;
-    /// <summary>是否为半实物联调模式（非 Fake，接入了真实 PLC）</summary>
-    public bool IsRealSemiPhysicalMode => !IsFakeMode;
+    /// <summary>半实物联调入口模式：非 Fake 且 SemiPhysicalDebug=true，显示启动(DT120)按钮。</summary>
+    public bool IsSemiPhysicalDebugMode => !IsFakeMode && _configuration.GetValue<bool>("Hardware:SemiPhysicalDebug");
+    /// <summary>真实/半实物模式复位可见：非 Fake 模式均显示复位(DT121)按钮。</summary>
+    public bool IsRealModeResetVisible => !IsFakeMode;
 
     /// <summary>
     /// 判断界面上下文是否已经具备人工启动条件。
@@ -558,6 +560,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         bool continueTestingAfterNg = _settingsService.LoadSettings().ContinueTestingAfterNg;
+        bool skipDt302Wait = _configuration.GetValue<bool>("Hardware:SkipDt302Wait");
+        bool legacySkipDt302Wait = _configuration.GetValue<bool>("Hardware:BypassRelayActionCompletedForSemiPhysicalTest");
+        bool effectiveSkipDt302Wait = InspectionConfig.ResolveSkipDt302Wait(skipDt302Wait, legacySkipDt302Wait);
+
         _inspectionEngine?.SetConfig(new InspectionConfig
         {
             PlanName = currentPlan.PlanName,
@@ -565,14 +571,20 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 .Select(TestPointConfig.FromPlanItem)
                 .ToList(),
             ContinuityThresholdOhm = continuityThreshold,
-            BypassRelayActionCompletedForSemiPhysicalTest = _configuration.GetValue<bool>(
-                "Hardware:BypassRelayActionCompletedForSemiPhysicalTest"),
+            SkipDt302Wait = effectiveSkipDt302Wait,
+            BypassRelayActionCompletedForSemiPhysicalTest = legacySkipDt302Wait,
             ContinueTestingAfterNg = continueTestingAfterNg
         });
 
-        if (_configuration.GetValue<bool>("Hardware:BypassRelayActionCompletedForSemiPhysicalTest"))
+        if (legacySkipDt302Wait)
         {
-            _logger.LogWarning("[运行页][审计] 半实物调试：已启用 DT302 临时旁路。正式整机联调必须关闭。");
+            _logger.LogWarning("[运行页][配置兼容] 旧配置 Hardware:BypassRelayActionCompletedForSemiPhysicalTest 已废弃，请改用 Hardware:SkipDt302Wait。");
+            AddLog("⚠️ 旧半实物配置已废弃，请改用 Hardware:SkipDt302Wait");
+        }
+
+        if (effectiveSkipDt302Wait)
+        {
+            _logger.LogWarning("[运行页][审计] 半实物调试：已启用 DT302 临时旁路。正式整机联调必须关闭 Hardware:SkipDt302Wait。");
             AddLog("⚠️ 半实物调试：已启用 DT302 临时旁路");
         }
 
@@ -666,12 +678,17 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 await SaveLogToDatabaseAsync(machineType, planName, finalResult);
                 await _notificationService.ShowInfoAsync("检测记录已保存！", "保存成功");
-                ResetToReadyState();
+                await CompleteNormalInspectionHandshakeAsync().ConfigureAwait(false);
+                await Application.Current.Dispatcher.InvokeAsync(ResetToReadyState);
             }
             else
             {
-                ClearTestItemsForRestart();
-                ForceRefreshReadyOrCanStartState();
+                await CompleteNormalInspectionHandshakeAsync().ConfigureAwait(false);
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    ClearTestItemsForRestart();
+                    ForceRefreshReadyOrCanStartState();
+                });
                 AddLog("📝 操作员取消保存，检测结果已清空，可重新测试");
             }
         }
@@ -745,6 +762,29 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _startupCleared = false;
         ForceRefreshReadyOrCanStartState();
         AddLog("✅ 准备就绪，可进行下一次检测");
+    }
+
+    /// <summary>
+    /// 正常完成后的 PLC 握手收口。
+    /// 必须在用户处理保存/取消弹窗之后执行，不能在启动复核通过或检测刚完成时提前清 DT120。
+    /// </summary>
+    private async Task CompleteNormalInspectionHandshakeAsync()
+    {
+        _logger.LogWarning("[PLC动作][审计] 检测完成且保存弹窗已处理，开始清理本轮启动握手：DT234、DT120、DT130~DT185、DT302");
+
+        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
+        await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
+        await _plcDevice.ClearPinOutputsAsync(CancellationToken.None).ConfigureAwait(false);
+        await _plcDevice.ClearRelayActionCompletedAsync(CancellationToken.None).ConfigureAwait(false);
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            _inspectionStarted = false;
+            _startupCleared = true;
+            IsPlcStartRequested = false;
+        });
+
+        _logger.LogWarning("[PLC动作][审计] 本轮正常完成收口结束：DT120 已清除，等待下一轮启动");
     }
 
     #endregion
@@ -848,7 +888,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         try
         {
             var result = await _plcDevice.ReadMachineInputsAsync(CancellationToken.None).ConfigureAwait(false);
-            if (!result.IsSuccess || result.Value == null) return;
+            if (!result.IsSuccess || result.Value == null)
+            {
+                _logger.LogWarning("[PLC轮询][诊断] 读取 PLC 输入失败：{Message}", result.Message);
+                return;
+            }
 
             var inputs = result.Value;
             _lastPlcInputs = inputs;
@@ -1078,9 +1122,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        // 复核通过：清除 DT120，锁存启动标记，触发检测
-        _logger.LogWarning("[启动复核][通过] 所有条件满足，开始检测");
-        _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+        // 复核通过后只锁存启动状态并调用 RunInspectionAsync。
+        // 正常完成时，DT120 在保存/取消弹窗关闭后的收口阶段清除。
+        _logger.LogWarning("[启动复核][通过] 所有条件满足，开始检测；DT120 将在检测完成并处理保存弹窗后清除");
         _inspectionStarted = true;
 
         // 锁定当前机种、方案、作业员
@@ -1267,6 +1311,53 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 半实物联调临时入口：启动按钮写 DT120=1。
+    /// 真实 PLC 接入但现场启动按钮链路未完整联通时，
+    /// 由上位机临时写 DT120=1 触发现有 PLC 轮询启动流程。
+    /// 正式整机联调后删除该按钮和命令，启动应由 PLC 或实体按钮触发。
+    /// </summary>
+    [RelayCommand]
+    private async Task TriggerSemiPhysicalStartAsync()
+    {
+        var result = await _plcDevice.RequestStartAsync(CancellationToken.None).ConfigureAwait(false);
+
+        if (!result.IsSuccess)
+        {
+            AddLog($"[半实物联调] 写入 DT120=1 失败：{result.Message}");
+            _logger.LogWarning("[半实物联调][启动诊断] 写入 DT120=1 失败：{Message}", result.Message);
+            return;
+        }
+
+        AddLog("[半实物联调] 已写入 DT120=1（启动信号）");
+
+        // 启动诊断：确认写入后运行页通过同一 PLC 读入口看到的信号快照。
+        // 这能区分“写成功但读失败/读回0/被复位停止急停信号截走”等现场问题。
+        var inputSnapshot = await _plcDevice.ReadMachineInputsAsync(CancellationToken.None).ConfigureAwait(false);
+        if (inputSnapshot.IsSuccess && inputSnapshot.Value != null)
+        {
+            var inputs = inputSnapshot.Value;
+            _logger.LogWarning(
+                "[半实物联调][启动诊断] 写入 DT120 后读回：DT120={DT120}, DT121={DT121}, DT122={DT122}, DT123={DT123}, DT302={DT302}, _inspectionStarted={Started}",
+                inputs.IsStartRequested ? 1 : 0,
+                inputs.IsResetRequested ? 1 : 0,
+                inputs.IsStopRequested ? 1 : 0,
+                inputs.IsEmergencyStop ? 1 : 0,
+                inputs.IsRelayActionCompleted ? 1 : 0,
+                _inspectionStarted);
+
+            AddLog($"[半实物联调] 启动诊断：DT120={(inputs.IsStartRequested ? 1 : 0)}, DT121={(inputs.IsResetRequested ? 1 : 0)}, DT122={(inputs.IsStopRequested ? 1 : 0)}, DT123={(inputs.IsEmergencyStop ? 1 : 0)}, DT302={(inputs.IsRelayActionCompleted ? 1 : 0)}");
+        }
+        else
+        {
+            _logger.LogWarning(
+                "[半实物联调][启动诊断] 写入 DT120 后读取 PLC 输入失败：{Message}",
+                inputSnapshot.Message);
+
+            AddLog($"[半实物联调] 启动诊断失败：读取 PLC 输入失败 - {inputSnapshot.Message}");
+        }
+    }
+
+    /// <summary>
     /// 半实物联调临时入口：复位按钮写 DT121=1。
     /// 真实 PLC 接入但现场复位按钮链路未完整联通时，
     /// 由上位机临时写 DT121=1 触发现有复位流程。
@@ -1275,8 +1366,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerSemiPhysicalResetAsync()
     {
-        AddLog("🔄 半实物联调：上位机写 DT121=1 触发复位");
-        await _plcDevice.RequestResetAsync().ConfigureAwait(false);
+        var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
+
+        if (result.IsSuccess)
+        {
+            AddLog("[半实物联调] 已写入 DT121=1（复位信号）");
+            _logger.LogWarning("[半实物联调][复位诊断] 已写入 DT121=1");
+        }
+        else
+        {
+            AddLog($"[半实物联调] 写入 DT121=1 失败：{result.Message}");
+            _logger.LogWarning("[半实物联调][复位诊断] 写入 DT121=1 失败：{Message}", result.Message);
+        }
     }
 
     /// <summary>

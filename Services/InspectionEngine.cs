@@ -167,10 +167,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
 
                     UpdateCheckpoint(i, "WaitDt302");
-                    if (_config.BypassRelayActionCompletedForSemiPhysicalTest)
+                    if (_config.SkipDt302Wait)
                     {
                         _logger.LogWarning(
-                            "[检测流程][审计][{INS}] 半实物临时旁路 DT302：点位 {Name} 已跳过继电器动作完成等待。正式整机联调必须关闭 Hardware:BypassRelayActionCompletedForSemiPhysicalTest。",
+                            "[检测流程][审计][{INS}] 半实物临时旁路 DT302：点位 {Name} 已跳过继电器动作完成等待。正式整机联调必须关闭 Hardware:SkipDt302Wait。",
                             inspectionId, testPoint.Name);
                         LogInfo($"半实物调试：点位 {testPoint.Name} 已跳过 DT302 等待");
                     }
@@ -320,9 +320,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     firstNgIndex >= 0 ? firstNgIndex : null,
                     _inspectionCts.Token).ConfigureAwait(false);
 
-                // 通知 PLC 上位机检测结束，清 DT234
-                await _plcDevice.ClearPcReadyAsync(_inspectionCts.Token).ConfigureAwait(false);
-                await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
+                // 正常完成时只写 DT304/DT305 最终结果。
+                // DT120/DT234 的正常完成收口必须等用户处理保存弹窗后由 TestPageViewModel 执行。
                 totalSw.Stop();
                 LogBeat(inspectionId, "单件总耗时", totalSw.ElapsedMilliseconds);
                 InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
@@ -816,9 +815,21 @@ public class InspectionConfig
     /// <summary>导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。默认 10Ω，范围 1~1000Ω。</summary>
     public double ContinuityThresholdOhm { get; set; } = 10.0;
 
-    /// <summary>半实物联调临时开关：真实 PLC/万用表已连接但无夹具或继电器反馈时，可跳过 DT302 等待。
-    /// 正式整机联调和出厂版本必须保持 false，确保读取万用表前一定收到 PLC 的 DT302=1。
+    /// <summary>跳过 DT302 继电器动作完成等待。仅半实物联调无夹具或 DT302 反馈未接通时使用。</summary>
+    public bool SkipDt302Wait { get; set; }
+
+    /// <summary>
+    /// 合并半实物 DT302 旁路新旧配置名。
+    /// 新配置和旧兼容配置任一为 true 时，本轮按跳过 DT302 等待处理。
     /// </summary>
+    public static bool ResolveSkipDt302Wait(bool skipDt302Wait, bool legacyBypassRelayActionCompleted)
+        => skipDt302Wait || legacyBypassRelayActionCompleted;
+
+    /// <summary>
+    /// 半实物联调临时开关（已废弃，保留一轮兼容，下一轮清理时删除）。
+    /// 请改用 SkipDt302Wait。
+    /// </summary>
+    [Obsolete("请改用 SkipDt302Wait", false)]
     public bool BypassRelayActionCompletedForSemiPhysicalTest { get; set; }
 
     /// <summary>

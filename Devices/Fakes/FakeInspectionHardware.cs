@@ -99,6 +99,7 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     public Task<PlcOperationResult> ClearStartRequestAsync(CancellationToken ct = default)
     {
         WriteRegister(PlcAddressMap.StartSignal, 0);
+        _logger.LogWarning("[Fake][审计] 已清除 DT120=0。");
         return Task.FromResult(PlcOperationResult.Success("Fake DT120 已清除"));
     }
 
@@ -109,13 +110,24 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     }
 
     /// <summary>
-    /// Fake 上位机请求复位（写 DT121=1）。
+    /// Fake 上位机请求启动（写 DT120=1）。
     /// 半实物联调临时入口，正式整机联调后删除。
+    /// </summary>
+    public Task<PlcOperationResult> RequestStartAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.StartSignal, 1);
+        _logger.LogWarning("[Fake][审计] 已写入 DT120=1。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT120=1"));
+    }
+
+    /// <summary>
+    /// Fake 上位机请求复位（写 DT121=1）。
+    /// 半实物/现场临时入口。如果后续复位改为只由实体按钮触发，应删除。
     /// </summary>
     public Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default)
     {
         WriteRegister(PlcAddressMap.ResetSignal, 1);
-        _logger.LogWarning("[Fake硬件][审计] Fake 写 DT121=1（半实物联调临时入口，后续删除）");
+        _logger.LogWarning("[Fake][审计] 已写入 DT121=1。");
         return Task.FromResult(PlcOperationResult.Success("Fake DT121=1"));
     }
 

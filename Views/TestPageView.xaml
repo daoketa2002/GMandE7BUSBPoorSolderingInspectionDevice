@@ -631,7 +631,9 @@
                     <Grid.RowDefinitions>
                         <!-- 主操作区：终了按钮 -->
                         <RowDefinition Height="Auto"/>
-                        <!-- 调试工具区（可折叠） -->
+                        <!-- 非 Fake 操作区：启动(DT120)、复位(DT121) -->
+                        <RowDefinition Height="Auto"/>
+                        <!-- 调试工具区（可折叠，仅 Fake 模式） -->
                         <RowDefinition Height="Auto"/>
                         <!-- 弹性空白，将按钮推到顶部 -->
                         <RowDefinition Height="*"/>
@@ -672,7 +674,7 @@
                     </Button>
 
                     <!-- ═══════ 调试工具区：可折叠面板 ═══════ -->
-                    <Expander Grid.Row="1" IsExpanded="False" Margin="0,0,0,0"
+                    <Expander Grid.Row="2" IsExpanded="False" Margin="0,0,0,0"
                               Visibility="{Binding IsFakeMode, Converter={StaticResource BoolToVisibilityConverter}}">
                         <Expander.Header>
                             <TextBlock Text="🔧 调试工具" FontSize="13" FontWeight="SemiBold"
@@ -718,13 +720,23 @@
                         </Border>
                     </Expander>
 
-                    <!-- 半实物联调临时复位按钮：非 Fake 模式显示，写 DT121=1 -->
-                    <Button Grid.Row="2" Content="复位"
-                            Command="{Binding TriggerSemiPhysicalResetCommand}"
-                            Visibility="{Binding IsRealSemiPhysicalMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                            Style="{StaticResource DebugButtonStyle}"
-                            Background="#8E44AD"
-                            ToolTip="半实物联调临时入口：上位机写 DT121=1 模拟复位，正式整机联调后删除"/>
+                    <!-- ═══════ 非 Fake 操作区：启动(DT120) / 复位(DT121) ═══════ -->
+                    <Border Grid.Row="1" BorderThickness="0" Padding="0,0,0,4"
+                            Visibility="{Binding IsRealModeResetVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <UniformGrid Rows="1" Columns="2" Margin="0,0,0,0">
+                            <Button Content="启动(DT120)"
+                                    Command="{Binding TriggerSemiPhysicalStartCommand}"
+                                    Visibility="{Binding IsSemiPhysicalDebugMode, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Style="{StaticResource DebugButtonStyle}"
+                                    Background="#2E86DE"
+                                    ToolTip="半实物联调临时入口：上位机写 DT120=1 模拟启动，正式整机联调后删除"/>
+                            <Button Content="复位(DT121)"
+                                    Command="{Binding TriggerSemiPhysicalResetCommand}"
+                                    Style="{StaticResource DebugButtonStyle}"
+                                    Background="#8E44AD"
+                                    ToolTip="半实物/现场临时入口：上位机写 DT121=1 发起复位，如后续改为实体按钮触发应删除"/>
+                        </UniformGrid>
+                    </Border>
                 </Grid>
             </ScrollViewer>
         </Grid>

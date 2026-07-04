@@ -38,13 +38,21 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual("OK", InspectionEngine.JudgeContinuityResult(0.5, "SHORT", 10.0));
         AssertEqual("NG", InspectionEngine.JudgeContinuityResult(10.5, "SHORT", 10.0));
     }),
-    ("半实物 DT302 旁路默认关闭且可显式开启", () =>
+    ("半实物 DT302 旁路默认关闭且可显式开启（新名 SkipDt302Wait）", () =>
     {
         var config = new InspectionConfig();
-        AssertEqual(false, config.BypassRelayActionCompletedForSemiPhysicalTest);
+        AssertEqual(false, config.SkipDt302Wait);
 
-        config.BypassRelayActionCompletedForSemiPhysicalTest = true;
-        AssertEqual(true, config.BypassRelayActionCompletedForSemiPhysicalTest);
+        config.SkipDt302Wait = true;
+        AssertEqual(true, config.SkipDt302Wait);
+        AssertEqual(false, config.BypassRelayActionCompletedForSemiPhysicalTest); // 旧属性不受影响
+    }),
+    ("半实物 DT302 旁路配置优先读取新名并兼容旧名", () =>
+    {
+        AssertEqual(false, InspectionConfig.ResolveSkipDt302Wait(false, false));
+        AssertEqual(true, InspectionConfig.ResolveSkipDt302Wait(true, false));
+        AssertEqual(true, InspectionConfig.ResolveSkipDt302Wait(false, true));
+        AssertEqual(true, InspectionConfig.ResolveSkipDt302Wait(true, true));
     }),
     ("单项 NG 后续默认继续测试", () =>
     {

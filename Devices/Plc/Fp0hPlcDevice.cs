@@ -175,11 +175,11 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
 
     /// <summary>
     /// 清除 PLC 启动请求（写 DT120 = 0）。
-    /// PC 读到 DT120=1 并接管启动后调用，防止同一信号重复触发检测。
+    /// 正常完成时由运行页面在保存/取消弹窗关闭后调用；启动失败或复位收口也可调用。
     /// </summary>
     public async Task<PlcOperationResult> ClearStartRequestAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[PLC动作][审计] PC 清除 DT120 启动请求 → 写 DT120 = 0");
+        _logger.LogWarning("[PLC动作][审计] PC 清除 DT120 启动请求 -> 写 DT120 = 0");
         return await WriteRegisterSingleAsync("DT120(启动请求)", _addressMap.StartRequestRegister, 0, ct).ConfigureAwait(false);
     }
 
@@ -194,14 +194,26 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 上位机请求启动（写 DT120=1）。
+    /// 半实物联调临时入口：真实 PLC 接入但现场启动按钮链路未完整联通时，
+    /// 由上位机临时写 DT120=1 触发现有 PLC 轮询启动流程。
+    /// 正式整机联调后应删除该方法，启动应由 PLC 或实体按钮触发。
+    /// </summary>
+    public async Task<PlcOperationResult> RequestStartAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT120=1，模拟 PLC 启动请求。正式整机联调后删除该入口。");
+        return await WriteRegisterSingleAsync("DT120(启动请求)", _addressMap.StartRequestRegister, 1, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 上位机请求复位（写 DT121=1）。
-    /// 半实物联调临时入口：真实 PLC 接入但现场复位按钮链路未完整联通时，
-    /// 由上位机临时写 DT121=1 触发现有复位流程。
-    /// 正式整机联调后应删除该方法，复位应由 PLC/实体按钮触发。
+    /// 半实物/现场临时入口：真实 PLC 接入但需要上位机发起复位请求时，
+    /// 由上位机写 DT121=1 触发现有 PLC 轮询复位流程。
+    /// 如果后续复位改为只由实体按钮触发，应删除该入口。
     /// </summary>
     public async Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT121=1，模拟 PLC 复位请求");
+        _logger.LogWarning("[半实物联调][审计] 上位机写入 DT121=1，发起复位请求。若后续改为实体按钮复位，应删除该入口。");
         return await WriteRegisterSingleAsync("DT121(复位请求)", _addressMap.ResetRegister, 1, ct).ConfigureAwait(false);
     }
 
