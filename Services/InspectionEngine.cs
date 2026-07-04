@@ -10,6 +10,25 @@ using Microsoft.Extensions.Logging;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services;
 
 /// <summary>
+/// 万用表测量值分类，决定后续判定和中止策略。
+/// </summary>
+public enum MeasurementValueKind
+{
+    /// <summary>正常非负有限数值</summary>
+    Normal,
+    /// <summary>+Infinity 或超量程大数（>ResistanceMaxValue），判定为 NG 但不中止</summary>
+    PositiveInfinityOrOverRange,
+    /// <summary>NaN，判定为 NG 且中止</summary>
+    NaN,
+    /// <summary>-Infinity，判定为 NG 且中止</summary>
+    NegativeInfinity,
+    /// <summary>负电阻值，判定为 NG 且中止</summary>
+    NegativeResistance,
+    /// <summary>无法解析，中止</summary>
+    ParseFailed
+}
+
+/// <summary>
 /// GM/E78 USB 焊接不良检查流程引擎。
 /// 负责最小闭环：写 PLC 每脚独立选择区 DT130~DT185、等待 DT302、读取万用表、判定、维护内存断点。
 /// </summary>
@@ -211,12 +230,27 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     UpdateCheckpoint(i, "ReadMultimeter");
                     string rawText = await _multimeterDevice.ReadResistanceRawAsync(_inspectionCts.Token).ConfigureAwait(false);
                     _logger.LogWarning("[检测流程][审计][{INS}] GDM-9060 READ? RawText={RawText}", inspectionId, rawText);
-                    MeasurementResult measurement = ParseMeasurement(rawText);
+                    MeasurementResult measurement = ParseMeasurementForInspection(rawText);
 
-                    if (!measurement.IsValid)
+                    // ── 无效值中止分支（NaN / -Infinity / 负电阻值 / 解析失败）──
+                    // 当前项标记为 NG，写 PLC、回调 StepCompleted，再中止整轮检测
+                    if (measurement.ShouldAbortInspection)
                     {
-                        await AbortCurrentRunAsync(result, measurement.ErrorMessage, InspectionState.Aborted).ConfigureAwait(false);
+                        testPoint.ActualValue = measurement.Value;
+                        testPoint.Judgment = "NG";
+                        testPoint.IsTested = true;
+                        failCount++;
+                        if (firstNgIndex < 0) firstNgIndex = i;
+
+                        _logger.LogWarning("[检测流程][审计][INS-{INS}] 万用表返回异常值 {Kind}：点位 {Name} 值={RawText}，判定 NG，检测中止",
+                            inspectionId, measurement.ValueKind, testPoint.Name, measurement.RawValue);
+
+                        await _plcDevice.WritePointResultAsync(i, false, _inspectionCts.Token).ConfigureAwait(false);
                         StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
+                        AddFinishedResult(testPoint);
+
+                        await AbortCurrentRunAsync(result, $"万用表返回{measurement.ValueKind}：点位 {testPoint.Name} 判定 NG，检测中止", InspectionState.Aborted).ConfigureAwait(false);
+                        InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                         return result;
                     }
 
@@ -448,6 +482,94 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         return FailedMeasurement($"无法解析万用表返回值：{rawText}", rawText);
     }
 
+    /// <summary>
+    /// 万用表测量值解析与分类。public static 便于最小测试直接覆盖。
+    /// 按无效测量值方案分类，填充 ValueKind / ShouldAbortInspection / DisplayTextOverride。
+    /// </summary>
+    public static MeasurementResult ParseMeasurementForInspection(string rawText)
+    {
+        string text = rawText.Trim();
+
+        // OPEN / SHORT 保留现有兼容
+        if (string.Equals(text, "OPEN", StringComparison.OrdinalIgnoreCase))
+            return new MeasurementResult { RawValue = rawText, Value = TemporaryOpenThresholdOhm, IsValid = true, ValueKind = MeasurementValueKind.Normal };
+
+        if (string.Equals(text, "SHORT", StringComparison.OrdinalIgnoreCase))
+            return new MeasurementResult { RawValue = rawText, Value = 0, IsValid = true, ValueKind = MeasurementValueKind.Normal };
+
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+        {
+            // 无法解析 → 中止
+            return new MeasurementResult
+            {
+                RawValue = rawText, Value = 0, IsValid = false,
+                ValueKind = MeasurementValueKind.ParseFailed,
+                ShouldAbortInspection = true,
+                ErrorMessage = $"无法解析万用表返回值：{rawText}",
+                DisplayTextOverride = "NG"
+            };
+        }
+
+        // ── 以下按 double 值分类 ──
+
+        // NaN → 中止
+        if (double.IsNaN(value))
+            return new MeasurementResult
+            {
+                RawValue = rawText, Value = value, IsValid = true,
+                ValueKind = MeasurementValueKind.NaN,
+                ShouldAbortInspection = true,
+                DisplayTextOverride = "NG"
+            };
+
+        // -Infinity → 中止
+        if (double.IsNegativeInfinity(value))
+            return new MeasurementResult
+            {
+                RawValue = rawText, Value = value, IsValid = true,
+                ValueKind = MeasurementValueKind.NegativeInfinity,
+                ShouldAbortInspection = true,
+                DisplayTextOverride = "NG"
+            };
+
+        // +Infinity → 不中止，判 NG
+        if (double.IsPositiveInfinity(value))
+            return new MeasurementResult
+            {
+                RawValue = rawText, Value = value, IsValid = true,
+                ValueKind = MeasurementValueKind.PositiveInfinityOrOverRange,
+                ShouldAbortInspection = false,
+                DisplayTextOverride = "NG"
+            };
+
+        // 负电阻值 → 中止（电阻测量不应为负）
+        if (value < 0)
+            return new MeasurementResult
+            {
+                RawValue = rawText, Value = value, IsValid = true,
+                ValueKind = MeasurementValueKind.NegativeResistance,
+                ShouldAbortInspection = true,
+                DisplayTextOverride = "NG"
+            };
+
+        // 超量程大数（>ResistanceMaxValue）→ 不中止，判 NG
+        if (value > InputValidationHelper.ResistanceMaxValue)
+            return new MeasurementResult
+            {
+                RawValue = rawText, Value = value, IsValid = true,
+                ValueKind = MeasurementValueKind.PositiveInfinityOrOverRange,
+                ShouldAbortInspection = false,
+                DisplayTextOverride = "NG"
+            };
+
+        // 正常非负有限数
+        return new MeasurementResult
+        {
+            RawValue = rawText, Value = value, IsValid = true,
+            ValueKind = MeasurementValueKind.Normal
+        };
+    }
+
     public static string ResolveContinuityState(double resistanceOhm, double thresholdOhm)
     {
         if (thresholdOhm < 1.0 || thresholdOhm > 1000.0)
@@ -468,6 +590,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
     private static string JudgeResult(MeasurementResult measurement, TestPointConfig testPoint)
     {
+        // 超量程大数 / +Infinity 直接判 NG，不进入阈值比较
+        if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
+            return "NG";
+
         string raw = measurement.RawValue.Trim();
 
         if (testPoint.CheckMode == CheckModeConstants.Resistance)

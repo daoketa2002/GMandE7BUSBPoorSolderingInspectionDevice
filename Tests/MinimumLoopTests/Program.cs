@@ -63,6 +63,56 @@ var tests = new List<(string Name, Action Body)>
         // 验证 InspectionStopReason 有 SingleItemNg
         var reason = InspectionStopReason.SingleItemNg;
         AssertEqual("SingleItemNg", reason.ToString());
+    }),
+    ("万用表异常值分类符合运行策略", () =>
+    {
+        // NaN → 中止，显示 NG
+        var nan = InspectionEngine.ParseMeasurementForInspection("NaN");
+        AssertEqual("NG", nan.DisplayTextOverride);
+        AssertEqual(true, nan.ShouldAbortInspection);
+        AssertEqual(MeasurementValueKind.NaN, nan.ValueKind);
+
+        // -Infinity → 中止，显示 NG
+        var negInf = InspectionEngine.ParseMeasurementForInspection("-Infinity");
+        AssertEqual("NG", negInf.DisplayTextOverride);
+        AssertEqual(true, negInf.ShouldAbortInspection);
+        AssertEqual(MeasurementValueKind.NegativeInfinity, negInf.ValueKind);
+
+        // 负电阻值 → 中止，显示 NG
+        var neg = InspectionEngine.ParseMeasurementForInspection("-1");
+        AssertEqual("NG", neg.DisplayTextOverride);
+        AssertEqual(true, neg.ShouldAbortInspection);
+        AssertEqual(MeasurementValueKind.NegativeResistance, neg.ValueKind);
+
+        // +Infinity → 不中止，显示 NG
+        var posInf = InspectionEngine.ParseMeasurementForInspection("+Infinity");
+        AssertEqual("NG", posInf.DisplayTextOverride);
+        AssertEqual(false, posInf.ShouldAbortInspection);
+        AssertEqual(MeasurementValueKind.PositiveInfinityOrOverRange, posInf.ValueKind);
+
+        // 超量程大数 → 不中止，显示 NG
+        var overRange = InspectionEngine.ParseMeasurementForInspection("9.9E37");
+        AssertEqual("NG", overRange.DisplayTextOverride);
+        AssertEqual(false, overRange.ShouldAbortInspection);
+        AssertEqual(MeasurementValueKind.PositiveInfinityOrOverRange, overRange.ValueKind);
+
+        // OPEN → 正常，不中止
+        var open = InspectionEngine.ParseMeasurementForInspection("OPEN");
+        AssertEqual(MeasurementValueKind.Normal, open.ValueKind);
+        AssertEqual(false, open.ShouldAbortInspection);
+        AssertEqual(true, open.IsValid);
+
+        // SHORT → 正常，不中止
+        var shortVal = InspectionEngine.ParseMeasurementForInspection("SHORT");
+        AssertEqual(MeasurementValueKind.Normal, shortVal.ValueKind);
+        AssertEqual(false, shortVal.ShouldAbortInspection);
+        AssertEqual(true, shortVal.IsValid);
+
+        // 正常数值 → 正常，不中止
+        var normal = InspectionEngine.ParseMeasurementForInspection("100.5");
+        AssertEqual(MeasurementValueKind.Normal, normal.ValueKind);
+        AssertEqual(false, normal.ShouldAbortInspection);
+        AssertEqual(true, normal.IsValid);
     })
 };
 

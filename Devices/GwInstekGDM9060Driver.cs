@@ -2,6 +2,7 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
@@ -213,6 +214,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task DisconnectAsync()
         {
+            // 兜底：断开前尽力退出远程控制，失败不阻断断开流程
+            await ReleaseToLocalAsync(CancellationToken.None).ConfigureAwait(false);
+
             await _commandLock.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -594,6 +598,47 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await SendCommandAsync("*RST", ct).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 恢复万用表为远程可控的 2 线电阻空闲态。
+        /// 指令序列：ABOR → *CLS → CONF:RES → SENS:RES:RANG:AUTO ON → SAMP:COUN 1 → TRIG:COUN 1 → TRIG:SOUR IMM
+        /// </summary>
+        public async Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                await SendCommandAsync("ABOR", ct).ConfigureAwait(false);
+                await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
+                await SendCommandAsync("CONF:RES", ct).ConfigureAwait(false);
+                await SendCommandAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
+                await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+                await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+                await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                _logger.LogInformation("万用表已恢复为远程 2 线电阻空闲态");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "万用表恢复空闲态失败");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 退出远程控制，返回本地面板操作。SCPI: SYST:LOC
+        /// </summary>
+        public async Task ReleaseToLocalAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                await SendCommandAsync("SYST:LOC", ct).ConfigureAwait(false);
+                _logger.LogInformation("万用表已退出远程控制，返回本地面板操作");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "万用表退出远程控制时异常（不影响主流程）");
+            }
+        }
+
         #endregion
 
         #region 断线重连（修改：使用属性而非硬编码）
@@ -723,6 +768,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         public bool IsValid { get; set; }
         public string ErrorMessage { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; } = DateTime.Now;
+
+        /// <summary>测量值分类，默认 Normal</summary>
+        public MeasurementValueKind ValueKind { get; set; } = MeasurementValueKind.Normal;
+        /// <summary>
+        /// 是否应中止检测。
+        /// true：NaN / -Infinity / 负电阻值 / 解析失败 → 当前项置 NG 后中止整轮。
+        /// false：超量程大数 / +Infinity → 正常判 NG，按 ContinueTestingAfterNg 决定是否继续。
+        /// </summary>
+        public bool ShouldAbortInspection { get; set; }
+        /// <summary>
+        /// 显示文本覆写。
+        /// 不为空时运行页检查结果列直接显示此值（如 "NG"），避免超长数字进入格式化。
+        /// </summary>
+        public string DisplayTextOverride { get; set; } = string.Empty;
 
         public override string ToString() => IsValid
             ? InputValidationHelper.FormatResistanceValue(Value)

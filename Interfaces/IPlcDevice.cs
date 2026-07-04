@@ -42,6 +42,14 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> ClearResetRequestAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 上位机请求复位（写 DT121=1）。
+    /// 半实物联调临时入口：真实 PLC 接入但现场复位按钮链路未完整联通时，
+    /// 由上位机临时写 DT121=1 触发现有复位流程。
+    /// 正式整机联调后应删除，复位应由 PLC/实体按钮触发。
+    /// </summary>
+    Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：DT130~DT185 每脚独立选择区）。
     /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。
     /// 极性编码：正极=0，负极=1。

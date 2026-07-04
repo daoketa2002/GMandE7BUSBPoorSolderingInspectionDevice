@@ -109,6 +109,17 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     }
 
     /// <summary>
+    /// Fake 上位机请求复位（写 DT121=1）。
+    /// 半实物联调临时入口，正式整机联调后删除。
+    /// </summary>
+    public Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.ResetSignal, 1);
+        _logger.LogWarning("[Fake硬件][审计] Fake 写 DT121=1（半实物联调临时入口，后续删除）");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT121=1"));
+    }
+
+    /// <summary>
     /// 写入当前测试点的两个引脚到 Fake PLC（最新地址表：每引脚独立选择区）。
     /// 模拟写入引脚选择区，200ms 后置 DT302=1 表示继电器动作完成。
     /// </summary>
@@ -285,6 +296,26 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     {
         _logger.LogWarning("[Fake硬件][审计] Fake 万用表切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
         return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// Fake：恢复万用表为远程 2 线电阻空闲态。
+    /// 只记录日志，不操作真实硬件。
+    /// </summary>
+    public Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[Fake硬件][审计] Fake 万用表已恢复为远程 2 线电阻空闲态");
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// Fake：退出远程控制。
+    /// 只记录日志，不操作真实硬件。
+    /// </summary>
+    public Task ReleaseToLocalAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[Fake硬件][审计] Fake 万用表已退出远程控制");
+        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -30,5 +30,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
         /// 判定逻辑由 InspectionEngine 负责，驱动层不做业务判断。
         /// </summary>
         Task<string> ReadResistanceRawAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// 恢复万用表为远程可控的 2 线电阻空闲态。
+        /// 指令：ABOR; *CLS; CONF:RES; SENS:RES:RANG:AUTO ON; SAMP:COUN 1; TRIG:COUN 1; TRIG:SOUR IMM
+        /// 调用时机：正常检测结束且保存/取消弹窗关闭后。
+        /// </summary>
+        Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// 退出远程控制，返回本地面板操作。
+        /// 指令：SYST:LOC
+        /// 调用时机：终了、退出运行页、急停、异常中止、程序关闭。
+        /// </summary>
+        Task ReleaseToLocalAsync(CancellationToken ct = default);
     }
 }

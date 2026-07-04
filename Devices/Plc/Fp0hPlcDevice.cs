@@ -194,6 +194,18 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 上位机请求复位（写 DT121=1）。
+    /// 半实物联调临时入口：真实 PLC 接入但现场复位按钮链路未完整联通时，
+    /// 由上位机临时写 DT121=1 触发现有复位流程。
+    /// 正式整机联调后应删除该方法，复位应由 PLC/实体按钮触发。
+    /// </summary>
+    public async Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT121=1，模拟 PLC 复位请求");
+        return await WriteRegisterSingleAsync("DT121(复位请求)", _addressMap.ResetRegister, 1, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：每引脚独立选择区）。
     /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。
     /// 如 A4-A5 写入：DT136=1, DT137=极性, DT142=1, DT143=极性。

@@ -17,6 +17,7 @@ using Microsoft.Extensions.Configuration;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Threading;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
@@ -69,6 +70,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     // 硬件服务
 
     private readonly IDeviceConnectionManager _deviceManager;
+    private readonly IMultimeterDevice _multimeterDevice;
     private readonly IPlcDevice _plcDevice;
     private readonly InspectionEngine? _inspectionEngine;
 
@@ -133,6 +135,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         IScannerBarcodeService scannerBarcodeService,
         ITestRecordStorage testRecordStorage,
         IPlcDevice plcDevice,
+        IMultimeterDevice multimeterDevice,
         IConfiguration configuration,
         InspectionEngine? inspectionEngine = null)
     {
@@ -146,6 +149,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
+        _multimeterDevice = multimeterDevice ?? throw new ArgumentNullException(nameof(multimeterDevice));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _inspectionEngine = inspectionEngine;
 
@@ -326,6 +330,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     [ObservableProperty]
     private bool _isInputEnabled = true;
+
+    /// <summary>是否为 Fake 调试模式（_plcDevice 为 FakeInspectionHardware）</summary>
+    public bool IsFakeMode => _plcDevice is FakeInspectionHardware;
+    /// <summary>是否为半实物联调模式（非 Fake，接入了真实 PLC）</summary>
+    public bool IsRealSemiPhysicalMode => !IsFakeMode;
 
     /// <summary>
     /// 判断界面上下文是否已经具备人工启动条件。
@@ -670,6 +679,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             _isShowingSaveDialog = false;
         }
+
+        // 恢复万用表为远程可控的 2 线电阻空闲态，等待下次检测
+        await _multimeterDevice.PrepareIdleResistanceModeAsync().ConfigureAwait(false);
+        _logger.LogInformation("[万用表收尾] 万用表已恢复为远程 2 线电阻空闲态");
     }
 
     /// <summary>
@@ -760,6 +773,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         StopPlcPolling();
         ResetToReadyState();
+
+        // 终了：万用表退出远程控制，返回本地面板操作
+        await _multimeterDevice.ReleaseToLocalAsync().ConfigureAwait(false);
+        _logger.LogInformation("[万用表收尾] 终了按钮触发，万用表已退出远程控制");
 
         await _navigationService.NavigateToAsync<MainMenuView>();
     }
@@ -1250,6 +1267,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 半实物联调临时入口：复位按钮写 DT121=1。
+    /// 真实 PLC 接入但现场复位按钮链路未完整联通时，
+    /// 由上位机临时写 DT121=1 触发现有复位流程。
+    /// 正式整机联调后删除该命令和按钮，复位应由 PLC/实体按钮触发。
+    /// </summary>
+    [RelayCommand]
+    private async Task TriggerSemiPhysicalResetAsync()
+    {
+        AddLog("🔄 半实物联调：上位机写 DT121=1 触发复位");
+        await _plcDevice.RequestResetAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 在后台线程执行检测（异步非阻塞 UI）。
     /// </summary>
     private async Task RunInspectionAsync(string barcode, string modelName, string operatorName)
@@ -1447,6 +1477,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     private static string FormatMeasurementResult(MeasurementResult measurement, TestPointConfig testPoint)
     {
+        // DisplayTextOverride 优先：异常值直接显示 "NG"，避免超长数字进入格式化
+        if (!string.IsNullOrWhiteSpace(measurement.DisplayTextOverride))
+            return measurement.DisplayTextOverride;
+
         if (!measurement.IsValid)
             return "测量失败";
 
@@ -1476,6 +1510,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (e.Result.IsAborted)
             {
                 AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
+
+                // 异常中止：万用表退出远程控制
+                await _multimeterDevice.ReleaseToLocalAsync().ConfigureAwait(false);
+                _logger.LogWarning("[万用表收尾] 检测异常中止，万用表已退出远程控制");
                 return;
             }
 
@@ -1528,7 +1566,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         AddLog("正在等待 PLC 启动信号...");
     }
 
-    public Task OnNavigatedFromAsync()
+    public async Task OnNavigatedFromAsync()
     {
         _logger.LogInformation("离开运行界面");
         StopPlcPolling();
@@ -1538,7 +1576,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
         }
 
-        return Task.CompletedTask;
+        // 离开运行页：万用表退出远程控制
+        await _multimeterDevice.ReleaseToLocalAsync().ConfigureAwait(false);
+        _logger.LogInformation("[万用表收尾] 离开运行界面，万用表已退出远程控制");
     }
 
     public Task<bool> CanNavigateFromAsync()
