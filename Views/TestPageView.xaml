@@ -298,8 +298,11 @@
                                     <DataTrigger Binding="{Binding UiState}" Value="Testing">
                                         <Setter Property="Background" Value="#F39C12"/>
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding UiState}" Value="PendingSave">
-                                        <Setter Property="Background" Value="#3498DB"/>
+                                    <DataTrigger Binding="{Binding UiState}" Value="CompletedPass">
+                                        <Setter Property="Background" Value="#27AE60"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding UiState}" Value="CompletedFail">
+                                        <Setter Property="Background" Value="#E74C3C"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Paused">
                                         <Setter Property="Background" Value="#F1C40F"/>
@@ -334,8 +337,11 @@
                                         <DataTrigger Binding="{Binding UiState}" Value="Testing">
                                             <Setter Property="Text" Value="测试中"/>
                                         </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="PendingSave">
-                                            <Setter Property="Text" Value="待保存"/>
+                                        <DataTrigger Binding="{Binding UiState}" Value="CompletedPass">
+                                            <Setter Property="Text" Value="OK"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding UiState}" Value="CompletedFail">
+                                            <Setter Property="Text" Value="NG"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Paused">
                                             <Setter Property="Text" Value="已停止"/>

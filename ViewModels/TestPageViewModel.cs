@@ -29,16 +29,19 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
+// 修改后：
 /// <summary>
-/// 运行界面 UI 状态枚举（8种，直接服务运行页"测试状态"大面板显示）
-/// Ready:        待机中 — 信息不全或设备未就绪
-/// CanStart:     可启动 — 人工启动条件满足
-/// Testing:      测试中 — 检测引擎运行中
-/// Paused:       已停止 — DT122 停止，保留断点
-/// EmergencyStop:急停中 — DT123 急停，必须复位
-/// Resetting:    复位中 — DT121 复位处理中
-/// PendingSave:  待保存 — 检测完成等待保存
-/// Error:        异常 — 板离或不可继续错误
+/// 运行界面 UI 状态枚举
+/// Ready:          待机中 — 信息不全或设备未就绪
+/// CanStart:       可启动 — 人工启动条件满足
+/// Testing:        测试中 — 检测引擎运行中
+/// Paused:         已停止 — DT122 停止，保留断点
+/// EmergencyStop:  急停中 — DT123 急停，必须复位
+/// Resetting:      复位中 — DT121 复位处理中
+/// CompletedPass:  检测完成-良品（OK）— 等待操作员保存/取消
+/// CompletedFail:  检测完成-不良（NG）— 等待操作员保存/取消
+/// Error:          异常 — 板离或不可继续错误
+/// SingleItemNgStopped: 单项 NG 后按系统设置停止本轮
 /// </summary>
 public enum TestUIState
 {
@@ -48,9 +51,9 @@ public enum TestUIState
     Paused,
     EmergencyStop,
     Resetting,
-    PendingSave,
+    CompletedPass,
+    CompletedFail,
     Error,
-    /// <summary>单项 NG 后按系统设置停止本轮，等待操作员复位或终了</summary>
     SingleItemNgStopped
 }
 
@@ -374,6 +377,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     #endregion
 
     #region 顶部右侧 - 测试状态显示
+    [ObservableProperty]
+    private string? _finalJudgment;
 
     [ObservableProperty]
     private TestUIState _uiState = TestUIState.Ready;
@@ -424,12 +429,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private void RefreshReadyOrCanStartState()
     {
         if (UiState == TestUIState.Testing
-            || UiState == TestUIState.Paused
-            || UiState == TestUIState.EmergencyStop
-            || UiState == TestUIState.Resetting
-            || UiState == TestUIState.PendingSave
-            || UiState == TestUIState.SingleItemNgStopped
-            || UiState == TestUIState.Error)
+        || UiState == TestUIState.Paused
+        || UiState == TestUIState.EmergencyStop
+        || UiState == TestUIState.Resetting
+        || UiState == TestUIState.CompletedPass
+        || UiState == TestUIState.CompletedFail
+        || UiState == TestUIState.SingleItemNgStopped
+        || UiState == TestUIState.Error)
             return;
 
         bool canStart = CanManualStartInspection();
@@ -693,9 +699,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _isShowingSaveDialog = true;
         try
         {
-            UiState = TestUIState.PendingSave;
-
             var finalResult = TestItems.All(i => i.Judgment == "OK") ? "OK" : "NG";
+            FinalJudgment = finalResult;
+
+            UiState = finalResult == "OK" ? TestUIState.CompletedPass : TestUIState.CompletedFail;
 
             TotalCount++;
             if (finalResult == "OK") PassCount++;
@@ -924,7 +931,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         string confirmMsg = UiState switch
         {
             TestUIState.Testing => "正在测试中，确定要终止当前测试并返回主菜单吗？\n未完成的测试数据将丢失！",
-            TestUIState.PendingSave => "有未保存的检测结果，返回将丢失本次所有数据，确定继续吗？",
+            TestUIState.CompletedPass or TestUIState.CompletedFail => "有未保存的检测结果，返回将丢失本次所有数据，确定继续吗？",
             TestUIState.EmergencyStop => "急停中返回主菜单将丢失当前数据，确定继续吗？",
             _ => "确定要返回主菜单吗？"
         };
@@ -1198,7 +1205,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>
     /// 处理 PLC DT120=1 启动请求。
-    /// 复核所有启动条件，通过后先写 DT234=1，再调用 RunInspectionAsync。
+    /// 复核所有启动条件，通过后先验证万用表通信，再写 DT234=1，最后调用 RunInspectionAsync。
     /// </summary>
     private async Task HandlePlcStartRequest()
     {
@@ -1208,12 +1215,23 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         string? rejectReason = ValidateStartConditions();
         if (rejectReason != null)
         {
-            // 复核不通过：清除 DT120，写 Warning 日志，提示操作员
             _logger.LogWarning("[启动复核][拒绝] {Reason}", rejectReason);
             _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
             _startupCleared = true;
             AddLog($"❌ {rejectReason}");
             _ = _notificationService.ShowWarningAsync(rejectReason, "启动拒绝");
+            return;
+        }
+
+        // ★ 新增：复核通过后验证万用表是否真正可通信（500ms 超时，不阻塞 UI 轮询）
+        bool dmmPingOk = await _multimeterDevice.PingAsync(CancellationToken.None).ConfigureAwait(false);
+        if (!dmmPingOk)
+        {
+            _logger.LogWarning("[启动复核][拒绝] 万用表通信验证失败（*IDN? 无响应），已清除 DT120");
+            await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
+            _startupCleared = true;
+            AddLog("❌ 启动失败：万用表无法通信，请检查网络连接后重试");
+            _ = _notificationService.ShowWarningAsync("万用表无法通信，请检查网络连接后重试。", "启动拒绝");
             return;
         }
 
@@ -1229,13 +1247,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _logger.LogWarning("[启动复核][通过] 所有条件满足，DT234=1 已写入，开始检测");
+        _logger.LogWarning("[启动复核][通过] 所有条件满足，万用表通信正常，DT234=1 已写入，开始检测");
         _inspectionStarted = true;
         _startSignalHandled = true;
         _ignoreInspectionCallbacksUntilNextStart = false;
         _isResetting = false;
         _waitDt120ReleaseAfterReset = false;
-        Interlocked.Exchange(ref _inspectionCompletedHandled, 0);  // ★ 新增：新一轮启动时重置原子标志
+        Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
 
         // 锁定当前机种、方案、作业员
         string lockedModel = ModelName;
@@ -1896,7 +1914,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
-            if (UiState == TestUIState.Testing || UiState == TestUIState.PendingSave)
+            if (UiState == TestUIState.Testing
+                || UiState == TestUIState.CompletedPass
+                || UiState == TestUIState.CompletedFail)
             {
                 AddLog("⚠️ 测试中禁止扫码，条码已忽略");
                 return;
@@ -1928,8 +1948,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             UiState = e.NewState switch
             {
                 InspectionState.Testing => TestUIState.Testing,
-                InspectionState.CompletedPass => TestUIState.PendingSave,
-                InspectionState.CompletedFail => TestUIState.PendingSave,
+                InspectionState.CompletedPass => TestUIState.CompletedPass,
+                InspectionState.CompletedFail => TestUIState.CompletedFail,
                 InspectionState.PausedByStop => TestUIState.Paused,
                 InspectionState.PausedByEmergencyStop => TestUIState.EmergencyStop,
                 InspectionState.StoppedBySingleItemNg => TestUIState.SingleItemNgStopped,
@@ -1948,8 +1968,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             SensorStatusText = e.NewState switch
             {
                 InspectionState.Testing => "测试中",
-                InspectionState.CompletedPass => "待保存",
-                InspectionState.CompletedFail => "待保存",
+                InspectionState.CompletedPass => "OK",
+                InspectionState.CompletedFail => "NG",
                 InspectionState.PausedByStop => "已停止",
                 InspectionState.PausedByEmergencyStop => "急停中",
                 InspectionState.StoppedBySingleItemNg => "NG",
@@ -1966,10 +1986,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             };
 
             IsInputEnabled = (UiState != TestUIState.Testing
-                              && UiState != TestUIState.PendingSave
-                              && UiState != TestUIState.EmergencyStop
-                              && UiState != TestUIState.Paused
-                              && UiState != TestUIState.SingleItemNgStopped);
+                  && UiState != TestUIState.CompletedPass
+                  && UiState != TestUIState.CompletedFail
+                  && UiState != TestUIState.EmergencyStop
+                  && UiState != TestUIState.Paused
+                  && UiState != TestUIState.SingleItemNgStopped);
         });
     }
 
@@ -2187,7 +2208,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     public Task<bool> CanNavigateFromAsync()
     {
-        if (UiState == TestUIState.Testing || UiState == TestUIState.PendingSave)
+        if (UiState == TestUIState.Testing
+            || UiState == TestUIState.CompletedPass
+            || UiState == TestUIState.CompletedFail)
             return Task.FromResult(false);
         return Task.FromResult(true);
     }

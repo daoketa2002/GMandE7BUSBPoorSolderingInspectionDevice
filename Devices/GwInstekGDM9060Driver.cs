@@ -17,6 +17,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
     /// 固纬 GDM-9060 万用表 SCPI 驱动
     /// 通讯方式：TCP Socket (LAN口)，SCPI指令集
     /// 默认端口：5025
+    /// 
+    /// 【指令发送架构】
+    /// SendSettingAsync  — 公共设置命令（只写不读），用于 *CLS、CONF:RES、TRIG:SOUR IMM 等
+    /// SendQueryAsync    — 公共查询命令（写后读取），用于 *IDN?、READ?、MEAS:CONT?、*OPC?、SYST:ERR? 等
+    /// 内部不再有自动分发逻辑，调用方明确意图。
     /// </summary>
     public class GwInstekGDM9060Driver : IMultimeterDevice, IAsyncDisposable, IDisposable
     {
@@ -48,7 +53,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
-        #region 属性（⭐新增：供 DeviceConnectionManager 注入配置）
+        #region 属性
 
         /// <summary>
         /// 万用表IP地址
@@ -93,7 +98,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 设备是否已连接（ICommunicationDevice 接口实现）
+        /// 设备是否已连接
         /// </summary>
         public bool IsConnected => _isConnected && _tcpClient?.Connected == true;
 
@@ -132,15 +137,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
-        #region 连接管理（⭐接口实现 + 内部重载）
+        #region 连接管理
 
-        /// <summary>
-        /// 连接到万用表（使用配置中的地址和端口）
-        /// </summary>
         /// <summary>
         /// 异步连接设备（ICommunicationDevice 接口实现）
         /// 使用已注入的 Host/Port/TimeoutMs 属性值进行连接
-        /// 由 DeviceConnectionManager 调用
         /// </summary>
         public async Task<bool> ConnectAsync(CancellationToken ct = default)
         {
@@ -148,7 +149,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 内部连接实现（保留原有逻辑，仅改为 private）
+        /// 内部连接实现
         /// </summary>
         private async Task<bool> ConnectInternalAsync(string host, int port,
             int timeoutMs, CancellationToken ct)
@@ -181,7 +182,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 await _tcpClient.ConnectAsync(host, port, linkedCts.Token).ConfigureAwait(false);
                 _networkStream = _tcpClient.GetStream();
 
-                // 发送 *IDN? 验证连接
+                // 发送 *IDN? 验证连接（使用内部查询方法，此时已持有锁）
                 var idn = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(idn))
                 {
@@ -191,7 +192,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 _isConnected = true;
                 _logger.LogInformation("万用表连接成功！设备信息: {IDN}", idn);
 
-                // ⭐ 通过统一接口事件通知状态变更
                 ConnectionStateChanged?.Invoke(this, true);
                 Notify(NotificationType.Success, $"万用表已连接: {idn}");
                 return true;
@@ -210,7 +210,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 断开连接（ICommunicationDevice 接口实现）
+        /// 断开连接
         /// </summary>
         public async Task DisconnectAsync()
         {
@@ -259,17 +259,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
 
-        // ============================================================
-        // 以下 SCPI 指令、测量功能、断线重连、通知辅助、
-        // IDisposable / IAsyncDisposable 实现
-        // ⭐ 完全保留原有代码，此处省略以节省篇幅
-        // 仅修改 HandleConnectionLossAsync 中的重连调用
-        // ============================================================
-        #region SCPI 核心指令
+        #region SCPI 核心指令（内部实现）
 
         /// <summary>
-        /// SCPI 查询命令（以 ? 结尾）：发送后读取响应直到 \n 终止或超时。
-        /// 命令结束符使用 \r\n（CRLF），与 GDM-9060 参考文档一致。
+        /// SCPI 查询命令（写后读取响应直到 \n 终止或超时）。
+        /// 内部方法，不加 _commandLock，由公共方法 SendQueryAsync 调用。
         /// </summary>
         private async Task<string> SendQueryInternalAsync(string command, CancellationToken ct)
         {
@@ -278,7 +272,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 throw new InvalidOperationException("万用表未连接");
             }
 
-            // 确保查询命令以 \r\n 结尾
+            // 统一追加 \r\n 终止符
             var cmd = command.EndsWith("\n") ? command : command + "\r\n";
             var cmdBytes = Encoding.ASCII.GetBytes(cmd);
 
@@ -324,10 +318,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// SCPI 设置命令（不以 ? 结尾）：只发送不等待响应。
-        /// GDM-9060 的 *CLS、CONF:RES、CONF:CONT、SENS、SAMP、TRIG 等设置命令
-        /// 正常不返回数据，不应等待响应以免每次超时。
-        /// 命令结束符使用 \r\n（CRLF）。
+        /// SCPI 设置命令（只写不读）。
+        /// 内部方法，不加 _commandLock，由公共方法 SendSettingAsync 调用。
         /// </summary>
         private async Task SendSettingInternalAsync(string command, CancellationToken ct)
         {
@@ -336,7 +328,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 throw new InvalidOperationException("万用表未连接");
             }
 
-            // 确保设置命令以 \r\n 结尾
+            // 统一追加 \r\n 终止符
             var cmd = command.EndsWith("\n") ? command : command + "\r\n";
             var cmdBytes = Encoding.ASCII.GetBytes(cmd);
 
@@ -346,39 +338,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             // 设置命令不读取响应——GDM-9060 对这些命令不返回数据
         }
 
+        #endregion
+
+        #region SCPI 公共指令方法
+
         /// <summary>
-        /// 发送SCPI命令（公共接口）。
-        /// 自动根据命令是否以 ? 结尾区分查询/设置：
-        /// - 查询命令（*IDN?、READ?、MEAS?、SYST:ERR?、*OPC? 等）：发送后读取响应
-        /// - 设置命令（*CLS、CONF:RES、CONF:CONT、SENS:...、SAMP:...、TRIG:... 等）：只发送不等待响应
+        /// 发送 SCPI 设置命令（只写不读）。
+        /// 用于 *CLS、CONF:RES、CONF:CONT、SENS:xxx、SAMP:xxx、TRIG:xxx、SYST:LOC 等。
+        /// 自动处理连接丢失和重连。
         /// </summary>
-        public async Task<string> SendCommandAsync(string command, CancellationToken ct = default)
+        /// <param name="command">SCPI 设置命令（不以 ? 结尾）</param>
+        /// <param name="ct">取消令牌</param>
+        public async Task SendSettingAsync(string command, CancellationToken ct = default)
         {
             if (!_isConnected)
             {
-                _logger.LogWarning("万用表未连接，无法发送命令");
-                return string.Empty;
+                _logger.LogWarning("万用表未连接，无法发送设置命令");
+                return;
             }
 
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                // 根据命令是否以 ? 结尾自动分发：查询命令读响应，设置命令只写
-                string trimmed = command.TrimEnd();
-                if (trimmed.EndsWith("?"))
-                {
-                    return await SendQueryInternalAsync(command, ct).ConfigureAwait(false);
-                }
-                else
-                {
-                    await SendSettingInternalAsync(command, ct).ConfigureAwait(false);
-                    return string.Empty;
-                }
+                await SendSettingInternalAsync(command, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "发送SCPI命令失败: {Command}", command);
-                Notify(NotificationType.Error, $"命令执行失败: {ex.Message}");
+                _logger.LogError(ex, "发送SCPI设置命令失败: {Command}", command);
+                Notify(NotificationType.Error, $"设置命令执行失败: {ex.Message}");
 
                 // 检测连接是否丢失
                 if (ex is IOException or SocketException)
@@ -391,6 +378,83 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             finally
             {
                 _commandLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// 发送 SCPI 查询命令（写后读取响应）。
+        /// 用于 *IDN?、READ?、MEAS?、MEAS:CONT?、*OPC?、SYST:ERR?、*TST? 等。
+        /// 自动处理连接丢失和重连。
+        /// </summary>
+        /// <param name="command">SCPI 查询命令（以 ? 结尾）</param>
+        /// <param name="ct">取消令牌</param>
+        /// <returns>设备返回的响应字符串，超时时返回空字符串</returns>
+        public async Task<string> SendQueryAsync(string command, CancellationToken ct = default)
+        {
+            if (!_isConnected)
+            {
+                _logger.LogWarning("万用表未连接，无法发送查询命令");
+                return string.Empty;
+            }
+
+            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                return await SendQueryInternalAsync(command, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "发送SCPI查询命令失败: {Command}", command);
+                Notify(NotificationType.Error, $"查询命令执行失败: {ex.Message}");
+
+                // 检测连接是否丢失
+                if (ex is IOException or SocketException)
+                {
+                    await HandleConnectionLossAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        #endregion
+
+        #region 模式切换验证
+
+        /// <summary>
+        /// 验证上一组设置命令是否执行完成且无错误。
+        /// 发送 *OPC? 等待 1 确认命令队列完成，再发 SYST:ERR? 确认无错误。
+        /// 【注意】此方法使用内部 SendQueryInternalAsync，不经过 _commandLock，
+        /// 由调用方（InitializeXxxModeAsync）确保已持有锁，避免双重加锁。
+        /// </summary>
+        private async Task<bool> VerifyCommandCompletionAsync(CancellationToken ct)
+        {
+            try
+            {
+                var opc = await SendQueryInternalAsync("*OPC?", ct).ConfigureAwait(false);
+                if (opc.Trim() != "1")
+                {
+                    _logger.LogWarning("[万用表] *OPC? 返回非预期值：{Value}", opc);
+                    return false;
+                }
+
+                var err = await SendQueryInternalAsync("SYST:ERR?", ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(err) && !err.StartsWith("0") && !err.Contains("No error", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning("[万用表][审计] 模式切换后存在设备错误：{Error}", err);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[万用表] 模式切换验证通信异常");
+                return false;
             }
         }
 
@@ -419,7 +483,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
             try
             {
-                await SendCommandAsync(command, ct).ConfigureAwait(false);
+                await SendSettingAsync(command, ct).ConfigureAwait(false);
                 return true;
             }
             catch
@@ -429,20 +493,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 初始化为 2 线电阻测量模式。最小闭环阶段统一由上位机按电阻值判定 OPEN/SHORT/范围。
-        /// 先 ABOR 中止上一轮测量，设置完成后用 *OPC? + SYST:ERR? 验证切换成功。
+        /// 初始化为 2 线电阻测量模式。
+        /// SCPI 序列：ABOR → *CLS → CONF:RES → 自动量程 → 采样/触发配置
+        /// 完成后用 *OPC? + SYST:ERR? 验证切换成功。
+        /// 整个初始化在单次锁内完成，内部使用 SendSettingInternalAsync 避免重复加锁。
         /// </summary>
         public async Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
         {
+            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                await SendCommandAsync("ABOR", ct).ConfigureAwait(false);
-                await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
-                await SendCommandAsync("CONF:RES", ct).ConfigureAwait(false);
-                await SendCommandAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
-                await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
-                await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
-                await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("CONF:RES", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
 
                 if (!await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
                 {
@@ -458,25 +525,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 _logger.LogWarning(ex, "初始化万用表电阻模式失败");
                 return false;
             }
+            finally
+            {
+                _commandLock.Release();
+            }
         }
 
         /// <summary>
         /// 初始化为导通测量模式（Continuity），并设置导通阈值。
-        /// SCPI 序列：ABOR, *CLS, CONF:CONT, SENS:CONT:THR {阈值}, SAMP:COUN 1, TRIG:COUN 1, TRIG:SOUR IMM
-        /// 设置完成后用 *OPC? + SYST:ERR? 验证切换成功。
+        /// SCPI 序列：ABOR → *CLS → CONF:CONT → SENS:CONT:THR {阈值} → 采样/触发配置
+        /// 完成后用 *OPC? + SYST:ERR? 验证切换成功。
+        /// 整个初始化在单次锁内完成。
         /// </summary>
         /// <param name="thresholdOhm">导通阈值(Ω)，默认 10Ω</param>
         public async Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
         {
+            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                await SendCommandAsync("ABOR", ct).ConfigureAwait(false);
-                await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
-                await SendCommandAsync("CONF:CONT", ct).ConfigureAwait(false);
-                await SendCommandAsync($"SENS:CONT:THR {thresholdOhm:F2}", ct).ConfigureAwait(false);
-                await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
-                await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
-                await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("CONF:CONT", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync($"SENS:CONT:THR {thresholdOhm:F2}", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
 
                 if (!await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
                 {
@@ -492,6 +565,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 _logger.LogWarning(ex, "初始化万用表导通模式失败");
                 return false;
             }
+            finally
+            {
+                _commandLock.Release();
+            }
         }
 
         /// <summary>
@@ -499,7 +576,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task<string> ReadResistanceRawAsync(CancellationToken ct = default)
         {
-            return await SendCommandAsync("READ?", ct).ConfigureAwait(false);
+            return await SendQueryAsync("READ?", ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -507,7 +584,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task<string> ReadContinuityRawAsync(CancellationToken ct = default)
         {
-            return await SendCommandAsync("MEAS:CONT?", ct).ConfigureAwait(false);
+            return await SendQueryAsync("MEAS:CONT?", ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -517,7 +594,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         {
             try
             {
-                var rawResponse = await SendCommandAsync("MEAS?", ct).ConfigureAwait(false);
+                var rawResponse = await SendQueryAsync("MEAS?", ct).ConfigureAwait(false);
 
                 var result = new MeasurementResult
                 {
@@ -598,7 +675,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task<string> GetDeviceIdentifierAsync(CancellationToken ct = default)
         {
-            return await SendCommandAsync("*IDN?", ct).ConfigureAwait(false);
+            return await SendQueryAsync("*IDN?", ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -608,7 +685,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         {
             try
             {
-                var result = await SendCommandAsync("*TST?", ct).ConfigureAwait(false);
+                var result = await SendQueryAsync("*TST?", ct).ConfigureAwait(false);
                 return result == "0" || result.Contains("PASS", StringComparison.OrdinalIgnoreCase);
             }
             catch
@@ -622,24 +699,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task ResetAsync(CancellationToken ct = default)
         {
-            await SendCommandAsync("*RST", ct).ConfigureAwait(false);
+            await SendSettingAsync("*RST", ct).ConfigureAwait(false);
         }
 
         /// <summary>
         /// 恢复万用表为远程可控的 2 线电阻空闲态。
-        /// 指令序列：ABOR → *CLS → CONF:RES → SENS:RES:RANG:AUTO ON → SAMP:COUN 1 → TRIG:COUN 1 → TRIG:SOUR IMM
+        /// SCPI 序列：ABOR → *CLS → CONF:RES → 自动量程 → 采样/触发配置
         /// </summary>
         public async Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
         {
+            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                await SendCommandAsync("ABOR", ct).ConfigureAwait(false);
-                await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
-                await SendCommandAsync("CONF:RES", ct).ConfigureAwait(false);
-                await SendCommandAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
-                await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
-                await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
-                await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("CONF:RES", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
                 _logger.LogInformation("万用表已恢复为远程 2 线电阻空闲态");
                 return true;
             }
@@ -647,6 +725,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 _logger.LogWarning(ex, "万用表恢复空闲态失败");
                 return false;
+            }
+            finally
+            {
+                _commandLock.Release();
             }
         }
 
@@ -657,7 +739,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         {
             try
             {
-                await SendCommandAsync("SYST:LOC", ct).ConfigureAwait(false);
+                await SendSettingAsync("SYST:LOC", ct).ConfigureAwait(false);
                 _logger.LogInformation("万用表已退出远程控制，返回本地面板操作");
             }
             catch (Exception ex)
@@ -666,44 +748,47 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             }
         }
 
-        #endregion
-
-        #region 模式切换验证
-
         /// <summary>
-        /// 验证上一组设置命令是否执行完成且无错误。
-        /// 发送 *OPC? 等待 1 确认命令队列完成，再发 SYST:ERR? 确认无错误。
+        /// 轻量级通信验证：发送 *IDN? 并检查是否有非空响应。
+        /// 内部使用 SendQueryInternalAsync（不加锁版本），
+        /// 因为 PingAsync 外部已在 _commandLock 保护下调用或无需与测量指令互斥。
+        /// 带独立短超时（500ms），不阻塞主流程。
         /// </summary>
-        private async Task<bool> VerifyCommandCompletionAsync(CancellationToken ct)
+        public async Task<bool> PingAsync(CancellationToken ct = default)
         {
+            if (!IsConnected)
+            {
+                _logger.LogDebug("[万用表Ping] 连接标志为 false，跳过通信验证");
+                return false;
+            }
+
             try
             {
-                var opc = await SendCommandAsync("*OPC?", ct).ConfigureAwait(false);
-                if (opc.Trim() != "1")
-                {
-                    _logger.LogWarning("[万用表] *OPC? 返回非预期值：{Value}", opc);
-                    return false;
-                }
+                // 使用独立短超时，防止网络故障时长时间阻塞
+                using var timeoutCts = new CancellationTokenSource(500);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
-                var err = await SendCommandAsync("SYST:ERR?", ct).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(err) && !err.StartsWith("0") && !err.Contains("No error", StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogWarning("[万用表][审计] 模式切换后存在设备错误：{Error}", err);
-                    return false;
-                }
+                var response = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
 
-                return true;
+                bool success = !string.IsNullOrWhiteSpace(response);
+                _logger.LogDebug("[万用表Ping] 结果={Result}, 响应={Response}", success, response);
+                return success;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("[万用表Ping] 超时（500ms），万用表不可通信");
+                return false;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[万用表] 模式切换验证通信异常");
+                _logger.LogWarning(ex, "[万用表Ping] 通信异常，万用表不可通信");
                 return false;
             }
         }
 
         #endregion
 
-        #region 断线重连（修改：使用属性而非硬编码）
+        #region 断线重连
 
         private async Task HandleConnectionLossAsync()
         {
@@ -731,7 +816,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
                     try
                     {
-                        // ⭐ 使用内部方法重连（使用已注入的属性值）
                         if (await ConnectInternalAsync(_host, _port, _timeoutMs, _reconnectCts.Token).ConfigureAwait(false))
                         {
                             _logger.LogInformation("万用表重连成功！");

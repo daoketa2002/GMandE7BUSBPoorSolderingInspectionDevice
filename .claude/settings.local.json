@@ -1,7 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dotnet build *)"
+      "Bash(dotnet build *)",
+      "PowerShell(dotnet build)",
+      "PowerShell(dotnet build -m:1 2>&1)",
+      "PowerShell(dotnet --version)",
+      "PowerShell(dotnet build 2>&1)",
+      "Bash(powershell -Command \"Get-Process -Name 'GMandE7BUSBPoorSolderingInspectionDevice' -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(dotnet run *)",
+      "Bash(findstr \"PASS FAIL\")",
+      "Bash(dotnet clean *)",
+      "Bash(git stash *)"
     ]
   }
 }

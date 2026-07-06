@@ -50,5 +50,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
         /// 调用时机：终了、退出运行页、急停、异常中止、程序关闭。
         /// </summary>
         Task ReleaseToLocalAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// 轻量级通信验证。发送 *IDN? 并检查是否有非空响应。
+        /// 用于启动复核阶段快速判断万用表是否真正在线，避免仅依赖连接标志。
+        /// 超时时间建议 ≤ 500ms，不应阻塞 UI 轮询。
+        /// </summary>
+        /// <param name="ct">取消令牌</param>
+        /// <returns>true=万用表可通信，false=无响应或超时</returns>
+        Task<bool> PingAsync(CancellationToken ct = default);
     }
 }

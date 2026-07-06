@@ -26,9 +26,16 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     private readonly ILogger<FakeInspectionHardware> _logger;
     private readonly object _syncRoot = new();
     private readonly Dictionary<ushort, ushort> _registers = new();
-    private readonly string[] _rawValues = ["+1.05000000E+01", "OPEN", "SHORT", "150.000"];
     private int _rawValueIndex;
     private bool _isConnected;
+
+    // 电阻模式模拟返回序列（轮转）
+    private readonly string[] _resistanceValues = ["+1.05000000E+01", "OPEN", "SHORT", "150.000"];
+    private int _resistanceValueIndex;
+
+    // 导通模式模拟返回序列（独立轮转，包含典型导通/开路值）
+    private readonly string[] _continuityValues = ["+0.50000000E+00", "OPEN", "SHORT", "+9.50000000E+00"];
+    private int _continuityValueIndex;
 
     public FakeInspectionHardware(ILogger<FakeInspectionHardware> logger)
     {
@@ -385,6 +392,15 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     }
 
     /// <summary>
+    /// Fake 模式：万用表永远在线，直接返回 true。
+    /// </summary>
+    public Task<bool> PingAsync(CancellationToken ct = default)
+    {
+        _logger.LogDebug("[Fake硬件] Ping 万用表 → 在线");
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
     /// 清 DT302=0，当前测试点继电器动作完成标志。
     /// </summary>
     public Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default)
@@ -394,23 +410,39 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT302=0"));
     }
 
+    /// <summary>
+    /// Fake 电阻模式读取：轮转返回 _resistanceValues 中的值。
+    /// 模拟 GDM-9060 READ? 的典型返回：正常电阻值、OPEN、SHORT、大电阻值。
+    /// </summary>
     public Task<string> ReadResistanceRawAsync(CancellationToken ct = default)
     {
         string raw;
         lock (_syncRoot)
         {
-            raw = _rawValues[_rawValueIndex % _rawValues.Length];
-            _rawValueIndex++;
+            raw = _resistanceValues[_resistanceValueIndex % _resistanceValues.Length];
+            _resistanceValueIndex++;
         }
 
-        _logger.LogWarning("[Fake硬件][审计] Fake GDM-9060 READ? RawText={RawText}", raw);
+        _logger.LogWarning("[Fake硬件][审计] Fake GDM-9060 READ?(电阻) RawText={RawText}", raw);
         return Task.FromResult(raw);
     }
 
+    /// <summary>
+    /// Fake 导通模式读取：使用独立的 _continuityValues 序列轮转。
+    /// 与电阻模式区分开，模拟导通模式下的典型返回值：
+    /// 小电阻（SHORT）、OPEN、SHORT 文本、临界值（接近阈值 10Ω）。
+    /// </summary>
     public Task<string> ReadContinuityRawAsync(CancellationToken ct = default)
     {
-        // 导通模式模拟返回与 ReadResistanceRawAsync 相同的轮转值，方便调试
-        return ReadResistanceRawAsync(ct);
+        string raw;
+        lock (_syncRoot)
+        {
+            raw = _continuityValues[_continuityValueIndex % _continuityValues.Length];
+            _continuityValueIndex++;
+        }
+
+        _logger.LogWarning("[Fake硬件][审计] Fake GDM-9060 MEAS:CONT?(导通) RawText={RawText}", raw);
+        return Task.FromResult(raw);
     }
 
     // ── 旧接口兼容实现 ──

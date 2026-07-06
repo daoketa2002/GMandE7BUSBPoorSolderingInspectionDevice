@@ -315,13 +315,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
                     AddFinishedResult(testPoint);
 
-                    // 导通项目读取判定后恢复电阻模式
-                    if (testPoint.CheckMode == CheckModeConstants.Continuity)
-                    {
-                        await _multimeterDevice.PrepareIdleResistanceModeAsync(_inspectionCts.Token).ConfigureAwait(false);
-                        await Task.Delay(100, _inspectionCts.Token).ConfigureAwait(false); // 等待恢复稳定
-                    }
-
                     // ── 单项 NG 后按系统设置选择继续或停止 ──
                     if (judgment == "NG" && !_config.ContinueTestingAfterNg)
                     {
