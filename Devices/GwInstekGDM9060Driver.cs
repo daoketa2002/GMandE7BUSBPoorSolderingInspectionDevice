@@ -430,17 +430,27 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 初始化为 2 线电阻测量模式。最小闭环阶段统一由上位机按电阻值判定 OPEN/SHORT/范围。
+        /// 先 ABOR 中止上一轮测量，设置完成后用 *OPC? + SYST:ERR? 验证切换成功。
         /// </summary>
         public async Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
         {
             try
             {
+                await SendCommandAsync("ABOR", ct).ConfigureAwait(false);
                 await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
                 await SendCommandAsync("CONF:RES", ct).ConfigureAwait(false);
                 await SendCommandAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
                 await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
                 await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
                 await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+
+                if (!await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
+                {
+                    _logger.LogWarning("[万用表][审计] 电阻模式切换验证失败");
+                    return false;
+                }
+
+                _logger.LogWarning("[万用表][审计] 万用表已切换为 2 线电阻模式");
                 return true;
             }
             catch (Exception ex)
@@ -452,20 +462,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 初始化为导通测量模式（Continuity），并设置导通阈值。
-        /// SCPI 序列：*CLS, CONF:CONT, SENS:CONT:THR {阈值}, SAMP:COUN 1, TRIG:COUN 1, TRIG:SOUR IMM
+        /// SCPI 序列：ABOR, *CLS, CONF:CONT, SENS:CONT:THR {阈值}, SAMP:COUN 1, TRIG:COUN 1, TRIG:SOUR IMM
+        /// 设置完成后用 *OPC? + SYST:ERR? 验证切换成功。
         /// </summary>
         /// <param name="thresholdOhm">导通阈值(Ω)，默认 10Ω</param>
         public async Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
         {
             try
             {
+                await SendCommandAsync("ABOR", ct).ConfigureAwait(false);
                 await SendCommandAsync("*CLS", ct).ConfigureAwait(false);
                 await SendCommandAsync("CONF:CONT", ct).ConfigureAwait(false);
                 await SendCommandAsync($"SENS:CONT:THR {thresholdOhm:F2}", ct).ConfigureAwait(false);
                 await SendCommandAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
                 await SendCommandAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
                 await SendCommandAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
-                _logger.LogInformation("万用表已切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+
+                if (!await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
+                {
+                    _logger.LogWarning("[万用表][审计] 导通模式切换验证失败，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+                    return false;
+                }
+
+                _logger.LogWarning("[万用表][审计] 万用表已切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
                 return true;
             }
             catch (Exception ex)
@@ -481,6 +500,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         public async Task<string> ReadResistanceRawAsync(CancellationToken ct = default)
         {
             return await SendCommandAsync("READ?", ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 执行导通测量，发送 MEAS:CONT? 指令并返回原始字符串
+        /// </summary>
+        public async Task<string> ReadContinuityRawAsync(CancellationToken ct = default)
+        {
+            return await SendCommandAsync("MEAS:CONT?", ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -636,6 +663,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "万用表退出远程控制时异常（不影响主流程）");
+            }
+        }
+
+        #endregion
+
+        #region 模式切换验证
+
+        /// <summary>
+        /// 验证上一组设置命令是否执行完成且无错误。
+        /// 发送 *OPC? 等待 1 确认命令队列完成，再发 SYST:ERR? 确认无错误。
+        /// </summary>
+        private async Task<bool> VerifyCommandCompletionAsync(CancellationToken ct)
+        {
+            try
+            {
+                var opc = await SendCommandAsync("*OPC?", ct).ConfigureAwait(false);
+                if (opc.Trim() != "1")
+                {
+                    _logger.LogWarning("[万用表] *OPC? 返回非预期值：{Value}", opc);
+                    return false;
+                }
+
+                var err = await SendCommandAsync("SYST:ERR?", ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(err) && !err.StartsWith("0") && !err.Contains("No error", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning("[万用表][审计] 模式切换后存在设备错误：{Error}", err);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[万用表] 模式切换验证通信异常");
+                return false;
             }
         }
 

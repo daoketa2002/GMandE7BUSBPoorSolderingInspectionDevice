@@ -131,6 +131,48 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT121=1"));
     }
 
+    public Task<PlcOperationResult> RequestStopAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.StopSignal, 1);
+        _logger.LogWarning("[Fake][审计] 半实物联调主动触发：已写入 DT122=1（停止）。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT122=1"));
+    }
+
+    public Task<PlcOperationResult> ClearStopRequestAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.StopSignal, 0);
+        _logger.LogWarning("[Fake][审计] 已清除 DT122=0。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT122 已清除"));
+    }
+
+    public Task<PlcOperationResult> RequestEmergencyStopAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.EmergencyStopSignal, 1);
+        _logger.LogWarning("[Fake][审计] 半实物联调主动触发：已写入 DT123=1（急停）。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT123=1"));
+    }
+
+    public Task<PlcOperationResult> ClearEmergencyStopRequestAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.EmergencyStopSignal, 0);
+        _logger.LogWarning("[Fake][审计] 已清除 DT123=0。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT123 已清除"));
+    }
+
+    public Task<PlcOperationResult> RequestTerminateAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.TerminateSignal, 1);
+        _logger.LogWarning("[Fake][审计] 终了按钮触发：已写入 DT306=1。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT306=1"));
+    }
+
+    public Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.TerminateSignal, 0);
+        _logger.LogWarning("[Fake][审计] 已清除 DT306=0。");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT306 已清除"));
+    }
+
     /// <summary>
     /// 写入当前测试点的两个引脚到 Fake PLC（最新地址表：每引脚独立选择区）。
     /// 模拟写入引脚选择区，200ms 后置 DT302=1 表示继电器动作完成。
@@ -246,6 +288,18 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake 综合结果已记录"));
     }
 
+    public Task<PlcOperationResult> ClearFinalResultAsync(CancellationToken ct = default)
+    {
+        lock (_syncRoot)
+        {
+            _registers[PlcAddressMap.ProductOk] = 0;
+            _registers[PlcAddressMap.ProductNg] = 0;
+        }
+
+        _logger.LogWarning("[Fake][审计] 已清除 DT304/DT305（复位清空产品结果）");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT304/DT305 已清除"));
+    }
+
     /// <summary>
     /// 清空引脚输出寄存器（清 DT130~DT185 全部为 0）。
     /// </summary>
@@ -351,6 +405,12 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
 
         _logger.LogWarning("[Fake硬件][审计] Fake GDM-9060 READ? RawText={RawText}", raw);
         return Task.FromResult(raw);
+    }
+
+    public Task<string> ReadContinuityRawAsync(CancellationToken ct = default)
+    {
+        // 导通模式模拟返回与 ReadResistanceRawAsync 相同的轮转值，方便调试
+        return ReadResistanceRawAsync(ct);
     }
 
     // ── 旧接口兼容实现 ──

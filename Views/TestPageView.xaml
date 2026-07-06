@@ -673,11 +673,11 @@
                         </Button.Style>
                     </Button>
 
-                    <!-- ═══════ 调试工具区：可折叠面板 ═══════ -->
+                    <!-- ═══════ 调试工具区：可折叠面板（Fake 或半实物模式） ═══════ -->
                     <Expander Grid.Row="2" IsExpanded="False" Margin="0,0,0,0"
-                              Visibility="{Binding IsFakeMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                              Visibility="{Binding IsDebugControlPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}">
                         <Expander.Header>
-                            <TextBlock Text="🔧 调试工具" FontSize="13" FontWeight="SemiBold"
+                            <TextBlock Text="调试面板" FontSize="13" FontWeight="SemiBold"
                                        Foreground="#7F8C8D" Margin="4,2"/>
                         </Expander.Header>
                         <Border Background="#F5F6FA" CornerRadius="8" Padding="6"
@@ -686,55 +686,48 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
-                                <!-- 第1行：开始检测(Fake) | 停止(DT122) -->
+                                <!-- 第1行：启动(DT120) | 停止(DT122) -->
                                 <UniformGrid Grid.Row="0" Rows="1" Columns="2" Margin="0,0,0,4">
-                                    <Button Content="开始检测(Fake)"
-                                            Command="{Binding StartFakeMinimalInspectionCommand}"
+                                    <Button Content="启动(DT120)"
+                                            Command="{Binding TriggerDebugStartCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#2E86DE"
-                                            ToolTip="模拟 PLC 启动信号，触发完整检测流程"/>
+                                            ToolTip="写入 DT120=1，走 PLC 轮询启动复核链路"/>
                                     <Button Content="停止(DT122)"
-                                            Command="{Binding FakeTriggerStopCommand}"
+                                            Command="{Binding TriggerDebugStopCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#F39C12"
-                                            ToolTip="写入 DT122=1，模拟 PLC 停止信号"/>
+                                            ToolTip="写入 DT122=1，触发停止收口流程"/>
                                 </UniformGrid>
 
                                 <!-- 第2行：复位(DT121) | 急停(DT123) -->
                                 <UniformGrid Grid.Row="1" Rows="1" Columns="2" Margin="0,0,0,4">
                                     <Button Content="复位(DT121)"
-                                            Command="{Binding FakeTriggerResetCommand}"
+                                            Command="{Binding TriggerDebugResetCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#8E44AD"
-                                            ToolTip="写入 DT121=1，模拟 PLC 复位信号"/>
+                                            ToolTip="写入 DT121=1，触发复位收口流程"/>
                                     <Button Content="急停(DT123)"
-                                            Command="{Binding FakeTriggerEmergencyStopCommand}"
+                                            Command="{Binding TriggerDebugEmergencyStopCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#E74C3C"
-                                            ToolTip="写入 DT123=1，模拟 PLC 急停信号"/>
+                                            ToolTip="写入 DT123=1，触发急停收口流程"/>
                                 </UniformGrid>
                             </Grid>
                         </Border>
                     </Expander>
 
-                    <!-- ═══════ 非 Fake 操作区：启动(DT120) / 复位(DT121) ═══════ -->
+                    <!-- ═══════ 真实模式操作区：复位(DT121) ═══════ -->
                     <Border Grid.Row="1" BorderThickness="0" Padding="0,0,0,4"
                             Visibility="{Binding IsRealModeResetVisible, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <UniformGrid Rows="1" Columns="2" Margin="0,0,0,0">
-                            <Button Content="启动(DT120)"
-                                    Command="{Binding TriggerSemiPhysicalStartCommand}"
-                                    Visibility="{Binding IsSemiPhysicalDebugMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                    Style="{StaticResource DebugButtonStyle}"
-                                    Background="#2E86DE"
-                                    ToolTip="半实物联调临时入口：上位机写 DT120=1 模拟启动，正式整机联调后删除"/>
+                        <UniformGrid Rows="1" Columns="1" Margin="0,0,0,0">
                             <Button Content="复位(DT121)"
-                                    Command="{Binding TriggerSemiPhysicalResetCommand}"
+                                    Command="{Binding TriggerPlcResetCommand}"
                                     Style="{StaticResource DebugButtonStyle}"
                                     Background="#8E44AD"
-                                    ToolTip="半实物/现场临时入口：上位机写 DT121=1 发起复位，如后续改为实体按钮触发应删除"/>
+                                    ToolTip="上位机写 DT121=1 发起复位"/>
                         </UniformGrid>
                     </Border>
                 </Grid>

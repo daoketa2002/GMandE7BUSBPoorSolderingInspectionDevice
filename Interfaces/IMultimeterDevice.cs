@@ -32,6 +32,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
         Task<string> ReadResistanceRawAsync(CancellationToken ct = default);
 
         /// <summary>
+        /// 导通测量专用读取（SCPI: MEAS:CONT?）
+        /// 返回导通电阻值（原始字符串，如 "+1.05000000E+01"、"OPEN"、"SHORT"）
+        /// </summary>
+        Task<string> ReadContinuityRawAsync(CancellationToken ct = default);
+
+        /// <summary>
         /// 恢复万用表为远程可控的 2 线电阻空闲态。
         /// 指令：ABOR; *CLS; CONF:RES; SENS:RES:RANG:AUTO ON; SAMP:COUN 1; TRIG:COUN 1; TRIG:SOUR IMM
         /// 调用时机：正常检测结束且保存/取消弹窗关闭后。

@@ -218,6 +218,60 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 上位机请求停止（写 DT122=1）。半实物联调主动触发。
+    /// </summary>
+    public async Task<PlcOperationResult> RequestStopAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT122=1，模拟 PLC 停止信号。");
+        return await WriteRegisterSingleAsync("DT122(停止)", _addressMap.StopRegister, 1, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 清除 PLC 停止请求（写 DT122=0）。
+    /// </summary>
+    public async Task<PlcOperationResult> ClearStopRequestAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[PLC动作][审计] PC 清除 DT122 停止请求 -> 写 DT122 = 0");
+        return await WriteRegisterSingleAsync("DT122(停止)", _addressMap.StopRegister, 0, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 上位机请求急停（写 DT123=1）。半实物联调主动触发。
+    /// </summary>
+    public async Task<PlcOperationResult> RequestEmergencyStopAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT123=1，模拟 PLC 急停信号。");
+        return await WriteRegisterSingleAsync("DT123(急停)", _addressMap.EmergencyStopRegister, 1, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 清除 PLC 急停请求（写 DT123=0）。急停解除时调用。
+    /// </summary>
+    public async Task<PlcOperationResult> ClearEmergencyStopRequestAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[PLC动作][审计] PC 清除 DT123 急停请求 -> 写 DT123 = 0");
+        return await WriteRegisterSingleAsync("DT123(急停)", _addressMap.EmergencyStopRegister, 0, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 上位机请求终了（写 DT306=1）。终了按钮触发。
+    /// </summary>
+    public async Task<PlcOperationResult> RequestTerminateAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[终了按钮][审计] 终了按钮触发，写 DT306=1");
+        return await WriteRegisterSingleAsync("DT306(终了)", _addressMap.TerminateRegister, 1, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 清除终了请求（写 DT306=0）。返回主菜单后延时调用。
+    /// </summary>
+    public async Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[PLC动作][审计] PC 清除 DT306 终了请求 -> 写 DT306 = 0");
+        return await WriteRegisterSingleAsync("DT306(终了)", _addressMap.TerminateRegister, 0, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：每引脚独立选择区）。
     /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。
     /// 如 A4-A5 写入：DT136=1, DT137=极性, DT142=1, DT143=极性。
@@ -397,6 +451,38 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         {
             _logger.LogWarning(ex, "[PLC动作] 写入 DT304/DT305 异常");
             return PlcOperationResult.Failure($"写入 DT304/DT305 异常: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 清空产品综合结果（写 DT304=0, DT305=0）。
+    /// 复位或下一轮准备时调用，语义为"无当前产品结果"，与 WriteFinalResultAsync(false,*) 的"NG"不同。
+    /// </summary>
+    public async Task<PlcOperationResult> ClearFinalResultAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[PLC动作][审计] PC 复位清空产品结果 → DT304=0, DT305=0");
+
+        try
+        {
+            var response = await _modbusClient.WriteMultipleRegistersAsync(
+                DefaultUnitId, _addressMap.ProductOkRegister,
+                new ushort[] { 0, 0 }, ct).ConfigureAwait(false);
+
+            if (response is null)
+                return PlcOperationResult.Failure("清空 DT304/DT305 失败：无响应");
+            if (response.IsError)
+                return PlcOperationResult.Failure($"清空 DT304/DT305 失败：Modbus错误码 {response.ErrorCode}", response);
+
+            return PlcOperationResult.Success("DT304=0, DT305=0 已写入", response);
+        }
+        catch (OperationCanceledException)
+        {
+            return PlcOperationResult.Failure("清空 DT304/DT305 被取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PLC动作] 清空 DT304/DT305 异常");
+            return PlcOperationResult.Failure($"清空 DT304/DT305 异常: {ex.Message}");
         }
     }
 

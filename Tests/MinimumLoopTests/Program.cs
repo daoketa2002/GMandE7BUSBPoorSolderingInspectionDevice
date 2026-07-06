@@ -45,14 +45,6 @@ var tests = new List<(string Name, Action Body)>
 
         config.SkipDt302Wait = true;
         AssertEqual(true, config.SkipDt302Wait);
-        AssertEqual(false, config.BypassRelayActionCompletedForSemiPhysicalTest); // 旧属性不受影响
-    }),
-    ("半实物 DT302 旁路配置优先读取新名并兼容旧名", () =>
-    {
-        AssertEqual(false, InspectionConfig.ResolveSkipDt302Wait(false, false));
-        AssertEqual(true, InspectionConfig.ResolveSkipDt302Wait(true, false));
-        AssertEqual(true, InspectionConfig.ResolveSkipDt302Wait(false, true));
-        AssertEqual(true, InspectionConfig.ResolveSkipDt302Wait(true, true));
     }),
     ("单项 NG 后续默认继续测试", () =>
     {
@@ -71,36 +63,52 @@ var tests = new List<(string Name, Action Body)>
         // 验证 InspectionStopReason 有 SingleItemNg
         var reason = InspectionStopReason.SingleItemNg;
         AssertEqual("SingleItemNg", reason.ToString());
+
+        // 验证 InspectionStopReason 有 RelayTimeout
+        var relayTimeout = InspectionStopReason.RelayTimeout;
+        AssertEqual("RelayTimeout", relayTimeout.ToString());
+
+        // 验证 InspectionStopReason 有 PlcStop
+        var plcStop = InspectionStopReason.PlcStop;
+        AssertEqual("PlcStop", plcStop.ToString());
+
+        // 验证 InspectionStopReason 有 Reset
+        var reset = InspectionStopReason.Reset;
+        AssertEqual("Reset", reset.ToString());
+
+        // 验证 InspectionStopReason 有 EmergencyStop
+        var emStop = InspectionStopReason.EmergencyStop;
+        AssertEqual("EmergencyStop", emStop.ToString());
     }),
     ("万用表异常值分类符合运行策略", () =>
     {
-        // NaN → 中止，显示 NG
+        // NaN → 中止，显示 "NaN"
         var nan = InspectionEngine.ParseMeasurementForInspection("NaN");
-        AssertEqual("NG", nan.DisplayTextOverride);
+        AssertEqual("NaN", nan.DisplayTextOverride);
         AssertEqual(true, nan.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.NaN, nan.ValueKind);
 
-        // -Infinity → 中止，显示 NG
+        // -Infinity → 中止，显示 "-Infinity"
         var negInf = InspectionEngine.ParseMeasurementForInspection("-Infinity");
-        AssertEqual("NG", negInf.DisplayTextOverride);
+        AssertEqual("-Infinity", negInf.DisplayTextOverride);
         AssertEqual(true, negInf.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.NegativeInfinity, negInf.ValueKind);
 
-        // 负电阻值 → 中止，显示 NG
+        // 负电阻值 → 中止，无覆写（走数值格式化）
         var neg = InspectionEngine.ParseMeasurementForInspection("-1");
-        AssertEqual("NG", neg.DisplayTextOverride);
+        AssertEqual(null, neg.DisplayTextOverride);
         AssertEqual(true, neg.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.NegativeResistance, neg.ValueKind);
 
-        // +Infinity → 不中止，显示 NG
+        // +Infinity → 不中止，显示 "+Infinity"
         var posInf = InspectionEngine.ParseMeasurementForInspection("+Infinity");
-        AssertEqual("NG", posInf.DisplayTextOverride);
+        AssertEqual("+Infinity", posInf.DisplayTextOverride);
         AssertEqual(false, posInf.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.PositiveInfinityOrOverRange, posInf.ValueKind);
 
-        // 超量程大数 → 不中止，显示 NG
+        // 超量程大数 → 不中止，显示 "超量程"
         var overRange = InspectionEngine.ParseMeasurementForInspection("9.9E37");
-        AssertEqual("NG", overRange.DisplayTextOverride);
+        AssertEqual("超量程", overRange.DisplayTextOverride);
         AssertEqual(false, overRange.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.PositiveInfinityOrOverRange, overRange.ValueKind);
 

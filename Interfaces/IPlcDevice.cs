@@ -59,6 +59,29 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 上位机请求停止（写 DT122=1）。
+    /// 半实物联调临时入口，用于模拟 PLC 停止信号。
+    /// </summary>
+    Task<PlcOperationResult> RequestStopAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 清除 PLC 停止请求（写 DT122=0）。
+    /// </summary>
+    Task<PlcOperationResult> ClearStopRequestAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 上位机请求急停（写 DT123=1）。
+    /// 半实物联调临时入口，用于模拟 PLC 急停信号。
+    /// </summary>
+    Task<PlcOperationResult> RequestEmergencyStopAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 清除 PLC 急停请求（写 DT123=0）。
+    /// 急停解除时调用。
+    /// </summary>
+    Task<PlcOperationResult> ClearEmergencyStopRequestAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：DT130~DT185 每脚独立选择区）。
     /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。
     /// 极性编码：正极=0，负极=1。
@@ -102,6 +125,13 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> WriteFinalResultAsync(bool isOk, int? ngPointIndex, CancellationToken ct = default);
 
     /// <summary>
+    /// 清空产品综合结果（写 DT304=0, DT305=0）。
+    /// 复位或下一轮准备时调用，表示当前无产品结果。
+    /// 不可用 WriteFinalResultAsync(false, null) 替代，因为 false 语义为"NG"，不是"无结果"。
+    /// </summary>
+    Task<PlcOperationResult> ClearFinalResultAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 清空引脚输出寄存器（清 DT130~DT185 全部为 0）。
     /// 单项完成、复位、急停、异常中止后调用。
     /// </summary>
@@ -127,6 +157,18 @@ public interface IPlcDevice : ICommunicationDevice
     /// 只清 DT303，不清 DT123。
     /// </summary>
     Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 上位机请求终了（写 DT306=1）。
+    /// 终了按钮触发，返回主菜单后延时清 0。
+    /// </summary>
+    Task<PlcOperationResult> RequestTerminateAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 清除终了请求（写 DT306=0）。
+    /// 返回主菜单后延时调用。
+    /// </summary>
+    Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default);
 
     /// <summary>
     /// 向上位机异常状态写入 PLC。

@@ -11,6 +11,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 /// - DT303：报警解除
 /// - DT304：产品 OK
 /// - DT305：产品 NG
+/// - DT306：终了（上位机写，PLC 读）。返回主菜单后延时清 0。
 /// </summary>
 public sealed class PlcAddressMap
 {
@@ -22,10 +23,10 @@ public sealed class PlcAddressMap
     /// <summary>DT121：复位（PLC/上位机读写）</summary>
     public const ushort ResetSignal = 121;
 
-    /// <summary>DT122：停止/暂停（PLC 写，上位机读）</summary>
+    /// <summary>DT122：停止（PLC 写，上位机读）</summary>
     public const ushort StopSignal = 122;
 
-    /// <summary>DT123：急停（PLC 写，上位机读）</summary>
+    /// <summary>DT123：急停（PLC 写，上位机读）。解除时上位机清 DT123/DT303。</summary>
     public const ushort EmergencyStopSignal = 123;
 
     /// <summary>DT234：上位机允许开始检测（上位机写，PLC 读）</summary>
@@ -42,6 +43,9 @@ public sealed class PlcAddressMap
 
     /// <summary>DT305：产品 NG 综合结果（上位机写，PLC 读）</summary>
     public const ushort ProductNg = 305;
+
+    /// <summary>DT306：终了（上位机写，PLC 读）。返回主菜单后延时清 0。</summary>
+    public const ushort TerminateSignal = 306;
 
     // ── 引脚输出范围 ──
 
@@ -99,6 +103,9 @@ public sealed class PlcAddressMap
 
     /// <summary>DT305：产品 NG 结果，上位机写。</summary>
     public ushort ProductNgRegister { get; init; } = ProductNg;
+
+    /// <summary>DT306：终了，上位机写，PLC 读。返回主菜单后延时清 0。</summary>
+    public ushort TerminateRegister { get; init; } = TerminateSignal;
 
     // ── 旧语义寄存器（已废弃，保留仅供检查引用，新流程禁止使用） ──
     // DT130~DT133 不再作为"左右脚号+左右极性"通用模型，
