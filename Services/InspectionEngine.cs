@@ -54,6 +54,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     public event EventHandler<InspectionCompletedEventArgs>? InspectionCompleted;
     public event EventHandler<string>? LogMessage;
 
+    /// <summary>原子中断原因，在 Cancel 之前设置，供 OperationCanceledException 分支读取</summary>
+    private volatile InspectionStopReason _abortReason = InspectionStopReason.None;
     public bool IsRunning => _isRunning;
     public InspectionState CurrentState { get; private set; } = InspectionState.Idle;
     public InspectionConfig Config => _config;
@@ -376,13 +378,21 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 result.ErrorMessage = "检测被取消";
                 result.EndTime = DateTime.Now;
                 // ★ 从当前引擎状态推断停止原因（HandlePlcInterruptAsync 已先 SetState）
-                result.StopReason = CurrentState switch
+                // ★ 使用原子中断原因字段，避免竞态
+                if (_abortReason != InspectionStopReason.None)
                 {
-                    InspectionState.PausedByStop => InspectionStopReason.PlcStop,
-                    InspectionState.ResetRequested => InspectionStopReason.Reset,
-                    InspectionState.PausedByEmergencyStop => InspectionStopReason.EmergencyStop,
-                    _ => InspectionStopReason.Canceled
-                };
+                    result.StopReason = _abortReason;
+                }
+                else
+                {
+                    result.StopReason = CurrentState switch
+                    {
+                        InspectionState.PausedByStop => InspectionStopReason.PlcStop,
+                        InspectionState.ResetRequested => InspectionStopReason.Reset,
+                        InspectionState.PausedByEmergencyStop => InspectionStopReason.EmergencyStop,
+                        _ => InspectionStopReason.Canceled
+                    };
+                }
                 InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                 return result;
             }
@@ -398,6 +408,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         {
             _isRunning = false;
             _currentInspectionId = null;
+            _abortReason = InspectionStopReason.None; // ★ 重置中断原因
             _engineLock.Release();
         }
     }
@@ -483,6 +494,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         switch (action)
         {
             case PlcInterruptAction.Stop:
+                _abortReason = InspectionStopReason.PlcStop;
                 SetState(InspectionState.PausedByStop);
                 _checkpoint.HasBreakpoint = false;
                 _checkpoint.LastErrorMessage = "停止触发，检测中止";
@@ -491,6 +503,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 return false;
 
             case PlcInterruptAction.Reset:
+                _abortReason = InspectionStopReason.Reset;
                 SetState(InspectionState.ResetRequested);
                 _checkpoint.ResetProgress();
                 await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
@@ -500,6 +513,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 return false;
 
             case PlcInterruptAction.EmergencyStop:
+                _abortReason = InspectionStopReason.EmergencyStop;
                 SetState(InspectionState.PausedByEmergencyStop);
                 _checkpoint.HasBreakpoint = false;
                 _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
@@ -759,6 +773,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         if (_isRunning)
         {
             LogInfo("正在中止检测...");
+            _abortReason = InspectionStopReason.PlcStop;
             _inspectionCts?.Cancel();
         }
     }
@@ -772,6 +787,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         SetState(InspectionState.PausedByEmergencyStop);
         _checkpoint.HasBreakpoint = false;
         _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
+        _abortReason = InspectionStopReason.EmergencyStop;
         _inspectionCts?.Cancel();
     }
 

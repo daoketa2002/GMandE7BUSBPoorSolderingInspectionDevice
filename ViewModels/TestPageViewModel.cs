@@ -1099,6 +1099,49 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         // ════════════════════════════════════════════════════════
+        // 急停弹窗已确认但 DT123 仍为 1 → 自动后台清除，不再弹窗
+        // ════════════════════════════════════════════════════════
+        if (inputs.IsEmergencyStop && _emergencyDialogAcknowledged && !_isShowingEmergencyDialog)
+        {
+            _logger.LogWarning("[急停收尾][自动清除] 弹窗已关闭但 DT123 仍为 1，触发后台清除");
+            _ = RetryClearEmergencySignalsAsync();
+            return;
+        }
+
+        // ── DT123 回到 0，重置弹窗确认标志 ──
+        if (!inputs.IsEmergencyStop)
+        {
+            _emergencyDialogAcknowledged = false;
+        }
+
+        // ════════════════════════════════════════════════════════
+        // 急停弹窗触发 — 独立判断，只要 DT123=1 且弹窗未显示且用户未确认
+        // 不依赖 UiState，因为引擎回调可能先于轮询把 UiState 切到 EmergencyStop
+        // ════════════════════════════════════════════════════════
+        if (inputs.IsEmergencyStop && !_isShowingEmergencyDialog && !_emergencyDialogAcknowledged)
+        {
+            _isShowingEmergencyDialog = true;
+            ShowEmergencyStopDialog();
+        }
+
+        // ════════════════════════════════════════════════════════
+        // 急停状态切换
+        // ════════════════════════════════════════════════════════
+        if (inputs.IsEmergencyStop)
+        {
+            if (UiState != TestUIState.EmergencyStop)
+            {
+                UiState = TestUIState.EmergencyStop;
+                SensorStatusText = "急停中";
+                _logger.LogWarning("[PLC轮询] 检测到急停信号(DT123)");
+                if (_inspectionEngine!.IsRunning)
+                    _inspectionEngine.StopForEmergencyStop();
+            }
+            return; // 急停状态下不处理启动/停止/复位信号
+        }
+
+
+        // ════════════════════════════════════════════════════════
         // 复位信号处理（优先级最高，急停状态下也能触发）
         // 真实模式下工人按实体按钮 → PLC DT121=1 → 轮询捕获 → 执行复位
         // ════════════════════════════════════════════════════════
@@ -1111,37 +1154,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogWarning("[PLC轮询][审计] 检测到 DT121=1，执行复位流程");
 
             await ExecuteResetFlowAsync();
-            return;
-        }
-
-        // DT123 回到 0，表示上一轮急停已真正复位，允许下一次急停重新弹窗。
-        if (!inputs.IsEmergencyStop)
-        {
-            _emergencyDialogAcknowledged = false;
-        }
-
-        // ════════════════════════════════════════════════════════
-        // 急停信号（不锁定检测中状态，检测中也能触发）
-        // ════════════════════════════════════════════════════════
-        if (inputs.IsEmergencyStop)
-        {
-            if (UiState != TestUIState.EmergencyStop)
-            {
-                UiState = TestUIState.EmergencyStop;
-                SensorStatusText = "急停中";
-                _logger.LogWarning("[PLC轮询] 检测到急停信号(DT123)");
-                if (_inspectionEngine!.IsRunning)
-                    _inspectionEngine.StopForEmergencyStop();
-            }
-
-            // 弹窗触发必须独立于状态切换。
-            // 检测引擎可能先把 UiState 切到 EmergencyStop，轮询层仍要补弹急停锁定弹窗。
-            // 解除按钮只清 DT303，不清 DT123；因此解除确认后要等待复位/DT123=0，再允许下一次弹窗。
-            if (!_isShowingEmergencyDialog && !_emergencyDialogAcknowledged)
-            {
-                _isShowingEmergencyDialog = true;
-                ShowEmergencyStopDialog();
-            }
             return;
         }
 
@@ -1472,7 +1484,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>
     /// 执行急停流程（DT123 急停）。
-    /// 停止检测、清 PLC 输出、清断点、弹急停窗。
+    /// 停止检测、清 PLC 输出、清断点。
+    /// ★ 不在这里弹窗，统一由 PLC 轮询触发急停弹窗。
     /// </summary>
     private async Task ExecuteEmergencyStopFlowAsync()
     {
@@ -1499,12 +1512,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             SensorStatusText = "急停中";
             IsPlcStartRequested = false;
 
-            // 弹急停窗（如果尚未弹出）
-            if (!_isShowingEmergencyDialog && !_emergencyDialogAcknowledged)
-            {
-                _isShowingEmergencyDialog = true;
-                ShowEmergencyStopDialog();
-            }
+            // ★ 不在这里弹窗，统一由 PLC 轮询触发弹窗
+            // 轮询检测到 DT123=1 且 _isShowingEmergencyDialog=false 时会弹窗
         }
         catch (Exception ex)
         {
@@ -1517,6 +1526,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>
     /// 弹出急停模态弹窗。
     /// 弹窗独立轮询 DT303，关闭后页面保持急停保护状态。
+    /// 如果清除 DT123/DT303 失败，后台重试，不阻塞关闭。
     /// </summary>
     private void ShowEmergencyStopDialog()
     {
@@ -1544,6 +1554,17 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     _emergencyDialogAcknowledged = true;
                     _emergencyStopDialogVM?.StopPolling();
                     _emergencyStopDialogVM = null;
+
+                    // ★ 关闭弹窗后强制更新 UiState 和状态文本
+                    // 急停已由用户确认解除，不再处于急停保护状态
+                    // 但需要复位后才能重新启动
+                    UiState = TestUIState.Ready;
+                    SensorStatusText = "请复位";
+                    IsInputEnabled = true;
+                    AddLog("急停已确认，正在清除急停信号...");
+
+                    // ★ 弹窗关闭后后台重试清除 DT123/DT303
+                    _ = RetryClearEmergencySignalsAsync();
                 });
             },
             canSimulateAlarmRelease: canSimulateAlarmRelease);
@@ -1557,6 +1578,93 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // 模态显示弹窗（阻塞，直到用户点击"解除"）
         _ = vm; // 保持引用
         dialog.ShowDialog();
+    }
+
+    /// <summary>
+    /// 后台重试清除 DT123 和 DT303。
+    /// 弹窗关闭后独立执行，最大重试 5 次，间隔 500ms。
+    /// 成功后更新状态文本为"请复位"。
+    /// 轮询兜底：检测到 DT123 仍为 1 时也会再次触发重试。
+    /// </summary>
+    private async Task RetryClearEmergencySignalsAsync()
+    {
+        const int maxRetries = 5;
+        const int retryDelayMs = 500;
+
+        bool dt123Cleared = false;
+        bool dt303Cleared = false;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                if (!dt123Cleared)
+                {
+                    var emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(CancellationToken.None);
+                    if (emergencyResult.IsSuccess)
+                    {
+                        dt123Cleared = true;
+                        _logger.LogWarning("[急停收尾][审计] 后台重试清除 DT123 成功（第 {Attempt} 次）", attempt);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[急停收尾] 后台重试清除 DT123 失败（第 {Attempt}/{Max} 次）: {Message}",
+                            attempt, maxRetries, emergencyResult.Message);
+                    }
+                }
+
+                if (!dt303Cleared)
+                {
+                    var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(CancellationToken.None);
+                    if (alarmResult.IsSuccess)
+                    {
+                        dt303Cleared = true;
+                        _logger.LogWarning("[急停收尾][审计] 后台重试清除 DT303 成功（第 {Attempt} 次）", attempt);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[急停收尾] 后台重试清除 DT303 失败（第 {Attempt}/{Max} 次）: {Message}",
+                            attempt, maxRetries, alarmResult.Message);
+                    }
+                }
+
+                if (dt123Cleared && dt303Cleared)
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        SensorStatusText = "请复位";
+                        AddLog("✅ 急停信号已清除，请复位后重新启动");
+                    });
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[急停收尾] 后台清除急停信号异常（第 {Attempt}/{Max} 次）", attempt, maxRetries);
+            }
+
+            if (attempt < maxRetries)
+            {
+                await Task.Delay(retryDelayMs);
+            }
+        }
+
+        // 全部重试失败，界面提示操作员
+        string failedSignals = "";
+        if (!dt123Cleared) failedSignals += "DT123 ";
+        if (!dt303Cleared) failedSignals += "DT303 ";
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            SensorStatusText = "请复位";
+            AddLog($"⚠️ 急停信号清除失败（{failedSignals.Trim()}），请检查 PLC 通信后手动复位");
+            _ = _notificationService.ShowWarningAsync(
+                $"急停信号清除失败：{failedSignals.Trim()}\n请检查 PLC 通信后手动执行复位操作。",
+                "清除失败");
+        });
+
+        _logger.LogError("[急停收尾] 后台清除急停信号最终失败：{FailedSignals}，已重试 {MaxRetries} 次",
+            failedSignals.Trim(), maxRetries);
     }
 
     /// <summary>
@@ -1821,9 +1929,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
         {
+            // 修改后：增加 Canceled 作为兜底（当引擎内部状态竞态导致 StopReason 误判时）
             bool isPlcSignalAbort = result.StopReason == InspectionStopReason.Reset
                                     || result.StopReason == InspectionStopReason.PlcStop
-                                    || result.StopReason == InspectionStopReason.EmergencyStop;
+                                    || result.StopReason == InspectionStopReason.EmergencyStop
+                                    || result.StopReason == InspectionStopReason.Canceled; // ★ 兜底：任何取消都静默
             if (isPlcSignalAbort)
             {
                 _logger.LogWarning("[运行页][审计] 检测因 {StopReason} 收口，中止提示交由对应流程处理", result.StopReason);
@@ -1950,6 +2060,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 _logger.LogDebug("[运行页] 已忽略收口期间检测引擎状态回调：{OldState} -> {NewState}",
                     e.OldState, e.NewState);
+                return;
+            }
+
+            // 急停弹窗已确认后，忽略引擎晚到的急停状态回调
+            // 避免 closeDialog 中设置的"请复位"被引擎回调覆盖为"急停中"
+            if (_emergencyDialogAcknowledged && e.NewState == InspectionState.PausedByEmergencyStop)
+            {
+                _logger.LogDebug("[运行页] 急停已确认，忽略引擎晚到的急停状态回调");
                 return;
             }
 
@@ -2094,9 +2212,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 {
                     AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
 
+                    // ★ 新增：PLC 信号中断不弹额外提示
                     bool isPlcSignalAbort = e.Result.StopReason == InspectionStopReason.Reset
                                             || e.Result.StopReason == InspectionStopReason.PlcStop
-                                            || e.Result.StopReason == InspectionStopReason.EmergencyStop;
+                                            || e.Result.StopReason == InspectionStopReason.EmergencyStop
+                                            || e.Result.StopReason == InspectionStopReason.Canceled;
 
                     if (isPlcSignalAbort)
                     {

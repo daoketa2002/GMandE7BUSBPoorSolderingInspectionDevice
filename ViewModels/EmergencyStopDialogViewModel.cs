@@ -110,7 +110,9 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 用户点击"解除"按钮。写 DT303=0，关闭弹窗。
+    /// 用户点击"解除"按钮。写 DT123=0 和 DT303=0，关闭弹窗。
+    /// 即使清除失败也关闭弹窗，避免弹窗卡死。
+    /// 清除失败后由 TestPageViewModel.RetryClearEmergencySignalsAsync() 接管重试。
     /// </summary>
     [RelayCommand]
     private async Task ReleaseAsync()
@@ -120,22 +122,22 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
 
         _logger?.LogWarning("[急停弹窗][审计] 用户点击解除按钮，清除 DT123=0 和 DT303=0");
 
+        // 先尝试清除 DT123
         var emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(default);
         if (!emergencyResult.IsSuccess)
         {
-            _logger?.LogWarning("[急停弹窗] 清除 DT123 失败: {Message}", emergencyResult.Message);
-            return;
+            _logger?.LogWarning("[急停弹窗] 清除 DT123 失败: {Message}，弹窗照常关闭，交由后台重试", emergencyResult.Message);
         }
 
+        // 再尝试清除 DT303
         var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(default);
         if (!alarmResult.IsSuccess)
         {
-            _logger?.LogWarning("[急停弹窗] 清除 DT303 失败: {Message}", alarmResult.Message);
-            return;
+            _logger?.LogWarning("[急停弹窗] 清除 DT303 失败: {Message}，弹窗照常关闭，交由后台重试", alarmResult.Message);
         }
 
-        // 关闭弹窗前更新本地状态
-        UpdateAlarmState(false);
+        // ★ 无论清除成功与否，都关闭弹窗，避免弹窗卡死
+        // TestPageViewModel.RetryClearEmergencySignalsAsync() 会在后台接管失败重试
         _closeDialog();
     }
 
