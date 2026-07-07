@@ -62,6 +62,11 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     public InspectionConfig Config => _config;
     public int InterruptedPointIndex { get; private set; } = -1;
 
+    /// <summary>当前检测执行阶段，用于 Timeout 诊断。每次步进前由 UpdateCheckpoint 更新。</summary>
+    private volatile string _currentExecutionStage = "Idle";
+    /// <summary>当前检测执行阶段（只读），供外部查询引擎卡在哪个环节。</summary>
+    public string CurrentExecutionStage => _currentExecutionStage;
+
     public InspectionEngine(
         ILogger<InspectionEngine> logger,
         IPlcDevice plcDevice,
@@ -313,6 +318,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         inspectionId, testPoint.Name, measurement.RawValue, judgment);
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
+                    UpdateCheckpoint(i, "WritePointResult");
                     await _plcDevice.WritePointResultAsync(i, judgment == "OK", _inspectionCts.Token).ConfigureAwait(false);
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
@@ -332,7 +338,9 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         result.FailCount = failCount;
                         result.EndTime = DateTime.Now;
 
+                        UpdateCheckpoint(i, "ClearPointOutputs");
                         await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        UpdateCheckpoint(i, "ClearPcReady");
                         await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
                         // 单项 NG 不写 DT304/DT305，等待复位或终了
 
@@ -341,8 +349,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         return result;
                     }
 
+                    UpdateCheckpoint(i, "ClearPointOutputs");
                     await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
                     _inspectionCts.Token.ThrowIfCancellationRequested();
+                    UpdateCheckpoint(i, "UpdateCheckpoint");
                     _checkpoint.CurrentItemIndex = i + 1;
                     _checkpoint.LastUpdatedTime = DateTime.Now;
                 }
@@ -444,6 +454,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         _checkpoint.CurrentItemIndex = itemIndex;
         _checkpoint.CurrentStep = step;
         _checkpoint.LastUpdatedTime = DateTime.Now;
+        _currentExecutionStage = step;
     }
 
     private void AddFinishedResult(TestPointConfig testPoint)
@@ -734,6 +745,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     private async Task AbortCurrentRunAsync(InspectionResult result, string message, InspectionState state)
     {
         _checkpoint.CurrentStep = "Faulted";
+        _currentExecutionStage = "Faulted";
         _checkpoint.LastErrorMessage = message;
         _checkpoint.HasBreakpoint = false;
         _checkpoint.LastUpdatedTime = DateTime.Now;
@@ -769,12 +781,12 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         }
     }
 
-    public void Stop()
+    public void Stop(InspectionStopReason stopReason = InspectionStopReason.PlcStop)
     {
         if (_isRunning)
         {
-            LogInfo("正在中止检测...");
-            _abortReason = InspectionStopReason.PlcStop;
+            LogInfo($"正在中止检测（原因={stopReason}）...");
+            _abortReason = stopReason;
             _inspectionCts?.Cancel();
         }
     }
@@ -796,7 +808,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     /// 停止检测并等待引擎退出，最大等待 timeout 时长。
     /// 超时后仍返回，不做额外强制中止；调用方继续安全清理 PLC 输出和 UI 状态。
     /// </summary>
-    public async Task<InspectionStopWaitResult> StopAndWaitAsync(TimeSpan timeout, CancellationToken ct = default)
+    public async Task<InspectionStopWaitResult> StopAndWaitAsync(TimeSpan timeout, InspectionStopReason stopReason = InspectionStopReason.PlcStop, CancellationToken ct = default)
     {
         if (!_isRunning)
         {
@@ -804,7 +816,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             return InspectionStopWaitResult.AlreadyStopped;
         }
 
-        Stop();
+        Stop(stopReason);
 
         var deadline = DateTime.UtcNow + timeout;
         while (_isRunning && DateTime.UtcNow < deadline)

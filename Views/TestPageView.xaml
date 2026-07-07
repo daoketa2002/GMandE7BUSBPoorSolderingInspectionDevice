@@ -319,6 +319,9 @@
                                     <DataTrigger Binding="{Binding UiState}" Value="Resetting">
                                         <Setter Property="Background" Value="#8E44AD"/>
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding UiState}" Value="ResetFailed">
+                                        <Setter Property="Background" Value="#D35400"/>
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Error">
                                         <Setter Property="Background" Value="#C0392B"/>
                                     </DataTrigger>
@@ -360,6 +363,9 @@
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Resetting">
                                             <Setter Property="Text" Value="复位中"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding UiState}" Value="ResetFailed">
+                                            <Setter Property="Text" Value="复位失败"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Error">
                                             <Setter Property="Text" Value="异常"/>
