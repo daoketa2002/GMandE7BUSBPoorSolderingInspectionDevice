@@ -1131,7 +1131,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 SensorStatusText = "急停中";
                 _logger.LogWarning("[PLC轮询] 检测到急停信号(DT123)");
                 if (_inspectionEngine!.IsRunning)
-                    _inspectionEngine.Stop();
+                    _inspectionEngine.StopForEmergencyStop();
             }
 
             // 弹窗触发必须独立于状态切换。
@@ -1430,6 +1430,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _stopFlowInProgress = true;
         try
         {
+            UiState = TestUIState.Paused;
+            SensorStatusText = "已停止";
             AddLog("[停止流程] 收到停止信号(DT122)，正在停止检测...");
             _logger.LogWarning("[停止流程][审计] DT122 停止信号，执行停止收口");
 
@@ -1443,11 +1445,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _inspectionEngine.ClearResetState();
 
             // 清 PLC 输出
-            await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-            await _plcDevice.ClearPcReadyAsync(CancellationToken.None);
-            await _plcDevice.ClearRelayActionCompletedAsync(CancellationToken.None);
-            await _plcDevice.ClearPinOutputsAsync(CancellationToken.None);
-            await _plcDevice.ClearFinalResultAsync(CancellationToken.None);
+            await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
 
             // 清 DT122
             await _plcDevice.ClearStopRequestAsync(CancellationToken.None);
@@ -1485,7 +1483,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             // 停止当前检测
             if (_inspectionEngine!.IsRunning)
-                _inspectionEngine.Stop();
+                _inspectionEngine.StopForEmergencyStop();
 
             // 清 PLC 输出
             await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
@@ -1523,6 +1521,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private void ShowEmergencyStopDialog()
     {
         bool isFake = _plcDevice is Devices.Fakes.FakeInspectionHardware;
+        bool canSimulateAlarmRelease = isFake || IsSemiPhysicalDebugMode;
 
         // 先创建 dialog，确保 closeDialog 回调能捕获 dialog 引用
         var dialog = new Views.EmergencyStopDialog
@@ -1547,7 +1546,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     _emergencyStopDialogVM = null;
                 });
             },
-            isFakeMode: isFake);
+            canSimulateAlarmRelease: canSimulateAlarmRelease);
 
         dialog.DataContext = vm;
         _emergencyStopDialogVM = vm;
@@ -1822,6 +1821,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
         {
+            bool isPlcSignalAbort = result.StopReason == InspectionStopReason.Reset
+                                    || result.StopReason == InspectionStopReason.PlcStop
+                                    || result.StopReason == InspectionStopReason.EmergencyStop;
+            if (isPlcSignalAbort)
+            {
+                _logger.LogWarning("[运行页][审计] 检测因 {StopReason} 收口，中止提示交由对应流程处理", result.StopReason);
+                return;
+            }
+
             string message = string.IsNullOrWhiteSpace(result.ErrorMessage)
                 ? "检测已中止，请查看运行日志。"
                 : $"检测中止：{result.ErrorMessage}";
@@ -1938,9 +1946,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         Application.Current.Dispatcher.Invoke(() =>
         {
             // 复位或忽略回调期间丢弃旧检测引擎的状态变更，防止旧 Aborted 覆盖复位后的 UI
-            if (_ignoreInspectionCallbacksUntilNextStart || _isResetting)
+            if (_ignoreInspectionCallbacksUntilNextStart || _isResetting || _stopFlowInProgress)
             {
-                _logger.LogDebug("[复位流程] 已忽略旧检测引擎状态回调：{OldState} -> {NewState}",
+                _logger.LogDebug("[运行页] 已忽略收口期间检测引擎状态回调：{OldState} -> {NewState}",
                     e.OldState, e.NewState);
                 return;
             }

@@ -1,6 +1,8 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
+using Microsoft.Extensions.Logging.Abstractions;
 
 var tests = new List<(string Name, Action Body)>
 {
@@ -79,6 +81,38 @@ var tests = new List<(string Name, Action Body)>
         // 验证 InspectionStopReason 有 EmergencyStop
         var emStop = InspectionStopReason.EmergencyStop;
         AssertEqual("EmergencyStop", emStop.ToString());
+    }),
+    ("Fake 报警解除调试写入 DT303 后可被输入快照读到", () =>
+    {
+        var fake = new FakeInspectionHardware(NullLogger<FakeInspectionHardware>.Instance);
+
+        var request = fake.RequestAlarmReleaseAsync().GetAwaiter().GetResult();
+        AssertEqual(true, request.IsSuccess);
+
+        var inputs = fake.ReadMachineInputsAsync().GetAwaiter().GetResult();
+        AssertEqual(true, inputs.IsSuccess);
+        AssertEqual(true, inputs.Value?.IsAlarmReleased);
+
+        var clearEmergency = fake.ClearEmergencyStopRequestAsync().GetAwaiter().GetResult();
+        var clearAlarm = fake.ClearAlarmReleasedAsync().GetAwaiter().GetResult();
+        AssertEqual(true, clearEmergency.IsSuccess);
+        AssertEqual(true, clearAlarm.IsSuccess);
+
+        inputs = fake.ReadMachineInputsAsync().GetAwaiter().GetResult();
+        AssertEqual(false, inputs.Value?.IsEmergencyStop);
+        AssertEqual(false, inputs.Value?.IsAlarmReleased);
+    }),
+    ("急停专用停止会把引擎状态标记为急停", () =>
+    {
+        var fake = new FakeInspectionHardware(NullLogger<FakeInspectionHardware>.Instance);
+        var engine = new InspectionEngine(
+            NullLogger<InspectionEngine>.Instance,
+            fake,
+            fake);
+
+        engine.StopForEmergencyStop();
+
+        AssertEqual(InspectionState.PausedByEmergencyStop, engine.CurrentState);
     }),
     ("万用表异常值分类符合运行策略", () =>
     {

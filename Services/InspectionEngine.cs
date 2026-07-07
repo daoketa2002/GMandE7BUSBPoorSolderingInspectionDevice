@@ -764,6 +764,18 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
+    /// 急停专用中止入口：先标记急停状态，再取消检测任务，避免被归类为普通取消。
+    /// </summary>
+    public void StopForEmergencyStop()
+    {
+        _logger.LogWarning("[检测流程][审计] 急停触发，按急停原因中止当前检测");
+        SetState(InspectionState.PausedByEmergencyStop);
+        _checkpoint.HasBreakpoint = false;
+        _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
+        _inspectionCts?.Cancel();
+    }
+
+    /// <summary>
     /// 停止检测并等待引擎退出，最大等待 timeout 时长。
     /// 超时后仍返回，不做额外强制中止；调用方继续安全清理 PLC 输出和 UI 状态。
     /// </summary>

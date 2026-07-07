@@ -83,10 +83,10 @@
 
                 <!-- ══════ 按钮区 ══════ -->
                 <StackPanel Grid.Row="2" HorizontalAlignment="Center" Margin="20,12,20,20">
-                    <!-- Fake 调试按钮：模拟 DT303=1 -->
-                    <Button Content="模拟 DT303=1（Fake调试）"
-                            Command="{Binding FakeTriggerAlarmReleaseCommand}"
-                            Visibility="{Binding IsFakeModeVisible, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    <!-- 半实物/Fake 调试按钮：模拟 DT303=1 -->
+                    <Button Content="模拟报警解除(DT303=1)"
+                            Command="{Binding TriggerAlarmReleaseCommand}"
+                            Visibility="{Binding CanSimulateAlarmRelease, Converter={StaticResource BooleanToVisibilityConverter}}"
                             Background="#8E44AD"
                             Foreground="White"
                             Padding="16,6"

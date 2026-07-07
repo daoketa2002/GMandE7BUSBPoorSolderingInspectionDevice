@@ -356,6 +356,13 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT303=0"));
     }
 
+    public Task<PlcOperationResult> RequestAlarmReleaseAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.AlarmReleased, 1);
+        _logger.LogWarning("[Fake硬件][审计] 模拟 PLC 写入 DT303=1，报警解除按钮可用");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT303=1"));
+    }
+
     public Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
     {
         _logger.LogWarning("[Fake硬件][审计] Fake 万用表初始化为电阻模式");

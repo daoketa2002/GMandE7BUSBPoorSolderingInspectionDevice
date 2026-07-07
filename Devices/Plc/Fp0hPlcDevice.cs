@@ -534,6 +534,12 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// 清空报警解除信号（写 DT303 = 0）。
     /// 用户点击急停弹窗"解除"按钮后调用，只清 DT303，不清 DT123。
     /// </summary>
+    public async Task<PlcOperationResult> RequestAlarmReleaseAsync(CancellationToken ct = default)
+    {
+        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT303=1，模拟 PLC 报警解除通知。正式整机联调应由 PLC 写入。");
+        return await WriteRegisterSingleAsync("DT303(报警解除)", _addressMap.AlarmReleasedRegister, 1, ct).ConfigureAwait(false);
+    }
+
     public async Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default)
     {
         _logger.LogWarning("[PLC动作][审计] 用户确认急停解除，PC 清除 DT303 报警解除信号 → 写 DT303 = 0");

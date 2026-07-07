@@ -152,9 +152,15 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 半实物/Fake 调试请求报警解除（写 DT303 = 1）。
+    /// 仅用于调试按钮模拟 PLC 已解除报警；正式真实模式应由 PLC 侧写入 DT303。
+    /// </summary>
+    Task<PlcOperationResult> RequestAlarmReleaseAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 清空报警解除信号（写 DT303 = 0）。
     /// 用户点击急停弹窗"解除"按钮后调用。
-    /// 只清 DT303，不清 DT123。
+    /// 最新流程中急停解除会先清 DT123，再清 DT303。
     /// </summary>
     Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default);
 

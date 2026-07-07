@@ -16,7 +16,7 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
     private readonly ILogger<EmergencyStopDialogViewModel>? _logger;
     private readonly IPlcDevice _plcDevice;
     private readonly Action _closeDialog;
-    private readonly bool _isFakeMode;
+    private readonly bool _canSimulateAlarmRelease;
     private CancellationTokenSource? _pollingCts;
 
     [ObservableProperty]
@@ -25,18 +25,18 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
     [ObservableProperty]
     private string _statusText = "等待报警解除信号 DT303=1";
 
-    /// <summary>Fake 调试按钮是否可见。</summary>
-    public bool IsFakeModeVisible => _isFakeMode;
+    /// <summary>半实物/Fake 调试按钮是否可见。</summary>
+    public bool CanSimulateAlarmRelease => _canSimulateAlarmRelease;
 
     public EmergencyStopDialogViewModel(
         IPlcDevice plcDevice,
         Action closeDialog,
-        bool isFakeMode,
+        bool canSimulateAlarmRelease,
         ILogger<EmergencyStopDialogViewModel>? logger = null)
     {
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
         _closeDialog = closeDialog ?? throw new ArgumentNullException(nameof(closeDialog));
-        _isFakeMode = isFakeMode;
+        _canSimulateAlarmRelease = canSimulateAlarmRelease;
         _logger = logger;
     }
 
@@ -118,12 +118,19 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
         if (!IsAlarmReleased)
             return;
 
-        _logger?.LogWarning("[急停弹窗][审计] 用户点击解除按钮，清除 DT303=0");
+        _logger?.LogWarning("[急停弹窗][审计] 用户点击解除按钮，清除 DT123=0 和 DT303=0");
 
-        var result = await _plcDevice.ClearAlarmReleasedAsync(default);
-        if (!result.IsSuccess)
+        var emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(default);
+        if (!emergencyResult.IsSuccess)
         {
-            _logger?.LogWarning("[急停弹窗] 清除 DT303 失败: {Message}", result.Message);
+            _logger?.LogWarning("[急停弹窗] 清除 DT123 失败: {Message}", emergencyResult.Message);
+            return;
+        }
+
+        var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(default);
+        if (!alarmResult.IsSuccess)
+        {
+            _logger?.LogWarning("[急停弹窗] 清除 DT303 失败: {Message}", alarmResult.Message);
             return;
         }
 
@@ -133,24 +140,26 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Fake 调试用：模拟 PLC 置 DT303=1。
-    /// 仅在 Fake 模式下可用，真实 PLC 模式下按钮隐藏。
+    /// 半实物/Fake 调试用：模拟 PLC 置 DT303=1。
+    /// 写成功后直接启用解除按钮，不等待下一次 DT303 轮询读回。
     /// </summary>
     [RelayCommand]
-    private async Task FakeTriggerAlarmReleaseAsync()
+    private async Task TriggerAlarmReleaseAsync()
     {
-        if (!_isFakeMode)
+        if (!_canSimulateAlarmRelease)
             return;
 
-        if (_plcDevice is GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes.FakeInspectionHardware fake)
+        var result = await _plcDevice.RequestAlarmReleaseAsync(default).ConfigureAwait(false);
+        if (!result.IsSuccess)
         {
-            await fake.WriteInputRegisterAsync(PlcAddressMap.AlarmReleased, 1).ConfigureAwait(false);
-
-            // 同时更新本地状态，无需等轮询
-            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                () => UpdateAlarmState(true));
-
-            _logger?.LogWarning("[急停弹窗][Fake调试] 模拟 PLC 写入 DT303=1");
+            _logger?.LogWarning("[急停弹窗] 模拟写入 DT303=1 失败: {Message}", result.Message);
+            return;
         }
+
+        // 半实物/Fake 调试按钮已经由上位机主动写入 DT303=1，无需再等轮询确认。
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+            () => UpdateAlarmState(true));
+
+        _logger?.LogWarning("[急停弹窗][调试] 已写入 DT303=1，直接启用解除按钮");
     }
 }
