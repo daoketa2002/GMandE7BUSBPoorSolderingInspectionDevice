@@ -50,6 +50,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
         private volatile int _isReconnecting;
+        private volatile bool _receiveBufferPossiblyDirty;
 
         #endregion
 
@@ -286,6 +287,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
             using var readTimeoutCts = new CancellationTokenSource(_timeoutMs);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readTimeoutCts.Token);
+            bool readTimedOut = false;
 
             try
             {
@@ -305,14 +307,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             }
             catch (OperationCanceledException)
             {
+                readTimedOut = true;
                 if (memoryStream.Length == 0)
                 {
+                    _receiveBufferPossiblyDirty = true;
                     _logger.LogWarning("SCPI查询命令超时: {Command}", command);
                     return string.Empty;
                 }
             }
 
             var result = Encoding.ASCII.GetString(memoryStream.ToArray()).TrimEnd('\r', '\n', ' ');
+            if (readTimedOut)
+            {
+                _receiveBufferPossiblyDirty = true;
+                _logger.LogWarning("SCPI查询命令读取到部分响应但未收到结束符: {Command}, Response={Response}", command, result);
+            }
+            else
+            {
+                _receiveBufferPossiblyDirty = false;
+            }
+
             _logger.LogDebug("SCPI响应: {Response}", result);
             return result;
         }
@@ -336,6 +350,44 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _networkStream.WriteAsync(cmdBytes, ct).ConfigureAwait(false);
             await _networkStream.FlushAsync(ct).ConfigureAwait(false);
             // 设置命令不读取响应——GDM-9060 对这些命令不返回数据
+        }
+
+        /// <summary>
+        /// 清理 TCP 接收缓冲区中迟到的上一条查询响应，避免 *IDN? 残留被后续 *OPC? 读走。
+        /// 调用方必须已经持有 _commandLock，确保清理期间没有其他 SCPI 命令并发读写。
+        /// </summary>
+        private async Task DrainReceiveBufferAsync(CancellationToken ct)
+        {
+            if (_networkStream == null || _tcpClient == null || !_tcpClient.Connected)
+                return;
+
+            var buffer = new byte[RECEIVE_BUFFER_SIZE];
+            int totalBytes = 0;
+            int quietChecks = _receiveBufferPossiblyDirty ? 5 : 2;
+
+            for (int i = 0; i < quietChecks; i++)
+            {
+                while (_networkStream.DataAvailable)
+                {
+                    int bytesRead = await _networkStream.ReadAsync(buffer, 0, buffer.Length, ct)
+                        .ConfigureAwait(false);
+                    if (bytesRead <= 0)
+                        break;
+
+                    totalBytes += bytesRead;
+                    i = 0;
+                }
+
+                if (i < quietChecks - 1)
+                    await Task.Delay(20, ct).ConfigureAwait(false);
+            }
+
+            if (totalBytes > 0)
+            {
+                _logger.LogWarning("[万用表][审计] 已清理 TCP 接收缓冲区残留响应 {Bytes} 字节，避免查询响应串台", totalBytes);
+            }
+
+            _receiveBufferPossiblyDirty = false;
         }
 
         #endregion
@@ -438,7 +490,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 var opc = await SendQueryInternalAsync("*OPC?", ct).ConfigureAwait(false);
                 if (opc.Trim() != "1")
                 {
-                    _logger.LogWarning("[万用表] *OPC? 返回非预期值：{Value}", opc);
+                    if (opc.StartsWith("GWInstek", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _receiveBufferPossiblyDirty = true;
+                        _logger.LogWarning("[万用表][审计] *OPC? 读到设备身份响应，疑似上一条 *IDN? 残留或查询响应串台：{Value}", opc);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[万用表] *OPC? 返回非预期值：{Value}", opc);
+                    }
                     return false;
                 }
 
@@ -503,6 +563,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
+                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SYST:REM", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("CONF:RES", ct).ConfigureAwait(false);
@@ -543,6 +605,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
+                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SYST:REM", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("CONF:CONT", ct).ConfigureAwait(false);
@@ -711,6 +775,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
+                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SYST:REM", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("CONF:RES", ct).ConfigureAwait(false);
@@ -750,9 +816,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 轻量级通信验证：发送 *IDN? 并检查是否有非空响应。
-        /// 内部使用 SendQueryInternalAsync（不加锁版本），
-        /// 因为 PingAsync 外部已在 _commandLock 保护下调用或无需与测量指令互斥。
-        /// 带独立短超时（500ms），不阻塞主流程。
+        /// 使用同一把 _commandLock 串行化查询，避免 *IDN? 响应迟到后污染后续 *OPC? / READ?。
+        /// 带独立短超时（500ms），避免长时间阻塞启动复核。
         /// </summary>
         public async Task<bool> PingAsync(CancellationToken ct = default)
         {
@@ -768,14 +833,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 using var timeoutCts = new CancellationTokenSource(500);
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
-                var response = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
+                await _commandLock.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+                try
+                {
+                    await DrainReceiveBufferAsync(linkedCts.Token).ConfigureAwait(false);
+                    var response = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
 
-                bool success = !string.IsNullOrWhiteSpace(response);
-                _logger.LogDebug("[万用表Ping] 结果={Result}, 响应={Response}", success, response);
-                return success;
+                    bool success = !string.IsNullOrWhiteSpace(response);
+                    _logger.LogDebug("[万用表Ping] 结果={Result}, 响应={Response}", success, response);
+                    return success;
+                }
+                finally
+                {
+                    _commandLock.Release();
+                }
             }
             catch (OperationCanceledException)
             {
+                _receiveBufferPossiblyDirty = true;
                 _logger.LogWarning("[万用表Ping] 超时（500ms），万用表不可通信");
                 return false;
             }

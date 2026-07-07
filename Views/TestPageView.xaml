@@ -307,6 +307,9 @@
                                     <DataTrigger Binding="{Binding UiState}" Value="Paused">
                                         <Setter Property="Background" Value="#F1C40F"/>
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding UiState}" Value="AwaitingReset">
+                                        <Setter Property="Background" Value="#F1C40F"/>
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
                                         <Setter Property="Background" Value="#E74C3C"/>
                                     </DataTrigger>
@@ -345,6 +348,9 @@
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="Paused">
                                             <Setter Property="Text" Value="已停止"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding UiState}" Value="AwaitingReset">
+                                            <Setter Property="Text" Value="请复位"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
                                             <Setter Property="Text" Value="急停中"/>

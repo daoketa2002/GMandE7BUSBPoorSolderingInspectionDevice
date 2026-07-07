@@ -1,4 +1,5 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
@@ -81,6 +82,11 @@ var tests = new List<(string Name, Action Body)>
         // 验证 InspectionStopReason 有 EmergencyStop
         var emStop = InspectionStopReason.EmergencyStop;
         AssertEqual("EmergencyStop", emStop.ToString());
+    }),
+    ("P0 control enums exist", () =>
+    {
+        AssertEqual("Resetting", InspectionControlAction.Resetting.ToString());
+        AssertEqual("Timeout", InspectionStopWaitResult.Timeout.ToString());
     }),
     ("Fake 报警解除调试写入 DT303 后可被输入快照读到", () =>
     {

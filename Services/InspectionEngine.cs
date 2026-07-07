@@ -4,6 +4,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using Microsoft.Extensions.Logging;
 
@@ -795,8 +796,14 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     /// 停止检测并等待引擎退出，最大等待 timeout 时长。
     /// 超时后仍返回，不做额外强制中止；调用方继续安全清理 PLC 输出和 UI 状态。
     /// </summary>
-    public async Task StopAndWaitAsync(TimeSpan timeout, CancellationToken ct = default)
+    public async Task<InspectionStopWaitResult> StopAndWaitAsync(TimeSpan timeout, CancellationToken ct = default)
     {
+        if (!_isRunning)
+        {
+            _logger.LogInformation("[检测流程][停止等待] 调用时引擎已停止");
+            return InspectionStopWaitResult.AlreadyStopped;
+        }
+
         Stop();
 
         var deadline = DateTime.UtcNow + timeout;
@@ -807,10 +814,14 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
         if (_isRunning)
         {
-            _logger.LogWarning("[检测流程][审计] 已请求停止检测，但等待 {TimeoutMs}ms 后仍未完全退出", timeout.TotalMilliseconds);
+            _logger.LogError("[检测流程][停止等待][审计] 已请求停止检测，但等待 {TimeoutMs}ms 后仍未完全退出",
+                timeout.TotalMilliseconds);
+            return InspectionStopWaitResult.Timeout;
         }
-    }
 
+        _logger.LogInformation("[检测流程][停止等待] 引擎已在 {TimeoutMs}ms 内停止", timeout.TotalMilliseconds);
+        return InspectionStopWaitResult.Stopped;
+    }
     /// <summary>
     /// 暂停检测并保留断点（Fake 调试停止时使用）。
     /// 与 Stop() 的区别：会设置 HasBreakpoint=true 和 Paused 状态，
