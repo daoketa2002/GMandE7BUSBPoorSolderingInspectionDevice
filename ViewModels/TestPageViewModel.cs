@@ -123,11 +123,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>DT121 复位信号是否已处理，防止复位按钮保持时重复处理。</summary>
     private bool _resetSignalHandled;
 
-    /// <summary>Starting/Stopping 期间收到的复位请求，当前动作释放门禁后再执行。</summary>
-    private bool _pendingResetRequested;
+    /// <summary>当前控制动作执行期间挂起的最高优先级动作。不是 FIFO，只保留最高意图。</summary>
+    private PendingInspectionControlAction _pendingControlAction = PendingInspectionControlAction.None;
 
-    /// <summary>挂起复位请求来源，只用于复位补执行时保留日志语义。</summary>
-    private InspectionActionSource _pendingResetSource = InspectionActionSource.PlcPolling;
+    /// <summary>挂起动作来源，只用于补执行时保留日志语义。</summary>
+    private InspectionActionSource _pendingControlActionSource = InspectionActionSource.PlcPolling;
 
     /// <summary>复位或中止后，忽略上一轮检测流程晚到的 StepStarted/StepCompleted/Completed 回调。</summary>
     private bool _ignoreInspectionCallbacksUntilNextStart;
@@ -526,6 +526,112 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                    or InspectionControlAction.Resetting
                    or InspectionControlAction.EmergencyStopping
                    or InspectionControlAction.Finishing;
+    }
+
+    /// <summary>
+    /// 判断检测中止是否属于预期控制动作。此类结果不得映射为普通检测异常。
+    /// </summary>
+    private static bool IsExpectedControlStopReason(InspectionStopReason reason)
+    {
+        return reason is InspectionStopReason.PlcStop
+            or InspectionStopReason.Reset
+            or InspectionStopReason.EmergencyStop
+            or InspectionStopReason.Canceled;
+    }
+
+    /// <summary>
+    /// 合并当前控制动作执行期间新到达的意图。只保留最高优先级，不按 FIFO 排队。
+    /// </summary>
+    private bool RequestPendingControlAction(PendingInspectionControlAction newAction, InspectionActionSource source)
+    {
+        if (newAction == PendingInspectionControlAction.None)
+            return false;
+
+        if (InspectionControlActionPolicy.ShouldRejectNewAction(_currentControlAction, newAction))
+        {
+            _logger.LogWarning("[动作仲裁][拒绝] CurrentAction={CurrentAction} 时拒绝 {NewAction}，来源={Source}",
+                _currentControlAction,
+                newAction,
+                source);
+            return false;
+        }
+
+        if (InspectionControlActionPolicy.ShouldAbsorbNewAction(_currentControlAction, newAction))
+        {
+            _logger.LogWarning("[动作仲裁][吸收] CurrentAction={CurrentAction} 已吸收 {NewAction}，来源={Source}",
+                _currentControlAction,
+                newAction,
+                source);
+            return false;
+        }
+
+        if (!InspectionControlActionPolicy.ShouldReplacePending(_pendingControlAction, newAction))
+        {
+            _logger.LogInformation("[动作仲裁] Pending {CurrentPending} 保持不变，忽略 {NewAction}，来源={Source}",
+                _pendingControlAction,
+                newAction,
+                source);
+            return false;
+        }
+
+        var oldAction = _pendingControlAction;
+        _pendingControlAction = newAction;
+        _pendingControlActionSource = source;
+
+        _logger.LogWarning("[动作仲裁] Pending {OldAction} -> {NewAction}，来源={Source}, CurrentAction={CurrentAction}, UiState={UiState}",
+            oldAction,
+            newAction,
+            source,
+            _currentControlAction,
+            UiState);
+        return true;
+    }
+
+    /// <summary>
+    /// Reset 成功后吸收低优先级挂起动作，避免旧 Stop/Start 在复位完成后又被执行。
+    /// </summary>
+    private void AbsorbLowerPriorityPendingActionsAfterReset()
+    {
+        var oldAction = _pendingControlAction;
+        _pendingControlAction = InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(_pendingControlAction);
+
+        if (oldAction != _pendingControlAction)
+        {
+            _logger.LogWarning("[动作仲裁] Reset 已吸收 Pending {OldAction}，保留 {NewAction}",
+                oldAction,
+                _pendingControlAction);
+        }
+    }
+
+    /// <summary>
+    /// 当前短动作退出后执行挂起的最高优先级动作。一次只消费一个最高意图。
+    /// </summary>
+    private async Task ExecutePendingControlActionIfNeededAsync()
+    {
+        var action = _pendingControlAction;
+        if (action == PendingInspectionControlAction.None)
+            return;
+
+        var source = _pendingControlActionSource;
+        _pendingControlAction = PendingInspectionControlAction.None;
+
+        _logger.LogWarning("[动作仲裁] 当前动作结束，开始执行挂起动作 {Action}，来源={Source}", action, source);
+
+        switch (action)
+        {
+            case PendingInspectionControlAction.EmergencyStop:
+                await ExecuteEmergencyStopFlowAsync(source);
+                break;
+            case PendingInspectionControlAction.Reset:
+                await ExecuteResetFlowAsync(source);
+                break;
+            case PendingInspectionControlAction.Stop:
+                await ExecuteStopFlowAsync(source);
+                break;
+            case PendingInspectionControlAction.Start:
+                await HandlePlcStartRequestAsync(source);
+                break;
+        }
     }
 
     /// <summary>
@@ -932,33 +1038,138 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 复位收口后读取一次 PLC 输入快照，便于判断 DT120/DT121 是否真的释放。
-    /// 诊断失败不影响复位主流程。
+    /// 停止流程只做有限 DT122 收口。若稳定确认后仍为 1，交给 ResetFlow 最终兜底。
     /// </summary>
-    private async Task LogPlcInputsAfterResetAsync()
+    private async Task<bool> CompleteStopSignalHandshakeAsync(string context, CancellationToken ct)
+    {
+        _logger.LogWarning("[停止流程][DT122] 开始收口，Context={Context}", context);
+
+        var clearResult = await _plcDevice.ClearStopRequestAsync(ct).ConfigureAwait(false);
+        if (!clearResult.IsSuccess)
+        {
+            _logger.LogWarning("[停止流程][DT122] 清除失败：{Message}，仍保持 AwaitingReset", clearResult.Message);
+            return false;
+        }
+
+        await Task.Delay(100, ct).ConfigureAwait(false);
+        var first = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+        if (!first.IsSuccess || first.Value == null)
+        {
+            _logger.LogWarning("[停止流程][DT122] 第一次稳定确认读取失败：{Message}", first.Message);
+            return false;
+        }
+
+        if (!first.Value.IsStopRequested)
+        {
+            _logger.LogWarning("[停止流程][DT122] 已确认释放");
+            return true;
+        }
+
+        await Task.Delay(100, ct).ConfigureAwait(false);
+        var second = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+        if (!second.IsSuccess || second.Value == null)
+        {
+            _logger.LogWarning("[停止流程][DT122] 第二次稳定确认读取失败：{Message}", second.Message);
+            return false;
+        }
+
+        if (!second.Value.IsStopRequested)
+        {
+            _logger.LogWarning("[停止流程][DT122] 第二次确认已释放");
+            return true;
+        }
+
+        _logger.LogWarning("[停止流程][DT122] 稳定确认仍为 1，保持 AwaitingReset，等待 ResetFlow 兜底");
+        return false;
+    }
+
+    /// <summary>
+    /// ResetFlow 对 DT122 做最终兜底。有限重试仍失败时，复位不得进入 CanStart。
+    /// </summary>
+    private async Task<bool> CompleteResetStopSignalFinalizationAsync(CancellationToken ct)
+    {
+        _logger.LogWarning("[复位流程][DT122] 开始兜底清理");
+
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            var clearResult = await _plcDevice.ClearStopRequestAsync(ct).ConfigureAwait(false);
+            if (!clearResult.IsSuccess)
+            {
+                _logger.LogWarning("[复位流程][DT122] 第 {Attempt} 次清除失败：{Message}", attempt, clearResult.Message);
+            }
+
+            await Task.Delay(100, ct).ConfigureAwait(false);
+            var readResult = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+            if (!readResult.IsSuccess || readResult.Value == null)
+            {
+                _logger.LogWarning("[复位流程][DT122] 第 {Attempt} 次读取失败：{Message}", attempt, readResult.Message);
+                continue;
+            }
+
+            if (!readResult.Value.IsStopRequested)
+            {
+                _logger.LogWarning("[复位流程][DT122] 最终确认成功，第 {Attempt} 次后 DT122=0", attempt);
+                return true;
+            }
+
+            _logger.LogWarning("[复位流程][DT122] 第 {Attempt} 次确认仍为 1", attempt);
+        }
+
+        _logger.LogWarning("[复位流程][DT122] 最终确认失败，DT122 仍未释放");
+        return false;
+    }
+
+    /// <summary>
+    /// 复位收口最终验证。当前快照能确认 DT120/DT121/DT122/DT123 均释放，才允许进入 Ready/CanStart。
+    /// </summary>
+    private async Task<ResetCompletionValidationResult> ValidateResetCompletionAsync(CancellationToken ct)
     {
         try
         {
-            var snapshot = await _plcDevice.ReadMachineInputsAsync(CancellationToken.None).ConfigureAwait(false);
+            var snapshot = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
             if (!snapshot.IsSuccess || snapshot.Value == null)
             {
-                _logger.LogWarning("[复位流程][诊断] 复位后读取 PLC 输入快照失败：{Message}", snapshot.Message);
-                return;
+                _logger.LogWarning("[复位流程][验证] 读取 PLC 输入快照失败：{Message}", snapshot.Message);
+                return ResetCompletionValidationResult.PlcReadFailed;
             }
 
             var inputs = snapshot.Value;
             _logger.LogWarning(
-                "[复位流程][诊断] 复位后 PLC 快照：DT120={DT120}, DT121={DT121}, DT122={DT122}, DT123={DT123}, DT302={DT302}",
+                "[复位流程][验证] PLC 快照：DT120={DT120}, DT121={DT121}, DT122={DT122}, DT123={DT123}, DT302={DT302}",
                 inputs.IsStartRequested ? 1 : 0,
                 inputs.IsResetRequested ? 1 : 0,
                 inputs.IsStopRequested ? 1 : 0,
                 inputs.IsEmergencyStop ? 1 : 0,
                 inputs.IsRelayActionCompleted ? 1 : 0);
+
+            if (inputs.IsStartRequested)
+                return ResetCompletionValidationResult.StartSignalStillActive;
+            if (inputs.IsResetRequested)
+                return ResetCompletionValidationResult.ResetSignalStillActive;
+            if (inputs.IsStopRequested)
+                return ResetCompletionValidationResult.StopSignalStillActive;
+            if (inputs.IsEmergencyStop)
+                return ResetCompletionValidationResult.EmergencyStopStillActive;
+            return ResetCompletionValidationResult.Success;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[复位流程][诊断] 复位后读取 PLC 输入快照异常");
+            _logger.LogWarning(ex, "[复位流程][验证] 复位后读取 PLC 输入快照异常");
+            return ResetCompletionValidationResult.PlcReadFailed;
         }
+    }
+
+    private static string FormatResetValidationFailure(ResetCompletionValidationResult result)
+    {
+        return result switch
+        {
+            ResetCompletionValidationResult.StartSignalStillActive => "启动信号 DT120 仍有效",
+            ResetCompletionValidationResult.ResetSignalStillActive => "复位信号 DT121 仍有效",
+            ResetCompletionValidationResult.StopSignalStillActive => "停止信号 DT122 无法清除",
+            ResetCompletionValidationResult.EmergencyStopStillActive => "急停信号 DT123 仍有效",
+            ResetCompletionValidationResult.PlcReadFailed => "PLC 输入快照读取失败",
+            _ => "未知控制信号未释放"
+        };
     }
 
     /// <summary>
@@ -1129,15 +1340,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>
     /// 启动 PLC 状态轮询（取代旧传感器模拟）。
-    /// 每 300ms 读取一次 PLC 输入信号，更新 UI 状态。
+    /// 真实模式 200ms，半实物/Fake 100ms；不低于 100ms，避免 PLC 通信堆积。
     /// </summary>
     private void StartPlcPolling()
     {
         if (_plcPollingTimer != null) return;
 
+        var pollingInterval = GetPlcPollingInterval();
         _plcPollingTimer = new DispatcherTimer(DispatcherPriority.Render)
         {
-            Interval = TimeSpan.FromMilliseconds(300)
+            Interval = pollingInterval
         };
 
         _plcPollingTimer.Tick += async (s, e) =>
@@ -1146,7 +1358,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         };
 
         _plcPollingTimer.Start();
-        _logger.LogDebug("PLC 轮询已启动");
+        _logger.LogDebug("PLC 轮询已启动，模式 Fake={IsFakeMode}, SemiPhysical={IsSemiPhysical}, IntervalMs={IntervalMs}",
+            IsFakeMode,
+            IsSemiPhysicalDebugMode,
+            pollingInterval.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// 根据当前运行模式选择 PLC 轮询周期。调试模式要响应快，真实模式保留通信余量。
+    /// </summary>
+    private TimeSpan GetPlcPollingInterval()
+    {
+        return TimeSpan.FromMilliseconds(100);
     }
 
     /// <summary>
@@ -1184,15 +1407,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
+            var previousInputs = _lastPlcInputs;
             var inputs = result.Value;
-            _lastPlcInputs = inputs;
 
             IsPlcStartRequested = inputs.IsStartRequested;
 
-            await Application.Current.Dispatcher.InvokeAsync(async () =>
+            var operation = Application.Current.Dispatcher.InvokeAsync(
+                () => UpdateUiStateFromPlcInputsAsync(previousInputs, inputs));
+            await operation.Task.Unwrap().ConfigureAwait(false);
+
+            if (ReferenceEquals(_lastPlcInputs, previousInputs))
             {
-                await UpdateUiStateFromPlcInputsAsync(inputs);
-            });
+                _lastPlcInputs = inputs;
+            }
         }
         catch (Exception ex)
         {
@@ -1210,7 +1437,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     ///   2. 上位机操作全部完成后 → 最后清除 DT121
     ///   3. 清除 DT121 后 → 通知 PLC 上位机已就绪
     /// </summary>
-    private async Task UpdateUiStateFromPlcInputsAsync(PlcMachineInputs inputs)
+    private async Task UpdateUiStateFromPlcInputsAsync(PlcMachineInputs? previousInputs, PlcMachineInputs inputs)
     {
         // ── 复位信号边沿检测：DT121 从 1→0 时重置处理标志 ──
         if (!inputs.IsResetRequested)
@@ -1228,45 +1455,45 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
         }
 
-        // ════════════════════════════════════════════════════════
-        // 急停弹窗已确认但 DT123 仍为 1 → 自动后台清除，不再弹窗
-        // ════════════════════════════════════════════════════════
-        if (inputs.IsEmergencyStop && _emergencyDialogAcknowledged && !_isShowingEmergencyDialog)
-        {
-            _logger.LogWarning("[急停收尾][自动清除] 弹窗已关闭但 DT123 仍为 1，触发后台清除");
-            _ = RetryClearEmergencySignalsAsync();
-            return;
-        }
-
         // ── DT123 回到 0，重置弹窗确认标志 ──
         if (!inputs.IsEmergencyStop)
         {
             _emergencyDialogAcknowledged = false;
         }
 
-        // ════════════════════════════════════════════════════════
-        // 急停弹窗触发 — 独立判断，只要 DT123=1 且弹窗未显示且用户未确认
-        // 不依赖 UiState，因为引擎回调可能先于轮询把 UiState 切到 EmergencyStop
-        // ════════════════════════════════════════════════════════
-        if (inputs.IsEmergencyStop && !_isShowingEmergencyDialog && !_emergencyDialogAcknowledged)
-        {
-            _isShowingEmergencyDialog = true;
-            ShowEmergencyStopDialog();
-        }
+        bool emergencyStopTriggered = IsEmergencyStopTriggered(previousInputs, inputs);
 
         // ════════════════════════════════════════════════════════
-        // 急停状态切换
+        // 急停按事件处理：首次 DT123=1 或真正 0→1 才启动急停 Flow。
+        // 持续高电平只表示现场仍处于急停，不允许把 AwaitingReset 旧快照再次解释成新急停。
         // ════════════════════════════════════════════════════════
-        if (inputs.IsEmergencyStop)
+        if (emergencyStopTriggered)
         {
-            if (UiState != TestUIState.EmergencyStop)
+            _logger.LogWarning(
+                "[急停边沿][触发] Previous={Previous}, Current={Current}, UiState={UiState}, CurrentAction={CurrentAction}",
+                previousInputs?.IsEmergencyStop == true ? 1 : 0,
+                inputs.IsEmergencyStop ? 1 : 0,
+                UiState,
+                _currentControlAction);
+
+            await ExecuteEmergencyStopFlowAsync(InspectionActionSource.PlcPolling);
+
+            if (!_isShowingEmergencyDialog)
             {
-                SetUiState(TestUIState.EmergencyStop);
-                _logger.LogWarning("[PLC轮询] 检测到急停信号(DT123)");
-                if (_inspectionEngine!.IsRunning)
-                    _inspectionEngine.StopForEmergencyStop();
+                _isShowingEmergencyDialog = true;
+                ShowEmergencyStopDialog();
             }
             return; // 急停状态下不处理启动/停止/复位信号
+        }
+
+        if (inputs.IsEmergencyStop)
+        {
+            if (UiState == TestUIState.AwaitingReset)
+            {
+                _logger.LogDebug("[PLC快照][忽略旧急停] UiState=AwaitingReset，未检测到新的 DT123 上升沿");
+            }
+
+            return;
         }
 
 
@@ -1278,6 +1505,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             if (_resetSignalHandled)
                 return;
+
+            if (_currentControlAction == InspectionControlAction.EmergencyStopping)
+            {
+                _logger.LogWarning("[急停流程] Reset 请求被拒绝，需先解除急停后人工复位，来源=PLC轮询");
+                AddLog("[急停流程] 当前处于急停中，请先解除急停，解除后再执行复位");
+                _resetSignalHandled = true;
+                return;
+            }
 
             AddLog("PLC 复位信号(DT121)，正在执行上位机复位操作...");
             _logger.LogWarning("[PLC轮询][审计] 检测到 DT121=1，执行复位流程");
@@ -1300,6 +1535,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (!_stopSignalHandled)
             {
                 _stopSignalHandled = true;
+
+                if (_currentControlAction == InspectionControlAction.Resetting || _isResetting)
+                {
+                    _logger.LogWarning("[动作仲裁][吸收] Resetting 期间收到 Stop，交由 ResetFlow 兜底 DT122");
+                    return;
+                }
+
                 await ExecuteStopFlowAsync(InspectionActionSource.PlcPolling);
             }
             return;
@@ -1343,6 +1585,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // 更新普通待机/可启用状态
         // ════════════════════════════════════════════════════════
         UpdateUIState();
+    }
+
+    /// <summary>
+    /// DT123 只按首次高电平或 0→1 上升沿解释为新的急停事件，避免旧快照重复触发急停流程。
+    /// </summary>
+    private static bool IsEmergencyStopTriggered(PlcMachineInputs? previousInputs, PlcMachineInputs currentInputs)
+    {
+        return previousInputs == null
+            ? currentInputs.IsEmergencyStop
+            : !previousInputs.IsEmergencyStop && currentInputs.IsEmergencyStop;
     }
 
     /// <summary>
@@ -1531,15 +1783,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ExitControlAction(InspectionControlAction.Starting);
         }
 
-        await ExecutePendingResetIfNeededAsync();
+        await ExecutePendingControlActionIfNeededAsync();
     }
     #region 统一复位流程
 
     /// <summary>
     /// 执行上位机完整复位流程（三种模式统一收口）。
     /// 供以下路径复用：
-    ///   1. 半实物联调按钮（TriggerPlcResetAsync）— 写 DT121=1 读回确认后主动执行
-    ///   2. Fake 调试按钮（FakeTriggerResetAsync）— 写 DT121=1 读回确认后主动执行
+    ///   1. 半实物联调按钮（TriggerPlcResetAsync）— 写 DT121=1 后等待 PLC 轮询统一消费
+    ///   2. Fake 调试按钮（FakeTriggerResetAsync）— 写 DT121=1 后等待 PLC 轮询统一消费
     ///   3. PLC 轮询捕获 DT121=1（真实实体按钮触发）
     ///
     /// 执行顺序（12步）：
@@ -1571,14 +1823,30 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (_currentControlAction is InspectionControlAction.Starting
             or InspectionControlAction.Stopping)
         {
-            _pendingResetRequested = true;
-            _pendingResetSource = source;
-
-            _logger.LogInformation(
-                "[复位请求][挂起] 当前动作={Action}，来源={Source}，等待当前动作结束后执行复位",
-                _currentControlAction,
-                source);
+            RequestPendingControlAction(PendingInspectionControlAction.Reset, source);
             AddLog($"复位请求已接收，等待当前 {_currentControlAction} 动作结束后执行");
+            return;
+        }
+
+        if (_currentControlAction == InspectionControlAction.EmergencyStopping)
+        {
+            _logger.LogWarning("[急停流程] Reset 请求被拒绝，需先解除急停后人工复位，来源={Source}", source);
+            AddLog("[急停流程] 当前处于急停中，请先解除急停，解除后再执行复位");
+            if (source == InspectionActionSource.DebugPanel || source == InspectionActionSource.RealModeButton)
+            {
+                _ = _notificationService.ShowWarningAsync("当前处于急停状态，请先解除急停，解除后再执行复位。", "复位拒绝");
+            }
+            return;
+        }
+
+        if (UiState == TestUIState.EmergencyStop)
+        {
+            _logger.LogWarning("[急停流程] Reset 请求被拒绝，当前 UiState=EmergencyStop，来源={Source}", source);
+            AddLog("[急停流程] 当前处于急停状态，请先解除急停，解除后再执行复位");
+            if (source == InspectionActionSource.DebugPanel || source == InspectionActionSource.RealModeButton)
+            {
+                _ = _notificationService.ShowWarningAsync("当前处于急停状态，请先解除急停，解除后再执行复位。", "复位拒绝");
+            }
             return;
         }
 
@@ -1722,12 +1990,38 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _inspectionEngine.ClearResetState();
             _logger.LogInformation("[复位流程] 已重置内部状态标志");
 
+            bool stopSignalReleased = await CompleteResetStopSignalFinalizationAsync(CancellationToken.None).ConfigureAwait(false);
+            if (!stopSignalReleased)
+            {
+                SetUiState(TestUIState.ResetFailed);
+                _isResetting = false;
+                AddLog("复位未完成：停止信号 DT122 无法清除，请检查 PLC 通信后重新复位");
+                _logger.LogWarning("[复位流程][DT122] 最终确认失败，禁止进入 CanStart");
+                await _notificationService.ShowWarningAsync(
+                    "复位未完成：停止信号 DT122 无法清除，请检查 PLC 通信后重新复位。",
+                    "复位失败").ConfigureAwait(false);
+                return;
+            }
+
             await _plcDevice.ClearResetRequestAsync(CancellationToken.None);
             _logger.LogInformation("[复位流程] 上位机复位操作全部完成，已清除 DT121 复位信号");
 
-            await LogPlcInputsAfterResetAsync().ConfigureAwait(false);
+            var validationResult = await ValidateResetCompletionAsync(CancellationToken.None).ConfigureAwait(false);
+            if (validationResult != ResetCompletionValidationResult.Success)
+            {
+                string failure = FormatResetValidationFailure(validationResult);
+                SetUiState(TestUIState.ResetFailed);
+                _isResetting = false;
+                AddLog($"复位未完成：{failure}，请检查 PLC 通信后重新复位");
+                _logger.LogWarning("[复位流程][验证] 失败：{Result}，禁止进入 CanStart", validationResult);
+                await _notificationService.ShowWarningAsync(
+                    $"复位未完成：{failure}，请检查 PLC 通信后重新复位。",
+                    "复位失败").ConfigureAwait(false);
+                return;
+            }
 
             _isResetting = false;
+            AbsorbLowerPriorityPendingActionsAfterReset();
             ForceRefreshReadyOrCanStartState();
             AddLog("复位完成，已清空所有检测结果，可重新开始测试");
             await _notificationService.ShowInfoAsync(
@@ -1746,30 +2040,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             ExitControlAction(InspectionControlAction.Resetting);
         }
+
+        await ExecutePendingControlActionIfNeededAsync();
     }
 
-    /// <summary>
-    /// 执行 Starting/Stopping 期间挂起的复位请求。
-    /// 必须在当前动作 ExitControlAction 之后调用，避免复位在旧门禁内递归进入。
-    /// </summary>
-    private async Task ExecutePendingResetIfNeededAsync()
-    {
-        if (!_pendingResetRequested)
-        {
-            return;
-        }
-
-        var source = _pendingResetSource;
-        _pendingResetRequested = false;
-
-        _logger.LogInformation(
-            "[复位请求][挂起执行] 当前动作已结束，开始执行挂起复位，来源={Source}",
-            source);
-
-        AddLog("当前动作已结束，开始执行之前挂起的复位请求");
-
-        await ExecuteResetFlowAsync(source);
-    }
     #endregion
 
     #region 停止流程
@@ -1789,21 +2063,25 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        // AwaitingReset/Resetting/Finishing 中 Stop → 忽略
+        // AwaitingReset/Resetting/Finishing 中 Stop → 忽略；Resetting 由 ResetFlow 兜底 DT122。
         if (UiState is TestUIState.AwaitingReset or TestUIState.Resetting || _isResetting)
         {
-            _logger.LogInformation("[停止请求][忽略] 当前状态 {UiState} 无需停止，来源={Source}", UiState, source);
+            _logger.LogWarning("[停止请求][吸收] 当前状态 {UiState} 无需停止，来源={Source}", UiState, source);
             return;
         }
 
         if (!await TryEnterControlActionAsync(InspectionControlAction.Stopping))
         {
+            RequestPendingControlAction(PendingInspectionControlAction.Stop, source);
             _logger.LogInformation("[停止请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
             return;
         }
 
         try
         {
+            _ignoreInspectionCallbacksUntilNextStart = true;
+            Interlocked.Increment(ref _inspectionRunVersion);
+            Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
             SetUiState(TestUIState.Paused);
             _logger.LogWarning("[停止流程][审计] DT122 停止信号，来源={Source}，执行停止收口", source);
             AddLog($"[停止流程] 收到停止信号(DT122)，来源={source}，正在停止检测...");
@@ -1818,22 +2096,34 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     _logger.LogError(
                         "[停止流程][停止超时] UiState={UiState}, ControlAction={Action}, EngineState={EngineState}, EngineStage={Stage}, EngineIsRunning={IsRunning}",
                         UiState, _currentControlAction, _inspectionEngine.CurrentState, engineStage, engineIsRunning);
-                    SetUiState(TestUIState.Error);
-                    AddLog("停止失败：检测任务未能在超时时间内安全停止，请检查设备状态后重试。");
+                    await CompleteStopSignalHandshakeAsync("StopAndWaitTimeout", CancellationToken.None).ConfigureAwait(false);
+                    _inspectionStarted = false;
+                    _startupCleared = true;
+                    IsPlcStartRequested = false;
+                    SetUiState(TestUIState.AwaitingReset);
+                    AddLog("停止处理中超时：请执行复位完成设备收口。");
                     return;
                 }
             }
 
             _inspectionEngine.ClearResetState();
             await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
-            await _plcDevice.ClearStopRequestAsync(CancellationToken.None);
+            bool stopSignalReleased = await CompleteStopSignalHandshakeAsync("NormalStopFlow", CancellationToken.None).ConfigureAwait(false);
 
             _inspectionStarted = false;
             _startupCleared = true;
             IsPlcStartRequested = false;
             SetUiState(TestUIState.AwaitingReset);
-            AddLog("[停止流程] 已停止，必须复位后才能重新从第一项开始检测");
-            _logger.LogWarning("[停止流程][审计] 停止收口完成，页面进入 AwaitingReset");
+            if (stopSignalReleased)
+            {
+                AddLog("[停止流程] 已停止，必须复位后才能重新从第一项开始检测");
+                _logger.LogWarning("[停止流程][审计] 停止收口完成，DT122 已释放，页面进入 AwaitingReset");
+            }
+            else
+            {
+                AddLog("[停止流程] 已停止，但 DT122 仍未稳定释放，请执行复位完成收口");
+                _logger.LogWarning("[停止流程][DT122] 稳定确认未释放，页面保持 AwaitingReset，等待 ResetFlow 兜底");
+            }
         }
         catch (Exception ex)
         {
@@ -1845,7 +2135,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ExitControlAction(InspectionControlAction.Stopping);
         }
 
-        await ExecutePendingResetIfNeededAsync();
+        await ExecutePendingControlActionIfNeededAsync();
     }
     #endregion
 
@@ -1868,6 +2158,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (!await TryEnterControlActionAsync(InspectionControlAction.EmergencyStopping))
         {
+            RequestPendingControlAction(PendingInspectionControlAction.EmergencyStop, source);
+            SetUiState(TestUIState.EmergencyStop);
+            if (_inspectionEngine?.IsRunning == true)
+                _inspectionEngine.StopForEmergencyStop();
             _logger.LogInformation("[急停请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
             return;
         }
@@ -1877,6 +2171,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         try
         {
+            _ignoreInspectionCallbacksUntilNextStart = true;
+            Interlocked.Increment(ref _inspectionRunVersion);
+            Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
+            SetUiState(TestUIState.EmergencyStop);
+
             if (_inspectionEngine!.IsRunning)
                 _inspectionEngine.StopForEmergencyStop();
 
@@ -1895,7 +2194,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         catch (Exception ex)
         {
             _logger.LogError(ex, "[急停流程] 急停过程发生异常");
-            SetUiState(TestUIState.Error);
+            SetUiState(TestUIState.EmergencyStop);
+            AddLog($"急停收口异常：{ex.Message}，请确认现场安全后执行急停解除/复位");
         }
         finally
         {
@@ -1906,8 +2206,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>
     /// 弹出急停模态弹窗。
-    /// 弹窗独立轮询 DT303，关闭后页面保持急停保护状态。
-    /// 如果清除 DT123/DT303 失败，后台重试，不阻塞关闭。
+    /// 弹窗只接收操作员解除请求；真正的清信号、读回确认和状态切换统一由 CompleteEmergencyStopReleaseAsync 完成。
     /// </summary>
     private void ShowEmergencyStopDialog()
     {
@@ -1922,29 +2221,22 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         var vm = new ViewModels.EmergencyStopDialogViewModel(
             _plcDevice,
-            closeDialog: () =>
+            releaseEmergencyStop: async () =>
             {
-                // 使用 InvokeAsync 确保在 UI 线程安全关闭
-                Application.Current.Dispatcher.InvokeAsync(() =>
+                bool released = await CompleteEmergencyStopReleaseAsync(CancellationToken.None);
+                if (!released)
                 {
-                    dialog.AllowClose();
-                    dialog.DialogResult = true;
-                    dialog.Close();
+                    return false;
+                }
 
-                    _isShowingEmergencyDialog = false;
-                    _emergencyDialogAcknowledged = true;
-                    _emergencyStopDialogVM?.StopPolling();
-                    _emergencyStopDialogVM = null;
-
-                    // ★ 关闭弹窗后强制更新 UiState 和状态文本
-                    // 急停已由用户确认解除，不再处于急停保护状态
-                    // 但需要复位后才能重新启动
-                    SetUiState(TestUIState.AwaitingReset);
-                    AddLog("急停已确认，正在清除急停信号...");
-
-                    // ★ 弹窗关闭后后台重试清除 DT123/DT303
-                    _ = RetryClearEmergencySignalsAsync();
-                });
+                dialog.AllowClose();
+                dialog.DialogResult = true;
+                dialog.Close();
+                _isShowingEmergencyDialog = false;
+                _emergencyDialogAcknowledged = true;
+                _emergencyStopDialogVM?.StopPolling();
+                _emergencyStopDialogVM = null;
+                return true;
             },
             canSimulateAlarmRelease: canSimulateAlarmRelease);
 
@@ -1960,90 +2252,81 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 后台重试清除 DT123 和 DT303。
-    /// 弹窗关闭后独立执行，最大重试 5 次，间隔 500ms。
-    /// 成功后更新状态文本为"请复位"。
-    /// 轮询兜底：检测到 DT123 仍为 1 时也会再次触发重试。
+    /// 急停解除唯一入口：清 DT123/DT303 后读回确认，确认 DT123=0 才允许进入 AwaitingReset。
     /// </summary>
-    private async Task RetryClearEmergencySignalsAsync()
+    private async Task<bool> CompleteEmergencyStopReleaseAsync(CancellationToken ct)
     {
-        const int maxRetries = 5;
-        const int retryDelayMs = 500;
-
-        bool dt123Cleared = false;
-        bool dt303Cleared = false;
+        const int maxRetries = 3;
+        const int stableDelayMs = 100;
 
         for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
             try
             {
-                if (!dt123Cleared)
+                _logger.LogWarning("[急停解除][开始] 尝试清 DT123/DT303，第 {Attempt}/{MaxRetries} 次", attempt, maxRetries);
+                AddLog("急停解除中：正在清除 DT123/DT303 并读回确认...");
+
+                var emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(ct).ConfigureAwait(false);
+                if (!emergencyResult.IsSuccess)
                 {
-                    var emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(CancellationToken.None);
-                    if (emergencyResult.IsSuccess)
-                    {
-                        dt123Cleared = true;
-                        _logger.LogWarning("[急停收尾][审计] 后台重试清除 DT123 成功（第 {Attempt} 次）", attempt);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[急停收尾] 后台重试清除 DT123 失败（第 {Attempt}/{Max} 次）: {Message}",
-                            attempt, maxRetries, emergencyResult.Message);
-                    }
+                    _logger.LogWarning("[急停解除][失败] 清 DT123 失败，第 {Attempt}/{MaxRetries} 次：{Message}",
+                        attempt, maxRetries, emergencyResult.Message);
                 }
 
-                if (!dt303Cleared)
+                var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(ct).ConfigureAwait(false);
+                if (!alarmResult.IsSuccess)
                 {
-                    var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(CancellationToken.None);
-                    if (alarmResult.IsSuccess)
-                    {
-                        dt303Cleared = true;
-                        _logger.LogWarning("[急停收尾][审计] 后台重试清除 DT303 成功（第 {Attempt} 次）", attempt);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[急停收尾] 后台重试清除 DT303 失败（第 {Attempt}/{Max} 次）: {Message}",
-                            attempt, maxRetries, alarmResult.Message);
-                    }
+                    _logger.LogWarning("[急停解除][失败] 清 DT303 失败，第 {Attempt}/{MaxRetries} 次：{Message}",
+                        attempt, maxRetries, alarmResult.Message);
                 }
 
-                if (dt123Cleared && dt303Cleared)
+                await Task.Delay(stableDelayMs, ct).ConfigureAwait(false);
+
+                var readBack = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+                if (!readBack.IsSuccess || readBack.Value == null)
+                {
+                    _logger.LogWarning("[急停解除][失败] 读回 PLC 输入失败，第 {Attempt}/{MaxRetries} 次：{Message}",
+                        attempt, maxRetries, readBack.Message);
+                }
+                else if (!readBack.Value.IsEmergencyStop)
                 {
                     await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
+                        _lastPlcInputs = readBack.Value;
                         SetUiState(TestUIState.AwaitingReset);
-                        AddLog("急停信号已清除，请复位后重新启动");
+                        AddLog("急停信号已确认释放，请复位后重新启动");
                     });
-                    return;
+
+                    _logger.LogWarning("[急停解除][确认成功] DT123=0，状态切换 AwaitingReset");
+                    return true;
                 }
+                else
+                {
+                    _logger.LogWarning("[急停解除][失败] DT123 仍为 1，保持 EmergencyStop，第 {Attempt}/{MaxRetries} 次",
+                        attempt, maxRetries);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[急停收尾] 后台清除急停信号异常（第 {Attempt}/{Max} 次）", attempt, maxRetries);
-            }
-
-            if (attempt < maxRetries)
-            {
-                await Task.Delay(retryDelayMs);
+                _logger.LogWarning(ex, "[急停解除][失败] 清除或读回异常，第 {Attempt}/{MaxRetries} 次", attempt, maxRetries);
             }
         }
 
-        // 全部重试失败，界面提示操作员
-        string failedSignals = "";
-        if (!dt123Cleared) failedSignals += "DT123 ";
-        if (!dt303Cleared) failedSignals += "DT303 ";
-
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            SetUiState(TestUIState.AwaitingReset);
-            AddLog($"急停信号清除失败（{failedSignals.Trim()}），请检查 PLC 通信后手动复位");
+            SetUiState(TestUIState.EmergencyStop);
+            AddLog("急停解除失败：DT123 未确认释放，请检查 PLC/急停按钮状态后重试");
             _ = _notificationService.ShowWarningAsync(
-                $"急停信号清除失败：{failedSignals.Trim()}\n请检查 PLC 通信后手动执行复位操作。",
-                "清除失败");
+                "急停信号未确认释放，请检查 PLC/急停按钮状态后再次解除。",
+                "急停解除失败");
         });
 
-        _logger.LogError("[急停收尾] 后台清除急停信号最终失败：{FailedSignals}，已重试 {MaxRetries} 次",
-            failedSignals.Trim(), maxRetries);
+        _logger.LogWarning("[急停解除][失败] DT123 未确认释放，保持 EmergencyStop");
+        return false;
     }
 
     /// <summary>
@@ -2175,7 +2458,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // ── 重复启动快速忽略（不写 DT120）──
         if (UiState == TestUIState.Testing || _inspectionStarted || _currentControlAction == InspectionControlAction.Starting)
         {
-            AddLog("[调试面板] 当前已在检测中，重复启动请求已忽略");
             _logger.LogInformation("[调试面板][启动请求][忽略] 当前已在检测中，来源=DebugPanel");
             return;
         }
@@ -2203,19 +2485,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _logger.LogWarning("[调试面板][审计] 上位机写入 DT120=1，半实物/Fake 模式直接进入启动复核");
-        AddLog("[调试面板] 写入 DT120=1，进入启动复核...");
+        _logger.LogWarning("[调试按钮][启动][请求] 上位机写入 DT120=1，等待 PLC 轮询统一消费");
 
         var result = await _plcDevice.RequestStartAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!CanContinueAfterRequestSignalWrite(result, "调试面板", "DT120", "启动"))
+        if (!HandleControlSignalWriteResult(result, "调试面板", "DT120", "启动"))
         {
             return;
         }
-
-        // ★ 调试入口直接执行前标记 signalHandled，防止轮询重复进入
-        _startSignalHandled = true;
-
-        await InvokeOnUiAsync(() => HandlePlcStartRequestAsync(InspectionActionSource.DebugPanel));
     }
 
     /// <summary>
@@ -2224,19 +2500,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugStopAsync()
     {
-        _logger.LogWarning("[调试面板][审计] 上位机写入 DT122=1（停止信号）");
-        AddLog("[调试面板] 写入 DT122=1...");
+        _logger.LogWarning("[调试按钮][停止][请求] 上位机写入 DT122=1，等待 PLC 轮询统一消费");
 
         var result = await _plcDevice.RequestStopAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!CanContinueAfterRequestSignalWrite(result, "调试面板", "DT122", "停止"))
+        if (!HandleControlSignalWriteResult(result, "调试面板", "DT122", "停止"))
         {
             return;
         }
-
-        // ★ 调试入口直接执行前标记 signalHandled，防止轮询重复进入
-        _stopSignalHandled = true;
-
-        await InvokeOnUiAsync(() => ExecuteStopFlowAsync(InspectionActionSource.DebugPanel));
     }
 
     /// <summary>
@@ -2245,19 +2515,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugResetAsync()
     {
-        _logger.LogWarning("[调试面板][审计] 上位机写入 DT121=1（复位信号）");
-        AddLog("[调试面板] 写入 DT121=1...");
+        _logger.LogWarning("[调试按钮][复位][请求] 上位机写入 DT121=1，等待 PLC 轮询统一消费");
 
         var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!CanContinueAfterRequestSignalWrite(result, "调试面板", "DT121", "复位"))
+        if (!HandleControlSignalWriteResult(result, "调试面板", "DT121", "复位"))
         {
             return;
         }
-
-        // ★ 调试入口直接执行前标记 signalHandled，防止轮询重复进入
-        _resetSignalHandled = true;
-
-        await InvokeOnUiAsync(() => ExecuteResetFlowAsync(InspectionActionSource.DebugPanel));
     }
 
     /// <summary>
@@ -2266,25 +2530,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugEmergencyStopAsync()
     {
-        _logger.LogWarning("[调试面板][审计] 上位机写入 DT123=1（急停信号）");
-        AddLog("[调试面板] 写入 DT123=1...");
+        _logger.LogWarning("[调试按钮][急停][请求] 上位机写入 DT123=1，等待 PLC 轮询统一消费");
 
         var result = await _plcDevice.RequestEmergencyStopAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!CanContinueAfterRequestSignalWrite(result, "调试面板", "DT123", "急停"))
+        if (!HandleControlSignalWriteResult(result, "调试面板", "DT123", "急停"))
         {
             return;
         }
-
-        await InvokeOnUiAsync(async () =>
-        {
-            await ExecuteEmergencyStopFlowAsync(InspectionActionSource.DebugPanel);
-
-            if (!_isShowingEmergencyDialog && !_emergencyDialogAcknowledged)
-            {
-                _isShowingEmergencyDialog = true;
-                ShowEmergencyStopDialog();
-            }
-        });
     }
 
     #endregion
@@ -2293,32 +2545,24 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 半实物/Fake 调试按钮模拟的是本机动作入口，写请求已发出但写响应超时时继续执行对应流程。
     /// 明确 PLC 未连接或发生 Modbus 错误时仍拒绝继续，避免在真实通信异常下制造假流程。
     /// </summary>
-    private bool CanContinueAfterRequestSignalWrite(PlcOperationResult result, string sourceName, string signalName, string actionName)
+    private bool HandleControlSignalWriteResult(PlcOperationResult result, string sourceName, string signalName, string actionName)
     {
         if (result.IsSuccess)
         {
-            AddLog($"[{sourceName}] {signalName}=1 已写入，直接执行{actionName}流程");
+            AddLog($"[{sourceName}] {actionName}请求已发送，等待 PLC 轮询统一处理");
             return true;
         }
 
         if (!_plcDevice.IsConnected)
         {
             AddLog($"[{sourceName}] 写入 {signalName}=1 失败：PLC 未连接");
-            _logger.LogWarning("[{Source}][审计] {Signal}=1 写入失败且 PLC 未连接，拒绝继续执行{Action}流程：{Message}",
+            _logger.LogWarning("[{Source}][审计] {Signal}=1 写入失败且 PLC 未连接，允许重试{Action}请求：{Message}",
                 sourceName, signalName, actionName, result.Message);
             return false;
         }
 
-        if (IsWriteResponseUncertain(result.Message))
-        {
-            AddLog($"[{sourceName}] 写入 {signalName}=1 未收到确认响应，继续执行{actionName}流程");
-            _logger.LogWarning("[{Source}][审计] {Signal}=1 写请求返回不确定结果，继续执行{Action}流程：{Message}",
-                sourceName, signalName, actionName, result.Message);
-            return true;
-        }
-
         AddLog($"[{sourceName}] 写入 {signalName}=1 失败：{result.Message}");
-        _logger.LogWarning("[{Source}][审计] {Signal}=1 写入明确失败，拒绝继续执行{Action}流程：{Message}",
+        _logger.LogWarning("[{Source}][审计] {Signal}=1 写入失败，允许重试{Action}请求：{Message}",
             sourceName, signalName, actionName, result.Message);
         return false;
     }
@@ -2353,7 +2597,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 半实物/真实模式复位按钮（写 DT121=1，写后直接执行复位，不再读回确认）。
+    /// 半实物/真实模式复位按钮（写 DT121=1，写后等待 PLC 轮询统一消费）。
     /// 真实模式下工人按实体按钮时由 PLC 轮询触发 ExecuteResetFlowAsync，
     /// 上位机按钮作为备用入口。
     /// </summary>
@@ -2362,17 +2606,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
 
-        if (!CanContinueAfterRequestSignalWrite(result, "复位", "DT121", "复位"))
+        if (!HandleControlSignalWriteResult(result, "复位", "DT121", "复位"))
         {
             return;
         }
 
-        _logger.LogWarning("[复位诊断] 已写入 DT121=1");
-        AddLog("[复位] 进入上位机复位流程...");
-
-        _resetSignalHandled = true;
-
-        await InvokeOnUiAsync(() => ExecuteResetFlowAsync(InspectionActionSource.RealModeButton));
+        _logger.LogWarning("[复位按钮][请求] 已写入 DT121=1，等待 PLC 轮询统一消费");
     }
 
     /// <summary>
@@ -2405,12 +2644,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
         {
-            // 修改后：增加 Canceled 作为兜底（当引擎内部状态竞态导致 StopReason 误判时）
-            bool isPlcSignalAbort = result.StopReason == InspectionStopReason.Reset
-                                    || result.StopReason == InspectionStopReason.PlcStop
-                                    || result.StopReason == InspectionStopReason.EmergencyStop
-                                    || result.StopReason == InspectionStopReason.Canceled; // ★ 兜底：任何取消都静默
-            if (isPlcSignalAbort)
+            if (IsExpectedControlStopReason(result.StopReason))
             {
                 _logger.LogWarning("[运行页][审计] 检测因 {StopReason} 收口，中止提示交由对应流程处理", result.StopReason);
                 return;
@@ -2660,13 +2894,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 {
                     AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
 
-                    // ★ 新增：PLC 信号中断不弹额外提示
-                    bool isPlcSignalAbort = e.Result.StopReason == InspectionStopReason.Reset
-                                            || e.Result.StopReason == InspectionStopReason.PlcStop
-                                            || e.Result.StopReason == InspectionStopReason.EmergencyStop
-                                            || e.Result.StopReason == InspectionStopReason.Canceled;
-
-                    if (isPlcSignalAbort)
+                    if (IsExpectedControlStopReason(e.Result.StopReason))
                     {
                         _logger.LogWarning("[万用表收尾] 检测因 {StopReason} 中止，保持万用表远程控制模式，等待后续操作",
                             e.Result.StopReason);

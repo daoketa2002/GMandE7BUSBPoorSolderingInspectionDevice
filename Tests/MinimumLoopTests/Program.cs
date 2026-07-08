@@ -88,6 +88,31 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual("Resetting", InspectionControlAction.Resetting.ToString());
         AssertEqual("Timeout", InspectionStopWaitResult.Timeout.ToString());
     }),
+    ("控制动作策略只保留最高优先级 Pending", () =>
+    {
+        AssertEqual(false, InspectionControlActionPolicy.ShouldReplacePending(PendingInspectionControlAction.Reset, PendingInspectionControlAction.Stop));
+        AssertEqual(true, InspectionControlActionPolicy.ShouldReplacePending(PendingInspectionControlAction.Stop, PendingInspectionControlAction.Reset));
+        AssertEqual(true, InspectionControlActionPolicy.ShouldReplacePending(PendingInspectionControlAction.None, PendingInspectionControlAction.Start));
+    }),
+    ("Reset 成功后吸收低优先级 Pending 但保留急停", () =>
+    {
+        AssertEqual(PendingInspectionControlAction.None, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.Start));
+        AssertEqual(PendingInspectionControlAction.None, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.Stop));
+        AssertEqual(PendingInspectionControlAction.None, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.Reset));
+        AssertEqual(PendingInspectionControlAction.EmergencyStop, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.EmergencyStop));
+    }),
+    ("Resetting 期间 Stop 被 Reset 吸收且急停期间 Reset 被拒绝", () =>
+    {
+        AssertEqual(true, InspectionControlActionPolicy.ShouldAbsorbNewAction(InspectionControlAction.Resetting, PendingInspectionControlAction.Stop));
+        AssertEqual(false, InspectionControlActionPolicy.ShouldAbsorbNewAction(InspectionControlAction.Resetting, PendingInspectionControlAction.EmergencyStop));
+        AssertEqual(true, InspectionControlActionPolicy.ShouldRejectNewAction(InspectionControlAction.EmergencyStopping, PendingInspectionControlAction.Reset));
+    }),
+    ("复位最终验证结果枚举存在", () =>
+    {
+        AssertEqual("Success", ResetCompletionValidationResult.Success.ToString());
+        AssertEqual("StopSignalStillActive", ResetCompletionValidationResult.StopSignalStillActive.ToString());
+        AssertEqual("PlcReadFailed", ResetCompletionValidationResult.PlcReadFailed.ToString());
+    }),
     ("Fake 报警解除调试写入 DT303 后可被输入快照读到", () =>
     {
         var fake = new FakeInspectionHardware(NullLogger<FakeInspectionHardware>.Instance);

@@ -136,6 +136,8 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
 
     #region Modbus 标准操作委托
 
+    // 现状记录：这些接口保留 CancellationToken 参数，但当前底层 TcpClientPLCMotionService
+    // 仍按请求超时控制等待周期；Stop/Reset 不应被日志伪装成已传入外部取消。
     public Task<ModbusResponse?> ReadCoilsAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default)
         => _inner.ExecuteReadOperationAsync(0x01, unitId, startAddress, quantity, DefaultModbusTimeoutMs);
 

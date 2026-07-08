@@ -1,21 +1,19 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
-using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using Microsoft.Extensions.Logging;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
 /// <summary>
 /// 急停锁定弹窗 ViewModel。
-/// 管理 DT303 报警解除状态和解除按钮可用性。
-/// 启动后台轮询读取 DT303，Fake 模式下提供模拟 DT303=1 的调试按钮。
+/// 只负责显示 DT303 报警解除状态和提交用户解除请求，最终运行状态由运行页读回 DT123 后决定。
 /// </summary>
 public partial class EmergencyStopDialogViewModel : ObservableObject
 {
     private readonly ILogger<EmergencyStopDialogViewModel>? _logger;
     private readonly IPlcDevice _plcDevice;
-    private readonly Action _closeDialog;
+    private readonly Func<Task<bool>> _releaseEmergencyStop;
     private readonly bool _canSimulateAlarmRelease;
     private CancellationTokenSource? _pollingCts;
 
@@ -30,12 +28,12 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
 
     public EmergencyStopDialogViewModel(
         IPlcDevice plcDevice,
-        Action closeDialog,
+        Func<Task<bool>> releaseEmergencyStop,
         bool canSimulateAlarmRelease,
         ILogger<EmergencyStopDialogViewModel>? logger = null)
     {
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
-        _closeDialog = closeDialog ?? throw new ArgumentNullException(nameof(closeDialog));
+        _releaseEmergencyStop = releaseEmergencyStop ?? throw new ArgumentNullException(nameof(releaseEmergencyStop));
         _canSimulateAlarmRelease = canSimulateAlarmRelease;
         _logger = logger;
     }
@@ -81,7 +79,7 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
             }
             catch
             {
-                // 轮询异常不中断循环
+                // 弹窗轮询失败不打断主流程，运行页解除时会做正式读回确认。
             }
 
             await Task.Delay(500, ct).ConfigureAwait(false);
@@ -110,9 +108,7 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 用户点击"解除"按钮。写 DT123=0 和 DT303=0，关闭弹窗。
-    /// 即使清除失败也关闭弹窗，避免弹窗卡死。
-    /// 清除失败后由 TestPageViewModel.RetryClearEmergencySignalsAsync() 接管重试。
+    /// 用户点击“解除”按钮。弹窗只提交请求，不直接清 PLC 或切换运行页状态。
     /// </summary>
     [RelayCommand]
     private async Task ReleaseAsync()
@@ -120,25 +116,13 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
         if (!IsAlarmReleased)
             return;
 
-        _logger?.LogWarning("[急停弹窗][审计] 用户点击解除按钮，清除 DT123=0 和 DT303=0");
+        _logger?.LogWarning("[急停弹窗][审计] 用户点击解除按钮，提交急停解除请求");
 
-        // 先尝试清除 DT123
-        var emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(default);
-        if (!emergencyResult.IsSuccess)
+        bool released = await _releaseEmergencyStop();
+        if (!released)
         {
-            _logger?.LogWarning("[急停弹窗] 清除 DT123 失败: {Message}，弹窗照常关闭，交由后台重试", emergencyResult.Message);
+            StatusText = "急停信号未确认释放，请检查后重试";
         }
-
-        // 再尝试清除 DT303
-        var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(default);
-        if (!alarmResult.IsSuccess)
-        {
-            _logger?.LogWarning("[急停弹窗] 清除 DT303 失败: {Message}，弹窗照常关闭，交由后台重试", alarmResult.Message);
-        }
-
-        // ★ 无论清除成功与否，都关闭弹窗，避免弹窗卡死
-        // TestPageViewModel.RetryClearEmergencySignalsAsync() 会在后台接管失败重试
-        _closeDialog();
     }
 
     /// <summary>
@@ -158,7 +142,6 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
             return;
         }
 
-        // 半实物/Fake 调试按钮已经由上位机主动写入 DT303=1，无需再等轮询确认。
         await System.Windows.Application.Current.Dispatcher.InvokeAsync(
             () => UpdateAlarmState(true));
 

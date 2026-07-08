@@ -53,6 +53,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         private readonly SemaphoreSlim _syncLock = new(1, 1);
 
         /// <summary>
+        /// Modbus 发送阶段轻量锁。只保护 NetworkStream.WriteAsync/FlushAsync，不锁等待响应全周期。
+        /// </summary>
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
+
+        /// <summary>
         /// 存储待处理响应的字典，键为事务ID
         /// </summary>
         private readonly ConcurrentDictionary<ushort, TaskCompletionSource<ModbusResponse>> _pendingResponses = new();
@@ -1037,8 +1042,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             ModbusResponse? response = null;
             try
             {
-                using var timeoutCts = new CancellationTokenSource(timeoutMs);
-                var timeoutTask = Task.Delay(timeoutMs, timeoutCts.Token);
+                var timeoutTask = Task.Delay(timeoutMs);
 
                 // ✅ 传入已生成的 transactionId
                 byte[] request = CreateModbusTcpRequest(functionCode, unitId, startAddress, quantity, transactionId);
@@ -1062,16 +1066,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         }
                     }
                 }
-                else if (timeoutCts.Token.IsCancellationRequested)
-                {
-                    _logger.LogWarning("操作被中断");
-                    Notify(NotificationType.Warning, "操作被中断", "ExecuteReadOperation");
-                    _pendingResponses.TryRemove(transactionId, out _);
-                }
                 else
                 {
-                    _logger.LogWarning("等待响应超时");
-                    Notify(NotificationType.Warning, "等待响应超时", "ExecuteReadOperation");
+                    _logger.LogWarning("[Modbus][读取超时] TransactionId={TransactionId}, FunctionCode={FunctionCode}, UnitId={UnitId}, StartAddress={StartAddress}, TimeoutMs={TimeoutMs}",
+                        transactionId, functionCode, unitId, startAddress, timeoutMs);
+                    Notify(NotificationType.Warning, "Modbus读取超时", "ExecuteReadOperation");
                     _pendingResponses.TryRemove(transactionId, out _);
                 }
             }
@@ -1115,8 +1114,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             ModbusResponse? response = null;
             try
             {
-                using var timeoutCts = new CancellationTokenSource(timeoutMs);
-                var timeoutTask = Task.Delay(timeoutMs, timeoutCts.Token);
+                var timeoutTask = Task.Delay(timeoutMs);
 
                 // 根据功能码创建相应的写入请求
                 byte[] request;
@@ -1179,16 +1177,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         Notify(NotificationType.Warning, "接收到空响应", "ExecuteWriteOperation");
                     }
                 }
-                else if (timeoutCts.Token.IsCancellationRequested)
-                {
-                    _logger.LogWarning("写入操作被中断");
-                    Notify(NotificationType.Warning, "操作被中断", "ExecuteWriteOperation");
-                    _pendingResponses.TryRemove(transactionId, out _);
-                }
                 else
                 {
-                    _logger.LogWarning("等待写入响应超时");
-                    Notify(NotificationType.Warning, "等待响应超时", "ExecuteWriteOperation");
+                    _logger.LogWarning("[Modbus][写入超时] TransactionId={TransactionId}, FunctionCode={FunctionCode}, UnitId={UnitId}, StartAddress={StartAddress}, TimeoutMs={TimeoutMs}",
+                        transactionId, functionCode, unitId, startAddress, timeoutMs);
+                    Notify(NotificationType.Warning, "Modbus写入超时", "ExecuteWriteOperation");
                     _pendingResponses.TryRemove(transactionId, out _);
                 }
             }
@@ -1223,8 +1216,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             try
             {
                 _logger.LogDebug($"发送 {data.Length} 字节的Modbus请求: {BitConverter.ToString(data)}");
-                await _networkStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
-                await _networkStream.FlushAsync().ConfigureAwait(false);
+                await _sendLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await _networkStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
+                    await _networkStream.FlushAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
 
                 _logger.LogDebug($"已发送 {data.Length} 字节的Modbus请求");
             }
@@ -1448,13 +1449,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
             RawDataReceived += OnRawDataReceived;
 
-            using var cts = new CancellationTokenSource();
             bool success = false;
 
             try
             {
-                using var timeoutCts = new CancellationTokenSource();
-                var timeoutTask = Task.Delay(timeoutMs, timeoutCts.Token);
+                var timeoutTask = Task.Delay(timeoutMs);
 
                 await SendCommandAsync(command).ConfigureAwait(false);
 
@@ -1467,13 +1466,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                            success ? $"响应匹配: {response}" : $"响应不匹配: {response}",
                            "ExecuteOperation");
                 }
-                else if (timeoutCts.Token.IsCancellationRequested)
-                {
-                    Notify(NotificationType.Warning, "操作被中断", "ExecuteOperation");
-                }
                 else
                 {
-                    Notify(NotificationType.Warning, "等待响应超时", "ExecuteOperation");
+                    _logger.LogWarning("[Modbus][命令超时] Command={Command}, TimeoutMs={TimeoutMs}", command, timeoutMs);
+                    Notify(NotificationType.Warning, "Modbus命令响应超时", "ExecuteOperation");
                 }
             }
             catch (OperationCanceledException)
@@ -1566,6 +1562,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 _heartbeatCts?.Dispose();
 
                 _syncLock?.Dispose();
+                _sendLock?.Dispose();
                 _receiveBuffer?.Dispose();
             }
 
@@ -1632,8 +1629,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
             try
             {
-                using var timeoutCts = new CancellationTokenSource(timeoutMs);
-                var timeoutTask = Task.Delay(timeoutMs, timeoutCts.Token);
+                var timeoutTask = Task.Delay(timeoutMs);
 
                 await SendRawDataAsync(customRequestFrame).ConfigureAwait(false);
 
@@ -1645,7 +1641,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 }
                 else
                 {
-                    _logger.LogWarning("自定义请求等待响应超时");
+                    _logger.LogWarning("[Modbus][自定义请求超时] TransactionId={TransactionId}, TimeoutMs={TimeoutMs}",
+                        transactionId, timeoutMs);
                     _pendingResponses.TryRemove(transactionId, out _);
                     return null;
                 }
