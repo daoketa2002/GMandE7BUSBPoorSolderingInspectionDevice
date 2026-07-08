@@ -2,6 +2,7 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.Measurements;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using Microsoft.Extensions.Logging;
 using System;
@@ -560,47 +561,40 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
         {
-            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SYST:REM", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("CONF:RES", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+            return await ConfigureResistanceModeInternalAsync("电阻模式", "CONF:RES", null, ct).ConfigureAwait(false);
+        }
 
-                if (!await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
-                {
-                    _logger.LogWarning("[万用表][审计] 电阻模式切换验证失败");
-                    return false;
-                }
-
-                _logger.LogWarning("[万用表][审计] 万用表已切换为 2 线电阻模式");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "初始化万用表电阻模式失败");
-                return false;
-            }
-            finally
-            {
-                _commandLock.Release();
-            }
+        /// <summary>
+        /// 恢复万用表为远程可控的 2 线电阻空闲态。
+        /// SCPI 序列与 InitializeResistanceModeAsync 相同，但不执行验证。
+        /// </summary>
+        public async Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
+        {
+            return await ConfigureResistanceModeInternalAsync("空闲态(电阻)", "CONF:RES", null, ct, verify: false).ConfigureAwait(false);
         }
 
         /// <summary>
         /// 初始化为导通测量模式（Continuity），并设置导通阈值。
         /// SCPI 序列：ABOR → *CLS → CONF:CONT → SENS:CONT:THR {阈值} → 采样/触发配置
         /// 完成后用 *OPC? + SYST:ERR? 验证切换成功。
-        /// 整个初始化在单次锁内完成。
+        /// 使用内部方法避免重复加锁。
         /// </summary>
-        /// <param name="thresholdOhm">导通阈值(Ω)，默认 10Ω</param>
         public async Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
+        {
+            return await ConfigureResistanceModeInternalAsync(
+                $"导通模式(阈值={thresholdOhm:F2}Ω)",
+                "CONF:CONT",
+                $"SENS:CONT:THR {thresholdOhm:F2}",
+                ct,
+                verify: true).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 内部：配置万用表公共 SCPI 序列。
+        /// SYST:REM → ABOR → *CLS → CONF → 量程 → 单次采样/触发
+        /// </summary>
+        private async Task<bool> ConfigureResistanceModeInternalAsync(
+            string modeLabel, string confCommand, string? extraCommand, CancellationToken ct, bool verify = true)
         {
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
@@ -609,30 +603,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 await SendSettingInternalAsync("SYST:REM", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("CONF:CONT", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync($"SENS:CONT:THR {thresholdOhm:F2}", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync(confCommand, ct).ConfigureAwait(false);
+                await SendSettingInternalAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
+                await ConfigureSingleImmediateTriggerInternalAsync(ct).ConfigureAwait(false);
 
-                if (!await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
+                if (extraCommand != null)
+                    await SendSettingInternalAsync(extraCommand, ct).ConfigureAwait(false);
+
+                if (verify && !await VerifyCommandCompletionAsync(ct).ConfigureAwait(false))
                 {
-                    _logger.LogWarning("[万用表][审计] 导通模式切换验证失败，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+                    _logger.LogWarning("[万用表][审计] {ModeLabel} 切换验证失败", modeLabel);
                     return false;
                 }
 
-                _logger.LogWarning("[万用表][审计] 万用表已切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+                _logger.LogWarning("[万用表][审计] 万用表已切换为 {ModeLabel}", modeLabel);
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "初始化万用表导通模式失败");
+                _logger.LogWarning(ex, "初始化万用表 {ModeLabel} 失败", modeLabel);
                 return false;
             }
             finally
             {
                 _commandLock.Release();
             }
+        }
+
+        /// <summary>公共触发配置：SAMP:COUN 1 → TRIG:COUN 1 → TRIG:SOUR IMM</summary>
+        private async Task ConfigureSingleImmediateTriggerInternalAsync(CancellationToken ct)
+        {
+            await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
+            await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
+            await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -764,38 +767,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         public async Task ResetAsync(CancellationToken ct = default)
         {
             await SendSettingAsync("*RST", ct).ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// 恢复万用表为远程可控的 2 线电阻空闲态。
-        /// SCPI 序列：ABOR → *CLS → CONF:RES → 自动量程 → 采样/触发配置
-        /// </summary>
-        public async Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
-        {
-            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SYST:REM", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("CONF:RES", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SAMP:COUN 1", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("TRIG:COUN 1", ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("TRIG:SOUR IMM", ct).ConfigureAwait(false);
-                _logger.LogInformation("万用表已恢复为远程 2 线电阻空闲态");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "万用表恢复空闲态失败");
-                return false;
-            }
-            finally
-            {
-                _commandLock.Release();
-            }
         }
 
         /// <summary>
@@ -960,67 +931,4 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         #endregion
     }
-
-    #region 相关类型
-
-    /// <summary>
-    /// 测量功能枚举
-    /// </summary>
-    public enum MeasureFunction
-    {
-        DCVoltage,
-        ACVoltage,
-        DCCurrent,
-        ACCurrent,
-        Resistance2W,
-        Resistance4W,
-        Continuity,
-        Diode,
-        Frequency
-    }
-
-    /// <summary>
-    /// 测量结果
-    /// </summary>
-    public class MeasurementResult
-    {
-        public double Value { get; set; }
-        public string RawValue { get; set; } = string.Empty;
-        public bool IsValid { get; set; }
-        public string ErrorMessage { get; set; } = string.Empty;
-        public DateTime Timestamp { get; set; } = DateTime.Now;
-
-        /// <summary>测量值分类，默认 Normal</summary>
-        public MeasurementValueKind ValueKind { get; set; } = MeasurementValueKind.Normal;
-        /// <summary>
-        /// 是否应中止检测。
-        /// true：NaN / -Infinity / 负电阻值 / 解析失败 → 当前项置 NG 后中止整轮。
-        /// false：超量程大数 / +Infinity → 正常判 NG，按 ContinueTestingAfterNg 决定是否继续。
-        /// </summary>
-        public bool ShouldAbortInspection { get; set; }
-        /// <summary>
-        /// 显示文本覆写。
-        /// 不为空时运行页检查结果列直接显示此值（如 "NG"），避免超长数字进入格式化。
-        /// </summary>
-        public string DisplayTextOverride { get; set; } = string.Empty;
-
-        public override string ToString() => IsValid
-            ? InputValidationHelper.FormatResistanceValue(Value)
-            : $"Error: {ErrorMessage}";
-    }
-
-    /// <summary>
-    /// 测量事件参数
-    /// </summary>
-    public class MeasurementEventArgs : EventArgs
-    {
-        public MeasurementResult Result { get; }
-
-        public MeasurementEventArgs(MeasurementResult result)
-        {
-            Result = result ?? throw new ArgumentNullException(nameof(result));
-        }
-    }
-
-    #endregion
 }

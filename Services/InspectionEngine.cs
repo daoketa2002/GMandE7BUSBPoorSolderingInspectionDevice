@@ -5,29 +5,12 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.Measurements;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using Microsoft.Extensions.Logging;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services;
-
-/// <summary>
-/// 万用表测量值分类，决定后续判定和中止策略。
-/// </summary>
-public enum MeasurementValueKind
-{
-    /// <summary>正常非负有限数值</summary>
-    Normal,
-    /// <summary>+Infinity 或超量程大数（>ResistanceMaxValue），判定为 NG 但不中止</summary>
-    PositiveInfinityOrOverRange,
-    /// <summary>NaN，判定为 NG 且中止</summary>
-    NaN,
-    /// <summary>-Infinity，判定为 NG 且中止</summary>
-    NegativeInfinity,
-    /// <summary>负电阻值，判定为 NG 且中止</summary>
-    NegativeResistance,
-    /// <summary>无法解析，中止</summary>
-    ParseFailed
-}
 
 /// <summary>
 /// GM/E78 USB 焊接不良检查流程引擎。
@@ -35,13 +18,12 @@ public enum MeasurementValueKind
 /// </summary>
 public partial class InspectionEngine : IAsyncDisposable, IDisposable
 {
-    private const double TemporaryOpenThresholdOhm = 1_000_000.0;
-
     private readonly ILogger<InspectionEngine> _logger;
     private readonly IPlcDevice _plcDevice;
     private readonly IMultimeterDevice _multimeterDevice;
     private readonly SemaphoreSlim _engineLock = new(1, 1);
-    private readonly InspectionCheckpoint _checkpoint = new();
+    /// <summary>轻量执行进度（仅日志诊断用，不支持断点续测）</summary>
+    private readonly InspectionExecutionProgress _progress = new();
 
     private CancellationTokenSource? _inspectionCts;
     private volatile bool _isRunning;
@@ -49,10 +31,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     private string? _currentInspectionId;
     private InspectionConfig _config = new();
 
-    public event EventHandler<InspectionStateChangedEventArgs>? StateChanged;
     public event EventHandler<StepStartedEventArgs>? StepStarted;
     public event EventHandler<StepCompletedEventArgs>? StepCompleted;
-    public event EventHandler<InspectionCompletedEventArgs>? InspectionCompleted;
     public event EventHandler<string>? LogMessage;
 
     /// <summary>原子中断原因，在 Cancel 之前设置，供 OperationCanceledException 分支读取</summary>
@@ -60,9 +40,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     public bool IsRunning => _isRunning;
     public InspectionState CurrentState { get; private set; } = InspectionState.Idle;
     public InspectionConfig Config => _config;
-    public int InterruptedPointIndex { get; private set; } = -1;
 
-    /// <summary>当前检测执行阶段，用于 Timeout 诊断。每次步进前由 UpdateCheckpoint 更新。</summary>
+    /// <summary>当前检测执行阶段，用于 Timeout 诊断。每次步进前由 UpdateProgress 更新。</summary>
     private volatile string _currentExecutionStage = "Idle";
     /// <summary>当前检测执行阶段（只读），供外部查询引擎卡在哪个环节。</summary>
     public string CurrentExecutionStage => _currentExecutionStage;
@@ -87,7 +66,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         string barcode,
         string modelName,
         string operatorName,
-        int startFromPointIndex = 0,
         CancellationToken ct = default)
     {
         if (_isRunning)
@@ -111,7 +89,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 StartTime = DateTime.Now
             };
 
-            int effectiveStartIndex = PrepareCheckpoint(modelName, barcode, operatorName, startFromPointIndex);
+            _progress.Reset();
             var totalSw = Stopwatch.StartNew();
 
             try
@@ -125,14 +103,14 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 // 清 DT130~DT185、DT302，确保引脚输出区和继电器完成标志为初始状态
                 await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
 
-                int passCount = _checkpoint.FinishedResults.Count(r => r.Result == "OK");
-                int failCount = _checkpoint.FinishedResults.Count(r => r.Result == "NG");
-                int firstNgIndex = _checkpoint.FinishedResults.FindIndex(r => r.Result == "NG");
+                int passCount = 0;
+                int failCount = 0;
+                int firstNgIndex = -1;
 
-                for (int i = effectiveStartIndex; i < _config.TestPoints.Count; i++)
+                for (int i = 0; i < _config.TestPoints.Count; i++)
                 {
                     _inspectionCts.Token.ThrowIfCancellationRequested();
-                    UpdateCheckpoint(i, "CheckInterrupts");
+                    _currentExecutionStage = "CheckInterrupts";
 
                     var interruptResult = await CheckPlcInterruptsAsync(_inspectionCts.Token).ConfigureAwait(false);
                     if (interruptResult != PlcInterruptAction.Continue)
@@ -141,7 +119,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         if (!canContinue)
                         {
                             result.IsAborted = true;
-                            result.ErrorMessage = _checkpoint.LastErrorMessage ?? "检测被 PLC 信号中断";
+                            result.ErrorMessage = _progress.LastErrorMessage ?? "检测被 PLC 信号中断";
                             result.EndTime = DateTime.Now;
                             // ★ 从 interruptResult 推断停止原因
                             result.StopReason = interruptResult switch
@@ -151,7 +129,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                                 PlcInterruptAction.EmergencyStop => InspectionStopReason.EmergencyStop,
                                 _ => InspectionStopReason.None
                             };
-                            InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                             return result;
                         }
                     }
@@ -162,7 +139,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     StepStarted?.Invoke(this, new StepStartedEventArgs(i, testPoint));
                     LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode})");
 
-                    UpdateCheckpoint(i, "WritePinsToPlc");
+                    _currentExecutionStage = "WritePinsToPlc";
                     var writeResult = await _plcDevice.WriteCurrentTestPointAsync(
                         testPoint.PinLeft,
                         testPoint.PinRight,
@@ -172,16 +149,16 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     if (!writeResult.IsSuccess)
                     {
-                        MarkNg(testPoint, writeResult.Message);
+                        InspectionMeasurementEvaluator.MarkNg(testPoint, writeResult.Message);
                         failCount++;
                         if (firstNgIndex < 0) firstNgIndex = i;
-                        StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, FailedMeasurement(writeResult.Message)));
+                        StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, InspectionMeasurementEvaluator.Failed(writeResult.Message)));
                         continue;
                     }
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
 
-                    UpdateCheckpoint(i, "WaitDt302");
+                    _currentExecutionStage = "WaitDt302";
                     if (_config.SkipDt302Wait)
                     {
                         _logger.LogWarning(
@@ -203,7 +180,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                             result.StopReason = InspectionStopReason.RelayTimeout;
                             result.ErrorMessage = $"等待 DT302 = 1 超时（点位 {testPoint.Name}）";
                             await AbortCurrentRunAsync(result, result.ErrorMessage, InspectionState.Aborted).ConfigureAwait(false);
-                            InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                             return result;
                         }
                     }
@@ -218,7 +194,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         if (!canContinue)
                         {
                             result.IsAborted = true;
-                            result.ErrorMessage = _checkpoint.LastErrorMessage ?? "检测被 PLC 信号中断";
+                            result.ErrorMessage = _progress.LastErrorMessage ?? "检测被 PLC 信号中断";
                             result.EndTime = DateTime.Now;
                             result.StopReason = postRelayInterrupt switch
                             {
@@ -227,7 +203,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                                 PlcInterruptAction.EmergencyStop => InspectionStopReason.EmergencyStop,
                                 _ => InspectionStopReason.None
                             };
-                            InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                             return result;
                         }
                     }
@@ -235,7 +210,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     await Task.Delay(_config.RelaySettleTimeMs, _inspectionCts.Token).ConfigureAwait(false);
 
                     // ── 按检查方式切换万用表模式 ──
-                    UpdateCheckpoint(i, "SetupMultimeterMode");
+                    _currentExecutionStage = "SetupMultimeterMode";
                     bool modeReady;
                     if (testPoint.CheckMode == CheckModeConstants.Continuity)
                     {
@@ -257,7 +232,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
 
-                    UpdateCheckpoint(i, "ReadMultimeter");
+                    _currentExecutionStage = "ReadMultimeter";
                     string rawText;
                     if (testPoint.CheckMode == CheckModeConstants.Continuity)
                     {
@@ -272,7 +247,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
 
-                    MeasurementResult measurement = ParseMeasurementForInspection(rawText);
+                    MeasurementResult measurement = InspectionMeasurementEvaluator.Parse(rawText);
 
                     // ── 无效值中止分支（NaN / -Infinity / 负电阻值 / 解析失败）──
                     // 当前项标记为 NG，写 PLC、回调 StepCompleted，再中止整轮检测
@@ -291,15 +266,15 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         await _plcDevice.WritePointResultAsync(i, false, _inspectionCts.Token).ConfigureAwait(false);
                         _inspectionCts.Token.ThrowIfCancellationRequested();
                         StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
-                        AddFinishedResult(testPoint);
+                        _progress.CurrentItemIndex = i;
+                        _progress.LastUpdatedTime = DateTime.Now;
 
                         await AbortCurrentRunAsync(result, $"万用表返回{measurement.ValueKind}：点位 {testPoint.Name} 判定 NG，检测中止", InspectionState.Aborted).ConfigureAwait(false);
-                        InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                         return result;
                     }
 
-                    UpdateCheckpoint(i, "JudgeResult");
-                    string judgment = JudgeResult(measurement, testPoint);
+                    _currentExecutionStage = "JudgeResult";
+                    string judgment = InspectionMeasurementEvaluator.Judge(measurement, testPoint);
                     testPoint.ActualValue = measurement.Value;
                     testPoint.Judgment = judgment;
                     testPoint.IsTested = true;
@@ -318,11 +293,12 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         inspectionId, testPoint.Name, measurement.RawValue, judgment);
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
-                    UpdateCheckpoint(i, "WritePointResult");
+                    _currentExecutionStage = "WritePointResult";
                     await _plcDevice.WritePointResultAsync(i, judgment == "OK", _inspectionCts.Token).ConfigureAwait(false);
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
-                    AddFinishedResult(testPoint);
+                    _progress.CurrentItemIndex = i + 1;
+                    _progress.LastUpdatedTime = DateTime.Now;
 
                     // ── 单项 NG 后按系统设置选择继续或停止 ──
                     if (judgment == "NG" && !_config.ContinueTestingAfterNg)
@@ -338,23 +314,22 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         result.FailCount = failCount;
                         result.EndTime = DateTime.Now;
 
-                        UpdateCheckpoint(i, "ClearPointOutputs");
+                        _currentExecutionStage = "ClearPointOutputs";
                         await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
-                        UpdateCheckpoint(i, "ClearPcReady");
+                        _currentExecutionStage = "ClearPcReady";
                         await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
                         // 单项 NG 不写 DT304/DT305，等待复位或终了
 
                         SetState(InspectionState.StoppedBySingleItemNg);
-                        InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                         return result;
                     }
 
-                    UpdateCheckpoint(i, "ClearPointOutputs");
+                    _currentExecutionStage = "ClearPointOutputs";
                     await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
                     _inspectionCts.Token.ThrowIfCancellationRequested();
-                    UpdateCheckpoint(i, "UpdateCheckpoint");
-                    _checkpoint.CurrentItemIndex = i + 1;
-                    _checkpoint.LastUpdatedTime = DateTime.Now;
+                    _currentExecutionStage = "UpdateProgress";
+                    _progress.CurrentItemIndex = i + 1;
+                    _progress.LastUpdatedTime = DateTime.Now;
                 }
 
                 result.TotalCount = _config.TestPoints.Count;
@@ -363,8 +338,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 result.IsAllPassed = failCount == 0;
                 result.EndTime = DateTime.Now;
 
-                _checkpoint.HasBreakpoint = false;
-                _checkpoint.CurrentStep = "Completed";
+                _progress.CurrentStep = "Completed";
                 SetState(result.IsAllPassed ? InspectionState.CompletedPass : InspectionState.CompletedFail);
 
                 await _plcDevice.WriteFinalResultAsync(
@@ -377,7 +351,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 totalSw.Stop();
                 LogBeat(inspectionId, "单件总耗时", totalSw.ElapsedMilliseconds);
                 _inspectionCts.Token.ThrowIfCancellationRequested();
-                InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                 return result;
             }
             catch (OperationCanceledException)
@@ -404,14 +377,12 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         _ => InspectionStopReason.Canceled
                     };
                 }
-                InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                 return result;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[检测流程][{INS}] 检测流程异常", inspectionId);
                 await AbortCurrentRunAsync(result, ex.Message, InspectionState.Error).ConfigureAwait(false);
-                InspectionCompleted?.Invoke(this, new InspectionCompletedEventArgs(result));
                 return result;
             }
         }
@@ -422,48 +393,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             _abortReason = InspectionStopReason.None; // ★ 重置中断原因
             _engineLock.Release();
         }
-    }
-
-    private int PrepareCheckpoint(string machineType, string serialNumber, string operatorName, int requestedStartIndex)
-    {
-        string planName = _config.PlanName;
-        bool sameRun = _checkpoint.HasBreakpoint
-                       && string.Equals(_checkpoint.MachineType, machineType, StringComparison.OrdinalIgnoreCase)
-                       && string.Equals(_checkpoint.SerialNumber, serialNumber, StringComparison.OrdinalIgnoreCase)
-                       && string.Equals(_checkpoint.PlanName, planName, StringComparison.OrdinalIgnoreCase)
-                       && string.Equals(_checkpoint.OperatorName, operatorName, StringComparison.OrdinalIgnoreCase);
-
-        if (sameRun)
-        {
-            LogInfo($"从内存断点续作：第 {_checkpoint.CurrentItemIndex + 1} 项");
-            return Math.Clamp(_checkpoint.CurrentItemIndex, 0, _config.TestPoints.Count);
-        }
-
-        _checkpoint.ResetProgress();
-        _checkpoint.MachineType = machineType;
-        _checkpoint.SerialNumber = serialNumber;
-        _checkpoint.PlanName = planName;
-        _checkpoint.OperatorName = operatorName;
-        _checkpoint.CurrentItemIndex = Math.Clamp(requestedStartIndex, 0, _config.TestPoints.Count);
-        _checkpoint.LastUpdatedTime = DateTime.Now;
-        return _checkpoint.CurrentItemIndex;
-    }
-
-    private void UpdateCheckpoint(int itemIndex, string step)
-    {
-        _checkpoint.CurrentItemIndex = itemIndex;
-        _checkpoint.CurrentStep = step;
-        _checkpoint.LastUpdatedTime = DateTime.Now;
-        _currentExecutionStage = step;
-    }
-
-    private void AddFinishedResult(TestPointConfig testPoint)
-    {
-        _checkpoint.FinishedResults.Add(new PinResult
-        {
-            PinName = testPoint.Name,
-            Result = testPoint.Judgment
-        });
     }
 
     /// <summary>
@@ -508,8 +437,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             case PlcInterruptAction.Stop:
                 _abortReason = InspectionStopReason.PlcStop;
                 SetState(InspectionState.PausedByStop);
-                _checkpoint.HasBreakpoint = false;
-                _checkpoint.LastErrorMessage = "停止触发，检测中止";
+                _progress.LastErrorMessage = "停止触发，检测中止";
                 await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
                 LogInfo($"PLC 停止信号 DT122=1，检测中止（不保留断点）");
                 return false;
@@ -517,18 +445,17 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             case PlcInterruptAction.Reset:
                 _abortReason = InspectionStopReason.Reset;
                 SetState(InspectionState.ResetRequested);
-                _checkpoint.ResetProgress();
+                _progress.Reset();
                 await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
                 // DT121 由 TestPageViewModel 在界面结果、内部状态和 PLC 输出全部清理完成后统一清零。
                 // 引擎只负责中止当前检测，避免先清 DT121 导致运行界面轮询错过复位信号。
-                _checkpoint.LastErrorMessage = "复位触发，检测中止";
+                _progress.LastErrorMessage = "复位触发，检测中止";
                 return false;
 
             case PlcInterruptAction.EmergencyStop:
                 _abortReason = InspectionStopReason.EmergencyStop;
                 SetState(InspectionState.PausedByEmergencyStop);
-                _checkpoint.HasBreakpoint = false;
-                _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
+                _progress.LastErrorMessage = "急停触发，必须复位后重新启动";
                 await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
                 return false;
 
@@ -537,218 +464,11 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         }
     }
 
-    private static MeasurementResult ParseMeasurement(string rawText)
-    {
-        string text = rawText.Trim();
-        if (string.Equals(text, "OPEN", StringComparison.OrdinalIgnoreCase))
-            return new MeasurementResult { RawValue = rawText, Value = TemporaryOpenThresholdOhm, IsValid = true };
-
-        if (string.Equals(text, "SHORT", StringComparison.OrdinalIgnoreCase))
-            return new MeasurementResult { RawValue = rawText, Value = 0, IsValid = true };
-
-        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
-            return new MeasurementResult { RawValue = rawText, Value = value, IsValid = true };
-
-        return FailedMeasurement($"无法解析万用表返回值：{rawText}", rawText);
-    }
-
-    /// <summary>
-    /// 万用表测量值解析与分类。public static 便于最小测试直接覆盖。
-    /// 按无效测量值方案分类，填充 ValueKind / ShouldAbortInspection / DisplayTextOverride。
-    /// 
-    /// 【界面显示规则】
-    ///   DisplayTextOverride 非空 → 界面"检查结果"列直接显示该文本
-    ///   DisplayTextOverride 为空 → 由 FormatMeasurementResult() 按导通/电阻模式格式化
-    ///
-    /// 【各异常值界面显示对照】
-    ///   NaN           → "NaN"
-    ///   -Infinity     → "-Infinity"
-    ///   +Infinity     → "+Infinity"
-    ///   负电阻值       → 走数值格式化，显示 "X.XXXX Ω"
-    ///   超量程         → "超量程"
-    ///   无法解析       → 显示万用表原始返回文本
-    /// </summary>
-    public static MeasurementResult ParseMeasurementForInspection(string rawText)
-    {
-        string text = rawText.Trim();
-
-        // OPEN / SHORT 保留现有兼容，由 JudgeResult() 设置 ActualContinuityState，
-        // FormatMeasurementResult() 根据导通模式显示 "OPEN" 或 "SHORT"
-        if (string.Equals(text, "OPEN", StringComparison.OrdinalIgnoreCase))
-            return new MeasurementResult { RawValue = rawText, Value = TemporaryOpenThresholdOhm, IsValid = true, ValueKind = MeasurementValueKind.Normal };
-
-        if (string.Equals(text, "SHORT", StringComparison.OrdinalIgnoreCase))
-            return new MeasurementResult { RawValue = rawText, Value = 0, IsValid = true, ValueKind = MeasurementValueKind.Normal };
-
-        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
-        {
-            // 无法解析 → 中止，界面显示万用表原始返回文本（如 "ERROR"）
-            return new MeasurementResult
-            {
-                RawValue = rawText,
-                Value = 0,
-                IsValid = false,
-                ValueKind = MeasurementValueKind.ParseFailed,
-                ShouldAbortInspection = true,
-                ErrorMessage = $"无法解析万用表返回值：{rawText}",
-                DisplayTextOverride = rawText
-            };
-        }
-
-        // ── 以下按 double 值分类 ──
-
-        // NaN → 中止，界面显示 "NaN"
-        if (double.IsNaN(value))
-            return new MeasurementResult
-            {
-                RawValue = rawText,
-                Value = value,
-                IsValid = true,
-                ValueKind = MeasurementValueKind.NaN,
-                ShouldAbortInspection = true,
-                DisplayTextOverride = "NaN"
-            };
-
-        // -Infinity → 中止，界面显示 "-Infinity"
-        if (double.IsNegativeInfinity(value))
-            return new MeasurementResult
-            {
-                RawValue = rawText,
-                Value = value,
-                IsValid = true,
-                ValueKind = MeasurementValueKind.NegativeInfinity,
-                ShouldAbortInspection = true,
-                DisplayTextOverride = "-Infinity"
-            };
-
-        // +Infinity → 不中止、判 NG，界面显示 "+Infinity"
-        if (double.IsPositiveInfinity(value))
-            return new MeasurementResult
-            {
-                RawValue = rawText,
-                Value = value,
-                IsValid = true,
-                ValueKind = MeasurementValueKind.PositiveInfinityOrOverRange,
-                ShouldAbortInspection = false,
-                DisplayTextOverride = "+Infinity"
-            };
-
-        // 负电阻值 → 中止（电阻测量不应为负），界面走数值格式化显示 "X.XXXX Ω"
-        if (value < 0)
-            return new MeasurementResult
-            {
-                RawValue = rawText,
-                Value = value,
-                IsValid = true,
-                ValueKind = MeasurementValueKind.NegativeResistance,
-                ShouldAbortInspection = true,
-                DisplayTextOverride = null
-            };
-
-        // 超量程（>ResistanceMaxValue，即 119,999,900Ω）→ 不中止、判 NG，界面显示"超量程"
-        if (value > InputValidationHelper.ResistanceMaxValue)
-            return new MeasurementResult
-            {
-                RawValue = rawText,
-                Value = value,
-                IsValid = true,
-                ValueKind = MeasurementValueKind.PositiveInfinityOrOverRange,
-                ShouldAbortInspection = false,
-                DisplayTextOverride = "超量程"
-            };
-
-        // 正常非负有限数，DisplayTextOverride 为 null，由 FormatMeasurementResult() 处理
-        return new MeasurementResult
-        {
-            RawValue = rawText,
-            Value = value,
-            IsValid = true,
-            ValueKind = MeasurementValueKind.Normal
-        };
-    }
-
-
-    public static string ResolveContinuityState(double resistanceOhm, double thresholdOhm)
-    {
-        if (thresholdOhm < 1.0 || thresholdOhm > 1000.0)
-            throw new ArgumentOutOfRangeException(nameof(thresholdOhm), "导通阈值必须在 1~1000Ω 范围内。");
-
-        return resistanceOhm < thresholdOhm ? "SHORT" : "OPEN";
-    }
-
-    public static string JudgeContinuityResult(double resistanceOhm, string? expectedState, double thresholdOhm)
-    {
-        string actualState = ResolveContinuityState(resistanceOhm, thresholdOhm);
-        string expected = NormalizeContinuityState(expectedState);
-        return string.Equals(actualState, expected, StringComparison.OrdinalIgnoreCase) ? "OK" : "NG";
-    }
-
-    private static string NormalizeContinuityState(string? state)
-        => string.Equals(state, "SHORT", StringComparison.OrdinalIgnoreCase) ? "SHORT" : "OPEN";
-
-    private static string JudgeResult(MeasurementResult measurement, TestPointConfig testPoint)
-    {
-        // 超量程大数 / +Infinity 直接判 NG，不进入阈值比较
-        if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
-            return "NG";
-
-        string raw = measurement.RawValue.Trim();
-
-        if (testPoint.CheckMode == CheckModeConstants.Resistance)
-        {
-            if (raw.Equals("OPEN", StringComparison.OrdinalIgnoreCase)
-                || raw.Equals("SHORT", StringComparison.OrdinalIgnoreCase))
-                return "NG";
-
-            double lower = testPoint.LowerLimit ?? 0;
-            double upper = testPoint.UpperLimit ?? double.MaxValue;
-            return measurement.Value >= lower && measurement.Value <= upper ? "OK" : "NG";
-        }
-
-        bool expectShort = string.Equals(testPoint.ModeValue, "SHORT", StringComparison.OrdinalIgnoreCase);
-        if (raw.Equals("SHORT", StringComparison.OrdinalIgnoreCase))
-        {
-            testPoint.ActualContinuityState = "SHORT";
-            return expectShort ? "OK" : "NG";
-        }
-        if (raw.Equals("OPEN", StringComparison.OrdinalIgnoreCase))
-        {
-            testPoint.ActualContinuityState = "OPEN";
-            return expectShort ? "NG" : "OK";
-        }
-
-        testPoint.ActualContinuityState = ResolveContinuityState(
-            measurement.Value, testPoint.ContinuityThresholdOhm);
-        return JudgeContinuityResult(
-            measurement.Value, testPoint.ModeValue, testPoint.ContinuityThresholdOhm);
-    }
-
-    private static void MarkNg(TestPointConfig testPoint, string message)
-    {
-        testPoint.Judgment = "NG";
-        testPoint.ActualValue = 0;
-        testPoint.IsTested = true;
-        testPoint.ErrorMessage = message;
-    }
-
-    private static MeasurementResult FailedMeasurement(string message, string rawValue = "")
-    {
-        return new MeasurementResult
-        {
-            RawValue = rawValue,
-            IsValid = false,
-            ErrorMessage = message,
-            Timestamp = DateTime.Now
-        };
-    }
-
     private async Task AbortCurrentRunAsync(InspectionResult result, string message, InspectionState state)
     {
-        _checkpoint.CurrentStep = "Faulted";
         _currentExecutionStage = "Faulted";
-        _checkpoint.LastErrorMessage = message;
-        _checkpoint.HasBreakpoint = false;
-        _checkpoint.LastUpdatedTime = DateTime.Now;
+        _progress.LastErrorMessage = message;
+        _progress.LastUpdatedTime = DateTime.Now;
         result.IsAborted = true;
         result.ErrorMessage = message;
         result.EndTime = DateTime.Now;
@@ -798,8 +518,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     {
         _logger.LogWarning("[检测流程][审计] 急停触发，按急停原因中止当前检测");
         SetState(InspectionState.PausedByEmergencyStop);
-        _checkpoint.HasBreakpoint = false;
-        _checkpoint.LastErrorMessage = "急停触发，必须复位后重新启动";
+        _progress.LastErrorMessage = "急停触发，必须复位后重新启动";
         _abortReason = InspectionStopReason.EmergencyStop;
         _inspectionCts?.Cancel();
     }
@@ -834,35 +553,9 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         _logger.LogInformation("[检测流程][停止等待] 引擎已在 {TimeoutMs}ms 内停止", timeout.TotalMilliseconds);
         return InspectionStopWaitResult.Stopped;
     }
-    /// <summary>
-    /// 暂停检测并保留断点（Fake 调试停止时使用）。
-    /// 与 Stop() 的区别：会设置 HasBreakpoint=true 和 Paused 状态，
-    /// 重启时可从当前项续作。
-    /// 已废弃：DT122 停止不再保留断点，使用 StopAndWaitAsync 替代。
-    /// </summary>
-    [Obsolete("最新文档要求 DT122 停止不再保留断点，改用 StopAndWaitAsync", false)]
-    public void PauseWithCheckpoint()
-    {
-        if (_isRunning)
-        {
-            _checkpoint.CurrentStep = "Paused";
-            _checkpoint.HasBreakpoint = true;
-            _checkpoint.LastUpdatedTime = DateTime.Now;
-            LogInfo($"PLC 停止信号 DT122=1，已保留断点：第 {_checkpoint.CurrentItemIndex + 1} 项");
-            SetState(InspectionState.PausedByStop);
-            _inspectionCts?.Cancel();
-        }
-    }
-
-    public void ResumeAfterEmergencyStop()
-    {
-        _logger.LogWarning("[检测流程] 急停已解除，等待用户复位后重新启动");
-    }
-
     public void ClearResetState()
     {
-        InterruptedPointIndex = -1;
-        _checkpoint.ResetProgress();
+        _progress.Reset();
     }
 
     private void SetState(InspectionState newState)
@@ -871,7 +564,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         CurrentState = newState;
         _logger.LogDebug("[检测流程][{INS}] 状态变更 {OldState} -> {NewState}",
             _currentInspectionId ?? "-", oldState, newState);
-        StateChanged?.Invoke(this, new InspectionStateChangedEventArgs(oldState, newState));
     }
 
     private void LogInfo(string message)
@@ -905,200 +597,5 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
     {
         Dispose();
         return ValueTask.CompletedTask;
-    }
-}
-
-public enum InspectionState
-{
-    Idle,
-    Initializing,
-    WaitingForProductInfo,
-    WaitingForValidPlan,
-    WaitingForDevices,
-    WaitingForPlcStart,
-    StartingValidation,
-    Testing,
-    PausedByStop,
-    PausedByEmergencyStop,
-    /// <summary>单项 NG 后按系统设置停止本轮，等待操作员复位或终了</summary>
-    StoppedBySingleItemNg,
-    ResetRequested,
-    CompletedPendingSave,
-    CompletedPass,
-    CompletedFail,
-    Aborted,
-    Error
-}
-
-/// <summary>
-/// 检测停止原因（区分正常完成、单项 NG 停止、PLC 停止/急停/复位等）。
-/// </summary>
-public enum InspectionStopReason
-{
-    /// <summary>正常完成或未设定</summary>
-    None,
-    /// <summary>单项 NG 后按系统设置停止本轮</summary>
-    SingleItemNg,
-    /// <summary>PLC 停止信号 DT122</summary>
-    PlcStop,
-    /// <summary>PLC 复位信号 DT121</summary>
-    Reset,
-    /// <summary>PLC 急停信号 DT123</summary>
-    EmergencyStop,
-    /// <summary>DT302 继电器动作完成超时</summary>
-    RelayTimeout,
-    /// <summary>无法恢复的异常</summary>
-    Error,
-    /// <summary>操作取消</summary>
-    Canceled
-}
-
-public class InspectionConfig
-{
-    public string PlanName { get; set; } = string.Empty;
-    public List<TestPointConfig> TestPoints { get; set; } = new();
-    public int RelaySettleTimeMs { get; set; } = 150;
-    public int RelaySwitchTimeoutMs { get; set; } = 3000;
-
-    /// <summary>导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。默认 10Ω，范围 1~1000Ω。</summary>
-    public double ContinuityThresholdOhm { get; set; } = 10.0;
-
-    /// <summary>跳过 DT302 继电器动作完成等待。仅半实物联调无夹具或 DT302 反馈未接通时使用。</summary>
-    public bool SkipDt302Wait { get; set; }
-
-    /// <summary>
-    /// 单项 NG 后是否继续测试后续项目。
-    /// true（默认）：记录该项 NG，继续测完整个方案；
-    /// false：首个 NG 后停止本轮，等待操作员复位或终了。
-    /// </summary>
-    public bool ContinueTestingAfterNg { get; set; } = true;
-}
-
-public class TestPointConfig
-{
-    public string Name { get; set; } = string.Empty;
-    public string PinLeft { get; set; } = string.Empty;
-    public string PinRight { get; set; } = string.Empty;
-    public ushort PinLeftCode { get; set; }
-    public ushort PinRightCode { get; set; }
-    public string PinLeftPolarity { get; set; } = PinPolarityConstants.Positive;
-    public string PinRightPolarity { get; set; } = PinPolarityConstants.Negative;
-    public ushort PinLeftPolarityCode { get; set; }
-    public ushort PinRightPolarityCode { get; set; } = 1;
-    public string CheckMode { get; set; } = CheckModeConstants.Continuity;
-    public double? LowerLimit { get; set; }
-    public double? UpperLimit { get; set; }
-    public string? ModeValue { get; set; } = "OPEN";
-    public double ContinuityThresholdOhm { get; set; } = 10.0;
-    public string ActualContinuityState { get; set; } = string.Empty;
-    public int? RelayChannel { get; set; }
-    public double ActualValue { get; set; }
-    public string Judgment { get; set; } = string.Empty;
-    public bool IsTested { get; set; }
-    public string ErrorMessage { get; set; } = string.Empty;
-
-    public static TestPointConfig FromPlanItem(PlanItem item)
-    {
-        ArgumentNullException.ThrowIfNull(item);
-
-        var (pinLeft, pinRight) = SplitItemName(item.ItemName);
-        string leftPolarity = PinPolarityConstants.Normalize(item.PinLeftPolarity, PinPolarityConstants.Positive);
-        string rightPolarity = PinPolarityConstants.Normalize(item.PinRightPolarity, PinPolarityConstants.Negative);
-
-        return new TestPointConfig
-        {
-            Name = item.ItemName,
-            PinLeft = pinLeft,
-            PinRight = pinRight,
-            PinLeftCode = PlcAddressMap.ConvertPinNameToNumber(pinLeft),
-            PinRightCode = PlcAddressMap.ConvertPinNameToNumber(pinRight),
-            PinLeftPolarity = leftPolarity,
-            PinRightPolarity = rightPolarity,
-            PinLeftPolarityCode = PlcAddressMap.ConvertPolarityToValue(leftPolarity),
-            PinRightPolarityCode = PlcAddressMap.ConvertPolarityToValue(rightPolarity),
-            CheckMode = item.CheckMode,
-            LowerLimit = item.LowerLimit,
-            UpperLimit = item.UpperLimit,
-            ModeValue = item.ModeValue
-        };
-    }
-
-    private static (string Left, string Right) SplitItemName(string itemName)
-    {
-        var parts = (itemName ?? string.Empty).Split('-', 2);
-        return (
-            parts.Length > 0 ? parts[0].Trim() : string.Empty,
-            parts.Length > 1 ? parts[1].Trim() : string.Empty);
-    }
-}
-
-public class InspectionResult
-{
-    public string InspectionId { get; set; } = string.Empty;
-    public string Barcode { get; set; } = string.Empty;
-    public string ModelName { get; set; } = string.Empty;
-    public string OperatorName { get; set; } = string.Empty;
-    public DateTime StartTime { get; set; }
-    public DateTime EndTime { get; set; }
-    public int TotalCount { get; set; }
-    public int PassCount { get; set; }
-    public int FailCount { get; set; }
-    public bool IsAllPassed { get; set; }
-    public bool IsAborted { get; set; }
-    public string ErrorMessage { get; set; } = string.Empty;
-    /// <summary>停止原因（正常完成、单项 NG 停止、PLC 停止/急停/复位等）</summary>
-    public InspectionStopReason StopReason { get; set; } = InspectionStopReason.None;
-    /// <summary>停止时的测试项索引（如有）</summary>
-    public int? StopPointIndex { get; set; }
-    /// <summary>停止时的测试项名称（如有）</summary>
-    public string StopPointName { get; set; } = string.Empty;
-    public TimeSpan Duration => EndTime - StartTime;
-}
-
-public class InspectionStateChangedEventArgs : EventArgs
-{
-    public InspectionState OldState { get; }
-    public InspectionState NewState { get; }
-
-    public InspectionStateChangedEventArgs(InspectionState oldState, InspectionState newState)
-    {
-        OldState = oldState;
-        NewState = newState;
-    }
-}
-
-public class StepStartedEventArgs : EventArgs
-{
-    public int StepIndex { get; }
-    public TestPointConfig TestPoint { get; }
-
-    public StepStartedEventArgs(int stepIndex, TestPointConfig testPoint)
-    {
-        StepIndex = stepIndex;
-        TestPoint = testPoint;
-    }
-}
-
-public class StepCompletedEventArgs : EventArgs
-{
-    public int StepIndex { get; }
-    public TestPointConfig TestPoint { get; }
-    public MeasurementResult Measurement { get; }
-
-    public StepCompletedEventArgs(int stepIndex, TestPointConfig testPoint, MeasurementResult measurement)
-    {
-        StepIndex = stepIndex;
-        TestPoint = testPoint;
-        Measurement = measurement;
-    }
-}
-
-public class InspectionCompletedEventArgs : EventArgs
-{
-    public InspectionResult Result { get; }
-
-    public InspectionCompletedEventArgs(InspectionResult result)
-    {
-        Result = result;
     }
 }

@@ -75,39 +75,7 @@ public sealed class PlcAddressMap
         ["B11"] = (182, 183),  ["B12"] = (184, 185),
     };
 
-    // ── 已确认的寄存器属性（用于运行时 DI 注入，支持统一地址管理） ──
-
-    /// <summary>DT120：PLC 请求启动，PC 接管后写 0 清除。</summary>
-    public ushort StartRequestRegister { get; init; } = StartSignal;
-
-    /// <summary>DT121：复位请求，PC 完成复位处理后写 0 清除。</summary>
-    public ushort ResetRegister { get; init; } = ResetSignal;
-
-    /// <summary>DT122：停止信号，PLC 写，PC 只读。</summary>
-    public ushort StopRegister { get; init; } = StopSignal;
-
-    /// <summary>DT123：急停信号，PLC 写，PC 只读。</summary>
-    public ushort EmergencyStopRegister { get; init; } = EmergencyStopSignal;
-
-    /// <summary>DT234：上位机允许开始检测，启动前检查通过后写 1。</summary>
-    public ushort PcReadyRegister { get; init; } = PcReadyToStart;
-
-    /// <summary>DT302：继电器动作完成信号，PLC 写，PC 读。</summary>
-    public ushort RelayCompletedRegister { get; init; } = RelayActionCompleted;
-
-    /// <summary>DT303：报警解除，PLC 写，PC 读。</summary>
-    public ushort AlarmReleasedRegister { get; init; } = AlarmReleased;
-
-    /// <summary>DT304：产品 OK 结果，上位机写。</summary>
-    public ushort ProductOkRegister { get; init; } = ProductOk;
-
-    /// <summary>DT305：产品 NG 结果，上位机写。</summary>
-    public ushort ProductNgRegister { get; init; } = ProductNg;
-
-    /// <summary>DT306：终了，上位机写，PLC 读。返回主菜单后延时清 0。</summary>
-    public ushort TerminateRegister { get; init; } = TerminateSignal;
-
-    // ── 旧语义寄存器（已废弃，保留仅供检查引用，新流程禁止使用） ──
+    // ── 未确认的寄存器（暂保留，日后决定配置方式） ──
     // DT130~DT133 不再作为"左右脚号+左右极性"通用模型，
     // 改为每引脚独立选择区（见 PinAddressMap）。
     // DT160/DT161 现在是 A12 引脚的 Select/Polarity 地址，不再是流程信号。

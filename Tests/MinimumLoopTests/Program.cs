@@ -1,7 +1,9 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.Measurements;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -30,16 +32,16 @@ var tests = new List<(string Name, Action Body)>
     }),
     ("导通阈值按实测电阻转换 OPEN 或 SHORT", () =>
     {
-        AssertEqual("OPEN", InspectionEngine.ResolveContinuityState(10.5, 10.0));
-        AssertEqual("SHORT", InspectionEngine.ResolveContinuityState(0.5, 10.0));
-        AssertEqual("OPEN", InspectionEngine.ResolveContinuityState(10.0, 10.0));
+        AssertEqual("OPEN", InspectionMeasurementEvaluator.ResolveContinuityState(10.5, 10.0));
+        AssertEqual("SHORT", InspectionMeasurementEvaluator.ResolveContinuityState(0.5, 10.0));
+        AssertEqual("OPEN", InspectionMeasurementEvaluator.ResolveContinuityState(10.0, 10.0));
     }),
     ("导通判定使用阈值和期望状态", () =>
     {
-        AssertEqual("OK", InspectionEngine.JudgeContinuityResult(10.5, "OPEN", 10.0));
-        AssertEqual("NG", InspectionEngine.JudgeContinuityResult(0.5, "OPEN", 10.0));
-        AssertEqual("OK", InspectionEngine.JudgeContinuityResult(0.5, "SHORT", 10.0));
-        AssertEqual("NG", InspectionEngine.JudgeContinuityResult(10.5, "SHORT", 10.0));
+        AssertEqual("OK", InspectionMeasurementEvaluator.JudgeContinuityResult(10.5, "OPEN", 10.0));
+        AssertEqual("NG", InspectionMeasurementEvaluator.JudgeContinuityResult(0.5, "OPEN", 10.0));
+        AssertEqual("OK", InspectionMeasurementEvaluator.JudgeContinuityResult(0.5, "SHORT", 10.0));
+        AssertEqual("NG", InspectionMeasurementEvaluator.JudgeContinuityResult(10.5, "SHORT", 10.0));
     }),
     ("半实物 DT302 旁路默认关闭且可显式开启（新名 SkipDt302Wait）", () =>
     {
@@ -88,25 +90,6 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual("Resetting", InspectionControlAction.Resetting.ToString());
         AssertEqual("Timeout", InspectionStopWaitResult.Timeout.ToString());
     }),
-    ("控制动作策略只保留最高优先级 Pending", () =>
-    {
-        AssertEqual(false, InspectionControlActionPolicy.ShouldReplacePending(PendingInspectionControlAction.Reset, PendingInspectionControlAction.Stop));
-        AssertEqual(true, InspectionControlActionPolicy.ShouldReplacePending(PendingInspectionControlAction.Stop, PendingInspectionControlAction.Reset));
-        AssertEqual(true, InspectionControlActionPolicy.ShouldReplacePending(PendingInspectionControlAction.None, PendingInspectionControlAction.Start));
-    }),
-    ("Reset 成功后吸收低优先级 Pending 但保留急停", () =>
-    {
-        AssertEqual(PendingInspectionControlAction.None, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.Start));
-        AssertEqual(PendingInspectionControlAction.None, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.Stop));
-        AssertEqual(PendingInspectionControlAction.None, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.Reset));
-        AssertEqual(PendingInspectionControlAction.EmergencyStop, InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(PendingInspectionControlAction.EmergencyStop));
-    }),
-    ("Resetting 期间 Stop 被 Reset 吸收且急停期间 Reset 被拒绝", () =>
-    {
-        AssertEqual(true, InspectionControlActionPolicy.ShouldAbsorbNewAction(InspectionControlAction.Resetting, PendingInspectionControlAction.Stop));
-        AssertEqual(false, InspectionControlActionPolicy.ShouldAbsorbNewAction(InspectionControlAction.Resetting, PendingInspectionControlAction.EmergencyStop));
-        AssertEqual(true, InspectionControlActionPolicy.ShouldRejectNewAction(InspectionControlAction.EmergencyStopping, PendingInspectionControlAction.Reset));
-    }),
     ("复位最终验证结果枚举存在", () =>
     {
         AssertEqual("Success", ResetCompletionValidationResult.Success.ToString());
@@ -148,49 +131,49 @@ var tests = new List<(string Name, Action Body)>
     ("万用表异常值分类符合运行策略", () =>
     {
         // NaN → 中止，显示 "NaN"
-        var nan = InspectionEngine.ParseMeasurementForInspection("NaN");
+        var nan = InspectionMeasurementEvaluator.Parse("NaN");
         AssertEqual("NaN", nan.DisplayTextOverride);
         AssertEqual(true, nan.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.NaN, nan.ValueKind);
 
         // -Infinity → 中止，显示 "-Infinity"
-        var negInf = InspectionEngine.ParseMeasurementForInspection("-Infinity");
+        var negInf = InspectionMeasurementEvaluator.Parse("-Infinity");
         AssertEqual("-Infinity", negInf.DisplayTextOverride);
         AssertEqual(true, negInf.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.NegativeInfinity, negInf.ValueKind);
 
         // 负电阻值 → 中止，无覆写（走数值格式化）
-        var neg = InspectionEngine.ParseMeasurementForInspection("-1");
+        var neg = InspectionMeasurementEvaluator.Parse("-1");
         AssertEqual(null, neg.DisplayTextOverride);
         AssertEqual(true, neg.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.NegativeResistance, neg.ValueKind);
 
         // +Infinity → 不中止，显示 "+Infinity"
-        var posInf = InspectionEngine.ParseMeasurementForInspection("+Infinity");
+        var posInf = InspectionMeasurementEvaluator.Parse("+Infinity");
         AssertEqual("+Infinity", posInf.DisplayTextOverride);
         AssertEqual(false, posInf.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.PositiveInfinityOrOverRange, posInf.ValueKind);
 
         // 超量程大数 → 不中止，显示 "超量程"
-        var overRange = InspectionEngine.ParseMeasurementForInspection("9.9E37");
+        var overRange = InspectionMeasurementEvaluator.Parse("9.9E37");
         AssertEqual("超量程", overRange.DisplayTextOverride);
         AssertEqual(false, overRange.ShouldAbortInspection);
         AssertEqual(MeasurementValueKind.PositiveInfinityOrOverRange, overRange.ValueKind);
 
         // OPEN → 正常，不中止
-        var open = InspectionEngine.ParseMeasurementForInspection("OPEN");
+        var open = InspectionMeasurementEvaluator.Parse("OPEN");
         AssertEqual(MeasurementValueKind.Normal, open.ValueKind);
         AssertEqual(false, open.ShouldAbortInspection);
         AssertEqual(true, open.IsValid);
 
         // SHORT → 正常，不中止
-        var shortVal = InspectionEngine.ParseMeasurementForInspection("SHORT");
+        var shortVal = InspectionMeasurementEvaluator.Parse("SHORT");
         AssertEqual(MeasurementValueKind.Normal, shortVal.ValueKind);
         AssertEqual(false, shortVal.ShouldAbortInspection);
         AssertEqual(true, shortVal.IsValid);
 
         // 正常数值 → 正常，不中止
-        var normal = InspectionEngine.ParseMeasurementForInspection("100.5");
+        var normal = InspectionMeasurementEvaluator.Parse("100.5");
         AssertEqual(MeasurementValueKind.Normal, normal.ValueKind);
         AssertEqual(false, normal.ShouldAbortInspection);
         AssertEqual(true, normal.IsValid);

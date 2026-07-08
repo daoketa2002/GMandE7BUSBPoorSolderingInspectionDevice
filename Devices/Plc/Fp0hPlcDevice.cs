@@ -31,7 +31,8 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
 {
     private readonly IModbusTcpClient _modbusClient;
     private readonly ILogger<Fp0hPlcDevice> _logger;
-    private readonly PlcAddressMap _addressMap = new();
+    /// <summary>未确认寄存器实例（PointResultBaseRegister/NgPointIndexRegister/AlarmCodeRegister 等配置型地址）</summary>
+    private static readonly PlcAddressMap UnconfirmedAddresses = new();
     private FP0HCommunicationConfig? _config;
     private bool _disposed;
 
@@ -123,7 +124,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         {
             // 从 DT120 开始读 10 个保持寄存器（覆盖 DT120~DT129）
             var response = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, _addressMap.StartRequestRegister, ReadInputsRegisterCount, ct).ConfigureAwait(false);
+                DefaultUnitId, PlcAddressMap.StartSignal, ReadInputsRegisterCount, ct).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult<PlcMachineInputs>.Failure("读取 PLC 输入信号失败: 无响应");
@@ -173,103 +174,45 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         }
     }
 
-    /// <summary>
-    /// 清除 PLC 启动请求（写 DT120 = 0）。
-    /// 正常完成时由运行页面在保存/取消弹窗关闭后调用；启动失败或复位收口也可调用。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearStartRequestAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除 DT120 启动请求 -> 写 DT120 = 0");
-        return await WriteRegisterSingleAsync("DT120(启动请求)", _addressMap.StartRequestRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清除 PLC 启动请求（写 DT120 = 0）。</summary>
+    public Task<PlcOperationResult> ClearStartRequestAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT120(启动请求)", PlcAddressMap.StartSignal, 0, ct);
 
-    /// <summary>
-    /// 清除 PLC 复位请求（写 DT121 = 0）。
-    /// PC 完成复位处理后调用。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearResetRequestAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除 DT121 复位请求 → 写 DT121 = 0");
-        return await WriteRegisterSingleAsync("DT121(复位请求)", _addressMap.ResetRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清除 PLC 复位请求（写 DT121 = 0）。</summary>
+    public Task<PlcOperationResult> ClearResetRequestAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT121(复位请求)", PlcAddressMap.ResetSignal, 0, ct);
 
-    /// <summary>
-    /// 上位机请求启动（写 DT120=1）。
-    /// 半实物联调临时入口：真实 PLC 接入但现场启动按钮链路未完整联通时，
-    /// 由上位机临时写 DT120=1 触发现有 PLC 轮询启动流程。
-    /// 正式整机联调后应删除该方法，启动应由 PLC 或实体按钮触发。
-    /// </summary>
-    public async Task<PlcOperationResult> RequestStartAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT120=1，模拟 PLC 启动请求。正式整机联调后删除该入口。");
-        return await WriteRegisterSingleAsync("DT120(启动请求)", _addressMap.StartRequestRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>上位机请求启动（写 DT120=1）。半实物联调临时入口。</summary>
+    public Task<PlcOperationResult> RequestStartAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT120(启动请求)", PlcAddressMap.StartSignal, 1, ct);
 
-    /// <summary>
-    /// 上位机请求复位（写 DT121=1）。
-    /// 半实物/现场临时入口：真实 PLC 接入但需要上位机发起复位请求时，
-    /// 由上位机写 DT121=1 触发现有 PLC 轮询复位流程。
-    /// 如果后续复位改为只由实体按钮触发，应删除该入口。
-    /// </summary>
-    public async Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[半实物联调][审计] 上位机写入 DT121=1，发起复位请求。若后续改为实体按钮复位，应删除该入口。");
-        return await WriteRegisterSingleAsync("DT121(复位请求)", _addressMap.ResetRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>上位机请求复位（写 DT121=1）。半实物临时入口。</summary>
+    public Task<PlcOperationResult> RequestResetAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT121(复位请求)", PlcAddressMap.ResetSignal, 1, ct);
 
-    /// <summary>
-    /// 上位机请求停止（写 DT122=1）。半实物联调主动触发。
-    /// </summary>
-    public async Task<PlcOperationResult> RequestStopAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT122=1，模拟 PLC 停止信号。");
-        return await WriteRegisterSingleAsync("DT122(停止)", _addressMap.StopRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>上位机请求停止（写 DT122=1）。半实物联调主动触发。</summary>
+    public Task<PlcOperationResult> RequestStopAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT122(停止)", PlcAddressMap.StopSignal, 1, ct);
 
-    /// <summary>
-    /// 清除 PLC 停止请求（写 DT122=0）。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearStopRequestAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除 DT122 停止请求 -> 写 DT122 = 0");
-        return await WriteRegisterSingleAsync("DT122(停止)", _addressMap.StopRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清除 PLC 停止请求（写 DT122=0）。</summary>
+    public Task<PlcOperationResult> ClearStopRequestAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT122(停止)", PlcAddressMap.StopSignal, 0, ct);
 
-    /// <summary>
-    /// 上位机请求急停（写 DT123=1）。半实物联调主动触发。
-    /// </summary>
-    public async Task<PlcOperationResult> RequestEmergencyStopAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT123=1，模拟 PLC 急停信号。");
-        return await WriteRegisterSingleAsync("DT123(急停)", _addressMap.EmergencyStopRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>上位机请求急停（写 DT123=1）。半实物联调主动触发。</summary>
+    public Task<PlcOperationResult> RequestEmergencyStopAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT123(急停)", PlcAddressMap.EmergencyStopSignal, 1, ct);
 
-    /// <summary>
-    /// 清除 PLC 急停请求（写 DT123=0）。急停解除时调用。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearEmergencyStopRequestAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除 DT123 急停请求 -> 写 DT123 = 0");
-        return await WriteRegisterSingleAsync("DT123(急停)", _addressMap.EmergencyStopRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清除 PLC 急停请求（写 DT123=0）。急停解除时调用。</summary>
+    public Task<PlcOperationResult> ClearEmergencyStopRequestAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT123(急停)", PlcAddressMap.EmergencyStopSignal, 0, ct);
 
-    /// <summary>
-    /// 上位机请求终了（写 DT306=1）。终了按钮触发。
-    /// </summary>
-    public async Task<PlcOperationResult> RequestTerminateAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[终了按钮][审计] 终了按钮触发，写 DT306=1");
-        return await WriteRegisterSingleAsync("DT306(终了)", _addressMap.TerminateRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>上位机请求终了（写 DT306=1）。终了按钮触发。</summary>
+    public Task<PlcOperationResult> RequestTerminateAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT306(终了)", PlcAddressMap.TerminateSignal, 1, ct);
 
-    /// <summary>
-    /// 清除终了请求（写 DT306=0）。返回主菜单后延时调用。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除 DT306 终了请求 -> 写 DT306 = 0");
-        return await WriteRegisterSingleAsync("DT306(终了)", _addressMap.TerminateRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清除终了请求（写 DT306=0）。返回主菜单后延时调用。</summary>
+    public Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT306(终了)", PlcAddressMap.TerminateSignal, 0, ct);
 
     /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：每引脚独立选择区）。
@@ -369,23 +312,13 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         return PlcOperationResult.Failure("等待继电器切换被取消");
     }
 
-    /// <summary>
-    /// 写入上位机允许开始检测信号（写 DT234 = 1）。
-    /// </summary>
-    public async Task<PlcOperationResult> WritePcReadyAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 允许开始检测 → 写 DT234 = 1");
-        return await WriteRegisterSingleAsync("DT234(PC允许开始)", _addressMap.PcReadyRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>写入上位机允许开始检测信号（写 DT234 = 1）。</summary>
+    public Task<PlcOperationResult> WritePcReadyAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT234(PC允许开始)", PlcAddressMap.PcReadyToStart, 1, ct);
 
-    /// <summary>
-    /// 清除上位机允许开始检测信号（写 DT234 = 0）。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearPcReadyAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除允许开始 → 写 DT234 = 0");
-        return await WriteRegisterSingleAsync("DT234(PC允许开始)", _addressMap.PcReadyRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清除上位机允许开始检测信号（写 DT234 = 0）。</summary>
+    public Task<PlcOperationResult> ClearPcReadyAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT234(PC允许开始)", PlcAddressMap.PcReadyToStart, 0, ct);
 
     /// <summary>
     /// 写入单点检测结果到 PLC。
@@ -395,16 +328,16 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task<PlcOperationResult> WritePointResultAsync(int pointIndex, bool isOk, CancellationToken ct = default)
     {
-        if (!_addressMap.PointResultBaseRegister.HasValue)
+        if (!UnconfirmedAddresses.PointResultBaseRegister.HasValue)
             return PlcOperationResult.Failure("单点结果基地址未配置(PointResultBaseRegister=null)，禁止写入 PLC");
 
-        ushort address = (ushort)(_addressMap.PointResultBaseRegister.Value + pointIndex);
+        ushort address = (ushort)(UnconfirmedAddresses.PointResultBaseRegister.Value + pointIndex);
         ushort value = isOk ? (ushort)1 : (ushort)0;
 
         _logger.LogWarning("[PLC动作][审计] 写入单点结果: 索引={Index}, 地址=DT{Addr}, 值={Value} ({Result})",
             pointIndex, address, value, isOk ? "OK" : "NG");
 
-        return await WriteRegisterSingleAsync($"单点结果[{pointIndex}]", address, value, ct).ConfigureAwait(false);
+        return await WriteSignalAsync($"单点结果[{pointIndex}]", address, value, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -424,7 +357,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             ushort productNg = isOk ? (ushort)0 : (ushort)1;
 
             var response = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, _addressMap.ProductOkRegister,
+                DefaultUnitId, PlcAddressMap.ProductOk,
                 new[] { productOk, productNg }, ct).ConfigureAwait(false);
 
             if (response is null)
@@ -433,10 +366,10 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
                 return PlcOperationResult.Failure($"写入 DT304/DT305 失败：Modbus错误码 {response.ErrorCode}", response);
 
             // 写入 NG 项目编号（如果配置了）
-            if (!isOk && ngPointIndex.HasValue && _addressMap.NgPointIndexRegister.HasValue)
+            if (!isOk && ngPointIndex.HasValue && UnconfirmedAddresses.NgPointIndexRegister.HasValue)
             {
-                var ngResult = await WriteRegisterSingleAsync("NG项目编号",
-                    _addressMap.NgPointIndexRegister.Value, (ushort)(ngPointIndex.Value + 1), ct).ConfigureAwait(false);
+                var ngResult = await WriteSignalAsync("NG项目编号",
+                    UnconfirmedAddresses.NgPointIndexRegister.Value, (ushort)(ngPointIndex.Value + 1), ct).ConfigureAwait(false);
                 if (!ngResult.IsSuccess)
                     return ngResult;
             }
@@ -465,7 +398,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             var response = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, _addressMap.ProductOkRegister,
+                DefaultUnitId, PlcAddressMap.ProductOk,
                 new ushort[] { 0, 0 }, ct).ConfigureAwait(false);
 
             if (response is null)
@@ -519,44 +452,17 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         }
     }
 
-    /// <summary>
-    /// 清空继电器动作完成标志（写 DT302 = 0）。
-    /// 当前测试点完成读取万用表并判定后调用，表示上位机已取走结果并允许 PLC 进行下一步动作。
-    /// 在下一项开始前、复位、停止、急停、异常中止路径中也必须清 DT302。
-    /// </summary>
-    public async Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 清除继电器动作完成标志 → 写 DT302 = 0");
-        return await WriteRegisterSingleAsync("DT302(继电器动作完成)", _addressMap.RelayCompletedRegister, 0, ct).ConfigureAwait(false);
-    }
+    /// <summary>清空继电器动作完成标志（写 DT302 = 0）。</summary>
+    public Task<PlcOperationResult> ClearRelayActionCompletedAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT302(继电器动作完成)", PlcAddressMap.RelayActionCompleted, 0, ct);
 
-    /// <summary>
-    /// 清空报警解除信号（写 DT303 = 0）。
-    /// 用户点击急停弹窗"解除"按钮后调用，只清 DT303，不清 DT123。
-    /// </summary>
-    public async Task<PlcOperationResult> RequestAlarmReleaseAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[半实物联调][审计] 上位机临时写入 DT303=1，模拟 PLC 报警解除通知。正式整机联调应由 PLC 写入。");
-        return await WriteRegisterSingleAsync("DT303(报警解除)", _addressMap.AlarmReleasedRegister, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>上位机请求报警解除（写 DT303=1）。半实物/Fake 调试用。</summary>
+    public Task<PlcOperationResult> RequestAlarmReleaseAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT303(报警解除)", PlcAddressMap.AlarmReleased, 1, ct);
 
-    public async Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] 用户确认急停解除，PC 清除 DT303 报警解除信号 → 写 DT303 = 0");
-        return await WriteRegisterSingleAsync("DT303(报警解除)", _addressMap.AlarmReleasedRegister, 0, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// 通知 PLC 断开引脚输出（写 DT160 = 1 — 旧地址表语义）。
-    /// 已废弃，新流程使用 ClearPinOutputsAsync。
-    /// DT160 在最新地址表中属于 A12 引脚的 Select 地址。
-    /// </summary>
-    [Obsolete("请使用 ClearPinOutputsAsync 替代。DT160 现在是 A12 引脚选择地址，不是流程信号。")]
-    public async Task<PlcOperationResult> RequestRelayDisconnectAsync(CancellationToken ct = default)
-    {
-        _logger.LogWarning("[PLC动作][审计] PC 通知 PLC 断开引脚输出（旧 DT160 语义）→ 写 DT160 = 1");
-        return await WriteRegisterSingleAsync("DT160(旧断开引脚输出/现A12选择地址)", 160, 1, ct).ConfigureAwait(false);
-    }
+    /// <summary>清空报警解除信号（写 DT303 = 0）。急停解除时调用。</summary>
+    public Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT303(报警解除)", PlcAddressMap.AlarmReleased, 0, ct);
 
     /// <summary>
     /// 写入上位机异常状态到 PLC。
@@ -571,143 +477,15 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     #endregion
 
     // ═══════════════════════════════════════════════════════════════
-    //  旧业务操作（保持兼容，待主流程稳定后清理）
-    // ═══════════════════════════════════════════════════════════════
-
-    #region 旧业务操作
-
-    public async Task<PlcOperationResult> ReadStartSignalAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            var response = await _modbusClient.ReadCoilsAsync(
-                DefaultUnitId, _addressMap.StartRequestRegister, 1, ct).ConfigureAwait(false);
-
-            if (response is null)
-                return PlcOperationResult.Failure("读取启动信号失败: 无响应");
-            if (response.IsError)
-                return PlcOperationResult.Failure($"读取启动信号失败: Modbus错误码 {response.ErrorCode}", response);
-
-            return PlcOperationResult.Success("读取启动信号成功", response);
-        }
-        catch (OperationCanceledException)
-        {
-            return PlcOperationResult.Failure("读取启动信号被取消");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[PLC动作] 读取启动信号异常");
-            return PlcOperationResult.Failure($"读取启动信号异常: {ex.Message}");
-        }
-    }
-
-    public async Task<PlcOperationResult> SetBusyAsync(bool value, CancellationToken ct = default)
-    {
-        return await WriteCoilAsync("Busy", _addressMap.StartRequestRegister, value, ct).ConfigureAwait(false);
-    }
-
-    public async Task<PlcOperationResult> SetOkAsync(bool value, CancellationToken ct = default)
-    {
-        return await WriteCoilAsync("OK", _addressMap.StartRequestRegister, value, ct).ConfigureAwait(false);
-    }
-
-    public async Task<PlcOperationResult> SetNgAsync(bool value, CancellationToken ct = default)
-    {
-        return await WriteCoilAsync("NG", _addressMap.StartRequestRegister, value, ct).ConfigureAwait(false);
-    }
-
-    public async Task<PlcOperationResult> SetErrorAsync(bool value, CancellationToken ct = default)
-    {
-        return await WriteCoilAsync("Error", _addressMap.StartRequestRegister, value, ct).ConfigureAwait(false);
-    }
-
-    public async Task<PlcOperationResult> SelectTestPointAsync(int testPointIndex, CancellationToken ct = default)
-    {
-        try
-        {
-            ushort value = (ushort)(testPointIndex + 1);
-            _logger.LogWarning("[PLC动作] 选择测试点: 索引={Index}, D100值={Value}", testPointIndex, value);
-
-            var response = await _modbusClient.WriteSingleRegisterAsync(
-                DefaultUnitId, _addressMap.StartRequestRegister, value, ct).ConfigureAwait(false);
-
-            if (response is null)
-                return PlcOperationResult.Failure("写入测试点选择失败: 无响应");
-            if (response.IsError)
-                return PlcOperationResult.Failure($"写入测试点选择失败: Modbus错误码 {response.ErrorCode}", response);
-
-            return PlcOperationResult.Success($"测试点选择 D100 = {value}", response);
-        }
-        catch (OperationCanceledException)
-        {
-            return PlcOperationResult.Failure("写入测试点选择被取消");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[PLC动作] 写入测试点选择异常");
-            return PlcOperationResult.Failure($"写入测试点选择异常: {ex.Message}");
-        }
-    }
-
-    public async Task<PlcOperationResult> SetRelayAsync(int channel, bool value, CancellationToken ct = default)
-    {
-        if (channel < 0)
-        {
-            _logger.LogWarning("[PLC动作] 继电器通道号无效: {Channel}", channel);
-            return PlcOperationResult.Failure($"继电器通道号无效: {channel}");
-        }
-
-        ushort address = (ushort)(channel);
-        _logger.LogWarning("[PLC动作] 继电器: 通道={Channel}, 地址=M{Address}, 值={Value}", channel, address, value);
-
-        return await WriteCoilCoreAsync($"继电器{channel}", address, value, ct).ConfigureAwait(false);
-    }
-
-    public async Task<PlcOperationResult> WriteTestResultAsync(int index, ushort resultValue, CancellationToken ct = default)
-    {
-        if (index < 0)
-        {
-            _logger.LogWarning("[PLC动作] 检测结果索引无效: {Index}", index);
-            return PlcOperationResult.Failure($"检测结果索引无效: {index}");
-        }
-
-        try
-        {
-            ushort address = (ushort)(index);
-            _logger.LogWarning("[PLC动作] 写入检测结果: 索引={Index}, D{Address}={Value}", index, address, resultValue);
-
-            var response = await _modbusClient.WriteSingleRegisterAsync(
-                DefaultUnitId, address, resultValue, ct).ConfigureAwait(false);
-
-            if (response is null)
-                return PlcOperationResult.Failure($"检测结果[{index}]写入失败: 无响应");
-            if (response.IsError)
-                return PlcOperationResult.Failure($"检测结果[{index}]写入失败: Modbus错误码 {response.ErrorCode}", response);
-
-            return PlcOperationResult.Success($"检测结果 D{address} = {resultValue}", response);
-        }
-        catch (OperationCanceledException)
-        {
-            return PlcOperationResult.Failure($"检测结果[{index}]写入被取消");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[PLC动作] 检测结果[{Index}]写入异常", index);
-            return PlcOperationResult.Failure($"检测结果[{index}]写入异常: {ex.Message}");
-        }
-    }
-
-    #endregion
-
-    // ═══════════════════════════════════════════════════════════════
     //  内部辅助方法
     // ═══════════════════════════════════════════════════════════════
 
     #region 内部辅助
 
-    /// <summary>写单保持寄存器（FC 0x06）核心实现</summary>
-    private async Task<PlcOperationResult> WriteRegisterSingleAsync(string name, ushort address, ushort value, CancellationToken ct)
+    /// <summary>写单保持寄存器（FC 0x06）核心实现，统一记录审计日志</summary>
+    private async Task<PlcOperationResult> WriteSignalAsync(string name, ushort address, ushort value, CancellationToken ct)
     {
+        _logger.LogWarning("[PLC动作][审计] 写 {Name} → DT{Address} = {Value}", name, address, value);
         try
         {
             var response = await _modbusClient.WriteSingleRegisterAsync(
@@ -727,39 +505,6 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[PLC动作] {Name}写入异常 (DT{Address})", name, address);
-            return PlcOperationResult.Failure($"{name}写入异常: {ex.Message}");
-        }
-    }
-
-    /// <summary>通用线圈写入（用于旧接口 SetBusy/SetOk/SetNg/SetError）</summary>
-    private async Task<PlcOperationResult> WriteCoilAsync(string signalName, ushort address, bool value, CancellationToken ct)
-    {
-        _logger.LogWarning("[PLC动作] 设置 {Signal} = {Value} (M{Address})", signalName, value, address);
-        return await WriteCoilCoreAsync(signalName, address, value, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>写单线圈（FC 0x05）核心实现</summary>
-    private async Task<PlcOperationResult> WriteCoilCoreAsync(string name, ushort address, bool value, CancellationToken ct)
-    {
-        try
-        {
-            var response = await _modbusClient.WriteSingleCoilAsync(
-                DefaultUnitId, address, value, ct).ConfigureAwait(false);
-
-            if (response is null)
-                return PlcOperationResult.Failure($"{name}写入失败: 无响应");
-            if (response.IsError)
-                return PlcOperationResult.Failure($"{name}写入失败: Modbus错误码 {response.ErrorCode}", response);
-
-            return PlcOperationResult.Success($"{name} = {value}", response);
-        }
-        catch (OperationCanceledException)
-        {
-            return PlcOperationResult.Failure($"{name}写入被取消");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[PLC动作] {Name}写入异常 (M{Address})", name, address);
             return PlcOperationResult.Failure($"{name}写入异常: {ex.Message}");
         }
     }

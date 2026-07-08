@@ -26,7 +26,6 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     private readonly ILogger<FakeInspectionHardware> _logger;
     private readonly object _syncRoot = new();
     private readonly Dictionary<ushort, ushort> _registers = new();
-    private int _rawValueIndex;
     private bool _isConnected;
 
     // 电阻模式模拟返回序列（轮转）
@@ -325,24 +324,8 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     }
 
     /// <summary>
-    /// 通知 PLC 断开引脚输出（旧语义，新流程使用 ClearPinOutputsAsync）。
+    /// 写入上位机异常状态到 PLC。
     /// </summary>
-    [Obsolete("请使用 ClearPinOutputsAsync 替代")]
-    public Task<PlcOperationResult> RequestRelayDisconnectAsync(CancellationToken ct = default)
-    {
-        // 兼容：调用 ClearPinOutputsAsync 内部逻辑
-        lock (_syncRoot)
-        {
-            for (ushort addr = PlcAddressMap.PinOutputStart; addr <= PlcAddressMap.PinOutputEnd; addr++)
-            {
-                _registers[addr] = 0;
-            }
-        }
-
-        _logger.LogWarning("[Fake硬件][审计] 已清空 DT130~DT185（通过旧 RequestRelayDisconnectAsync）");
-        return Task.FromResult(PlcOperationResult.Success("Fake 引脚输出已断开"));
-    }
-
     public Task<PlcOperationResult> WritePcErrorAsync(CancellationToken ct = default)
     {
         _logger.LogWarning("[Fake硬件][审计] PC 异常已写入 Fake PLC");
@@ -451,21 +434,6 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         _logger.LogWarning("[Fake硬件][审计] Fake GDM-9060 MEAS:CONT?(导通) RawText={RawText}", raw);
         return Task.FromResult(raw);
     }
-
-    // ── 旧接口兼容实现 ──
-
-    public Task<PlcOperationResult> ReadStartSignalAsync(CancellationToken ct = default)
-        => Task.FromResult(ReadRegister(PlcAddressMap.StartSignal) == 1
-            ? PlcOperationResult.Success("Fake 启动信号=1")
-            : PlcOperationResult.Failure("Fake 启动信号=0"));
-
-    public Task<PlcOperationResult> SetBusyAsync(bool value, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
-    public Task<PlcOperationResult> SetOkAsync(bool value, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
-    public Task<PlcOperationResult> SetNgAsync(bool value, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
-    public Task<PlcOperationResult> SetErrorAsync(bool value, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
-    public Task<PlcOperationResult> SelectTestPointAsync(int testPointIndex, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
-    public Task<PlcOperationResult> SetRelayAsync(int channel, bool value, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
-    public Task<PlcOperationResult> WriteTestResultAsync(int index, ushort resultValue, CancellationToken ct = default) => Task.FromResult(PlcOperationResult.Success());
 
     private ushort ReadRegister(ushort address)
     {

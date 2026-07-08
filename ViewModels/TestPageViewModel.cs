@@ -23,8 +23,10 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models.Measurements;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 
@@ -123,17 +125,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>DT121 复位信号是否已处理，防止复位按钮保持时重复处理。</summary>
     private bool _resetSignalHandled;
 
-    /// <summary>当前控制动作执行期间挂起的最高优先级动作。不是 FIFO，只保留最高意图。</summary>
-    private PendingInspectionControlAction _pendingControlAction = PendingInspectionControlAction.None;
-
-    /// <summary>挂起动作来源，只用于补执行时保留日志语义。</summary>
-    private InspectionActionSource _pendingControlActionSource = InspectionActionSource.PlcPolling;
-
     /// <summary>复位或中止后，忽略上一轮检测流程晚到的 StepStarted/StepCompleted/Completed 回调。</summary>
     private bool _ignoreInspectionCallbacksUntilNextStart;
 
     /// <summary>
-    /// 正在执行复位流程中。在 OnStepStarted/OnStepCompleted/OnInspectionCompleted 中额外守卫，
+    /// 正在执行复位流程中。在 OnStepStarted/OnStepCompleted 中额外守卫，
     /// 防止引擎自然完成后的 InvokeAsync 回调（Normal 优先级）在计时器轮询（Background 优先级）之前执行。
     /// </summary>
     private bool _isResetting;
@@ -158,13 +154,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private bool _waitDt120ReleaseAfterReset;
 
     /// <summary>
-    /// 原子标志：InspectionCompleted 回调是否已被处理。
-    /// 使用 Interlocked.Exchange 原子操作保证线程安全，
-    /// 防止引擎多次触发 InspectionCompleted 导致重复弹出保存对话框。
-    /// 0 = 未处理（允许进入），1 = 已处理（拦截重复）。
-    /// </summary>
-    private int _inspectionCompletedHandled;
+    /// Starting 流程的取消令牌源。Stop/Reset/EmergencyStop 可取消 Starting 以立即执行自身流程。</summary>
+    private CancellationTokenSource? _startingCts;
 
+    /// <summary>
     /// <summary>
     /// DT120 启动信号是否已处理（上升沿触发）。
     /// DT120=0 时重置为 false，DT120=1 且 false 时才允许进入启动复核。
@@ -499,6 +492,32 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 取消当前正在执行的控制动作并等待其让出锁。
+    /// 用于 EmergencyStop/Stop/Reset 在 Starting 持有锁时让其取消退出。
+    /// 超时返回 false，不阻塞调用方。
+    /// </summary>
+    private async Task<bool> CancelCurrentActionAndWaitLockAsync(CancellationToken ct = default)
+    {
+        // 取消 Starting（如有）
+        if (_currentControlAction == InspectionControlAction.Starting && _startingCts != null)
+        {
+            _logger.LogWarning("[运行控制][取消] 正在取消 Starting 以执行更高优先级动作");
+            await _startingCts.CancelAsync().ConfigureAwait(false);
+        }
+
+        // 释放锁需要等待 Starting 的 catch → ExitControlAction
+        for (int i = 0; i < 20; i++)
+        {
+            if (_currentControlAction == InspectionControlAction.None)
+                return true;
+            await Task.Delay(10, ct).ConfigureAwait(false);
+        }
+
+        _logger.LogWarning("[运行控制][取消] 等待当前动作退出超时（200ms），将尝试直接获取锁");
+        return false;
+    }
+
+    /// <summary>
     /// 离开运行控制动作门禁，必须与 TryEnterControlActionAsync 成对出现。
     /// 防御检查：如果 _currentControlAction 已是 None，不 Release 防止 SemaphoreFullException。
     /// </summary>
@@ -537,101 +556,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             or InspectionStopReason.Reset
             or InspectionStopReason.EmergencyStop
             or InspectionStopReason.Canceled;
-    }
-
-    /// <summary>
-    /// 合并当前控制动作执行期间新到达的意图。只保留最高优先级，不按 FIFO 排队。
-    /// </summary>
-    private bool RequestPendingControlAction(PendingInspectionControlAction newAction, InspectionActionSource source)
-    {
-        if (newAction == PendingInspectionControlAction.None)
-            return false;
-
-        if (InspectionControlActionPolicy.ShouldRejectNewAction(_currentControlAction, newAction))
-        {
-            _logger.LogWarning("[动作仲裁][拒绝] CurrentAction={CurrentAction} 时拒绝 {NewAction}，来源={Source}",
-                _currentControlAction,
-                newAction,
-                source);
-            return false;
-        }
-
-        if (InspectionControlActionPolicy.ShouldAbsorbNewAction(_currentControlAction, newAction))
-        {
-            _logger.LogWarning("[动作仲裁][吸收] CurrentAction={CurrentAction} 已吸收 {NewAction}，来源={Source}",
-                _currentControlAction,
-                newAction,
-                source);
-            return false;
-        }
-
-        if (!InspectionControlActionPolicy.ShouldReplacePending(_pendingControlAction, newAction))
-        {
-            _logger.LogInformation("[动作仲裁] Pending {CurrentPending} 保持不变，忽略 {NewAction}，来源={Source}",
-                _pendingControlAction,
-                newAction,
-                source);
-            return false;
-        }
-
-        var oldAction = _pendingControlAction;
-        _pendingControlAction = newAction;
-        _pendingControlActionSource = source;
-
-        _logger.LogWarning("[动作仲裁] Pending {OldAction} -> {NewAction}，来源={Source}, CurrentAction={CurrentAction}, UiState={UiState}",
-            oldAction,
-            newAction,
-            source,
-            _currentControlAction,
-            UiState);
-        return true;
-    }
-
-    /// <summary>
-    /// Reset 成功后吸收低优先级挂起动作，避免旧 Stop/Start 在复位完成后又被执行。
-    /// </summary>
-    private void AbsorbLowerPriorityPendingActionsAfterReset()
-    {
-        var oldAction = _pendingControlAction;
-        _pendingControlAction = InspectionControlActionPolicy.AbsorbLowerPriorityAfterReset(_pendingControlAction);
-
-        if (oldAction != _pendingControlAction)
-        {
-            _logger.LogWarning("[动作仲裁] Reset 已吸收 Pending {OldAction}，保留 {NewAction}",
-                oldAction,
-                _pendingControlAction);
-        }
-    }
-
-    /// <summary>
-    /// 当前短动作退出后执行挂起的最高优先级动作。一次只消费一个最高意图。
-    /// </summary>
-    private async Task ExecutePendingControlActionIfNeededAsync()
-    {
-        var action = _pendingControlAction;
-        if (action == PendingInspectionControlAction.None)
-            return;
-
-        var source = _pendingControlActionSource;
-        _pendingControlAction = PendingInspectionControlAction.None;
-
-        _logger.LogWarning("[动作仲裁] 当前动作结束，开始执行挂起动作 {Action}，来源={Source}", action, source);
-
-        switch (action)
-        {
-            case PendingInspectionControlAction.EmergencyStop:
-                await ExecuteEmergencyStopFlowAsync(source);
-                break;
-            case PendingInspectionControlAction.Reset:
-                await ExecuteResetFlowAsync(source);
-                break;
-            case PendingInspectionControlAction.Stop:
-                await ExecuteStopFlowAsync(source);
-                break;
-            case PendingInspectionControlAction.Start:
-                await HandlePlcStartRequestAsync(source);
-                break;
-        }
     }
 
     /// <summary>
@@ -1178,13 +1102,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private async Task CompleteNormalInspectionHandshakeAsync()
     {
-        _logger.LogWarning("[PLC动作][审计] 检测完成且保存弹窗已处理，开始清理本轮启动握手：DT234、DT120、DT130~DT185、DT302、DT304/DT305");
+        _logger.LogWarning("[PLC动作][审计] 检测完成且保存弹窗已处理，开始清理本轮启动握手信号");
 
-        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
-        await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
-        await _plcDevice.ClearPinOutputsAsync(CancellationToken.None).ConfigureAwait(false);
-        await _plcDevice.ClearRelayActionCompletedAsync(CancellationToken.None).ConfigureAwait(false);
-        await _plcDevice.ClearFinalResultAsync(CancellationToken.None).ConfigureAwait(false);
+        await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
 
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
@@ -1730,6 +1650,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         try
         {
+            _startingCts = new CancellationTokenSource();
+            var startingToken = _startingCts.Token;
+
             // 启动复核
             string? rejectReason = ValidateStartConditions();
             if (rejectReason != null)
@@ -1742,6 +1665,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
+            startingToken.ThrowIfCancellationRequested();
+
             bool dmmPingOk = await _multimeterDevice.PingAsync(CancellationToken.None).ConfigureAwait(false);
             if (!dmmPingOk)
             {
@@ -1752,6 +1677,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 _ = _notificationService.ShowWarningAsync("万用表无法通信，请检查网络连接后重试。", "启动拒绝");
                 return;
             }
+
+            startingToken.ThrowIfCancellationRequested();
 
             var pcReadyResult = await _plcDevice.WritePcReadyAsync(CancellationToken.None).ConfigureAwait(false);
             if (!pcReadyResult.IsSuccess)
@@ -1764,13 +1691,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
+            startingToken.ThrowIfCancellationRequested();
+
             _logger.LogWarning("[启动复核][通过] 条件满足，万用表通信正常，DT234=1 已写入，开始检测");
             _inspectionStarted = true;
             _startSignalHandled = true;
             _ignoreInspectionCallbacksUntilNextStart = false;
             _isResetting = false;
             _waitDt120ReleaseAfterReset = false;
-            Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
 
             string lockedModel = ModelName;
             string lockedBarcode = SerialNumber;
@@ -1778,12 +1706,20 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             _ = RunInspectionAsync(lockedBarcode, lockedModel, lockedOperator);
         }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("[启动流程][取消] Starting 被外部取消（Stop/Reset/EmergencyStop），已释放锁交由新 Flow 执行");
+            _startingCts = null;
+            // DT234 可能已写入，由新 Flow（如 ResetFlow）的 ClearCurrentRunOutputsAsync 清理
+            return;
+        }
         finally
         {
+            _startingCts?.Dispose();
+            _startingCts = null;
             ExitControlAction(InspectionControlAction.Starting);
         }
 
-        await ExecutePendingControlActionIfNeededAsync();
     }
     #region 统一复位流程
 
@@ -1820,12 +1756,26 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        if (_currentControlAction is InspectionControlAction.Starting
-            or InspectionControlAction.Stopping)
+        if (_currentControlAction == InspectionControlAction.Stopping)
         {
-            RequestPendingControlAction(PendingInspectionControlAction.Reset, source);
-            AddLog($"复位请求已接收，等待当前 {_currentControlAction} 动作结束后执行");
+            _logger.LogInformation("[复位请求][忽略] 当前正在停止，忽略复位请求，来源={Source}", source);
+            AddLog($"[复位请求][忽略] 当前正在停止，忽略复位请求，来源={source}");
             return;
+        }
+
+        // Starting 中 Reset → 取消 Starting 后执行复位
+        if (_currentControlAction == InspectionControlAction.Starting)
+        {
+            _logger.LogWarning("[复位请求][抢占] Starting 中，取消后执行复位");
+            if (_startingCts != null)
+                await _startingCts.CancelAsync().ConfigureAwait(false);
+
+            for (int i = 0; i < 100; i++)
+            {
+                await Task.Delay(10).ConfigureAwait(false);
+                if (_currentControlAction == InspectionControlAction.None)
+                    break;
+            }
         }
 
         if (_currentControlAction == InspectionControlAction.EmergencyStopping)
@@ -1868,7 +1818,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _isResetting = true;
         _waitDt120ReleaseAfterReset = true;
         Interlocked.Increment(ref _inspectionRunVersion);
-        Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
         SetUiState(TestUIState.Resetting);
         _logger.LogWarning("[复位请求][执行] 开始执行复位流程，来源={Source}", source);
         AddLog($"正在执行上位机复位操作...（来源={source}）");
@@ -1949,20 +1898,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 }
             }
 
-            await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-            _logger.LogWarning("[复位流程][审计] 已清除 DT120（启动请求），防止复位后残留启动信号重新触发检测");
-
-            await _plcDevice.ClearFinalResultAsync(CancellationToken.None);
-            _logger.LogWarning("[复位流程][审计] 已清除 DT304/DT305（复位清空产品结果）");
-
-            await _plcDevice.ClearPinOutputsAsync(CancellationToken.None);
-            _logger.LogInformation("[复位流程] 已清空 PLC 引脚输出区 DT130~DT185");
-
-            await _plcDevice.ClearRelayActionCompletedAsync(CancellationToken.None);
-            _logger.LogInformation("[复位流程] 已清除 DT302（继电器动作完成标志）");
-
-            await _plcDevice.ClearPcReadyAsync(CancellationToken.None);
-            _logger.LogInformation("[复位流程] 已清除 DT234（上位机允许开始检测）");
+            // 统一调用运行输出清理替换手写序列
+            await ClearCurrentRunOutputsAsync(CancellationToken.None);
 
             if (_plcDevice is Devices.Fakes.FakeInspectionHardware fake)
             {
@@ -2021,7 +1958,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             _isResetting = false;
-            AbsorbLowerPriorityPendingActionsAfterReset();
             ForceRefreshReadyOrCanStartState();
             AddLog("复位完成，已清空所有检测结果，可重新开始测试");
             await _notificationService.ShowInfoAsync(
@@ -2041,7 +1977,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ExitControlAction(InspectionControlAction.Resetting);
         }
 
-        await ExecutePendingControlActionIfNeededAsync();
     }
 
     #endregion
@@ -2063,16 +1998,30 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        // AwaitingReset/Resetting/Finishing 中 Stop → 忽略；Resetting 由 ResetFlow 兜底 DT122。
+        // AwaitingReset/Resetting/Finishing 中 Stop → 忽略
         if (UiState is TestUIState.AwaitingReset or TestUIState.Resetting || _isResetting)
         {
             _logger.LogWarning("[停止请求][吸收] 当前状态 {UiState} 无需停止，来源={Source}", UiState, source);
             return;
         }
 
+        // Starting 中 Stop → 取消 Starting 后再执行
+        if (_currentControlAction == InspectionControlAction.Starting)
+        {
+            _logger.LogWarning("[停止请求][抢占] Starting 中，取消后执行停止");
+            if (_startingCts != null)
+                await _startingCts.CancelAsync().ConfigureAwait(false);
+
+            for (int i = 0; i < 100; i++)
+            {
+                await Task.Delay(10).ConfigureAwait(false);
+                if (_currentControlAction == InspectionControlAction.None)
+                    break;
+            }
+        }
+
         if (!await TryEnterControlActionAsync(InspectionControlAction.Stopping))
         {
-            RequestPendingControlAction(PendingInspectionControlAction.Stop, source);
             _logger.LogInformation("[停止请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
             return;
         }
@@ -2081,7 +2030,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             _ignoreInspectionCallbacksUntilNextStart = true;
             Interlocked.Increment(ref _inspectionRunVersion);
-            Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
             SetUiState(TestUIState.Paused);
             _logger.LogWarning("[停止流程][审计] DT122 停止信号，来源={Source}，执行停止收口", source);
             AddLog($"[停止流程] 收到停止信号(DT122)，来源={source}，正在停止检测...");
@@ -2135,7 +2083,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ExitControlAction(InspectionControlAction.Stopping);
         }
 
-        await ExecutePendingControlActionIfNeededAsync();
     }
     #endregion
 
@@ -2156,13 +2103,29 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
+        // 急停最高优先级：取消当前 Starting（如有），等待锁释放
+        if (_currentControlAction != InspectionControlAction.None)
+        {
+            _logger.LogWarning("[急停流程][抢占] 当前有 {CurrentAction}，将取消后执行急停", _currentControlAction);
+            if (_currentControlAction == InspectionControlAction.Starting && _startingCts != null)
+                await _startingCts.CancelAsync().ConfigureAwait(false);
+
+            // 等待当前动作退让锁
+            for (int i = 0; i < 100; i++)
+            {
+                await Task.Delay(10).ConfigureAwait(false);
+                if (_currentControlAction == InspectionControlAction.None)
+                    break;
+            }
+        }
+
+        // 无论引擎是否正在运行，强制发中止
+        if (_inspectionEngine?.IsRunning == true)
+            _inspectionEngine.StopForEmergencyStop();
+
         if (!await TryEnterControlActionAsync(InspectionControlAction.EmergencyStopping))
         {
-            RequestPendingControlAction(PendingInspectionControlAction.EmergencyStop, source);
-            SetUiState(TestUIState.EmergencyStop);
-            if (_inspectionEngine?.IsRunning == true)
-                _inspectionEngine.StopForEmergencyStop();
-            _logger.LogInformation("[急停请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
+            _logger.LogWarning("[急停流程][失败] 无法获取控制锁（可能是 Finishing 进行中）");
             return;
         }
 
@@ -2173,17 +2136,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             _ignoreInspectionCallbacksUntilNextStart = true;
             Interlocked.Increment(ref _inspectionRunVersion);
-            Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
             SetUiState(TestUIState.EmergencyStop);
 
             if (_inspectionEngine!.IsRunning)
                 _inspectionEngine.StopForEmergencyStop();
 
-            await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-            await _plcDevice.ClearPcReadyAsync(CancellationToken.None);
-            await _plcDevice.ClearRelayActionCompletedAsync(CancellationToken.None);
-            await _plcDevice.ClearPinOutputsAsync(CancellationToken.None);
-            await _plcDevice.ClearFinalResultAsync(CancellationToken.None);
+            // 统一调用运行输出清理替换手写序列
+            await ClearCurrentRunOutputsAsync(CancellationToken.None);
 
             _inspectionEngine.ClearResetState();
             _inspectionStarted = false;
@@ -2329,120 +2288,30 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         return false;
     }
 
-    /// <summary>
-    /// 启动前复核。
-    /// 补齐方案项目、引脚合法性、极性、阈值等校验。
-    /// 返回 null 表示通过，返回字符串表示拒绝原因。
-    /// </summary>
+    /// <summary>启动前复核，委托给 InspectionStartValidator</summary>
     private string? ValidateStartConditions()
     {
-        if (UiState is TestUIState.Testing
-            or TestUIState.Paused
-            or TestUIState.AwaitingReset
-            or TestUIState.Resetting
-            or TestUIState.CompletedPass
-            or TestUIState.CompletedFail
-            or TestUIState.SingleItemNgStopped
-            or TestUIState.Error)
+        var request = new InspectionStartValidationRequest
         {
-            _logger.LogWarning("[启动复核][拒绝] 当前 UI 状态不允许启动：{UiState}", UiState);
-            return "当前状态需要先复位，无法启动检测";
-        }
-        // 急停状态下拒绝一切启动请求
-        if (UiState == TestUIState.EmergencyStop)
-            return "设备处于急停状态，请先复位后再启动检测";
+            UiState = UiState,
+            ModelName = ModelName,
+            SerialNumber = SerialNumber,
+            SchemeName = SchemeName,
+            OperatorName = OperatorName,
+            IsSchemeNameInvalid = IsSchemeNameInvalid,
+            IsPlcConnected = IsPlcConnected,
+            IsDmmConnected = IsDmmConnected,
+            PlcInputs = _lastPlcInputs,
+            Config = _inspectionEngine?.Config ?? new InspectionConfig(),
+            UiItemCount = TestItems.Count
+        };
 
-        if (string.IsNullOrWhiteSpace(ModelName))
-            return "未输入机种名称，无法启动";
-        if (string.IsNullOrWhiteSpace(SerialNumber))
-            return "未输入序列号，无法启动";
-        if (string.IsNullOrWhiteSpace(SchemeName) || IsSchemeNameInvalid)
-            return "当前方案无效或不属于当前机种，无法启动";
-        if (string.IsNullOrWhiteSpace(OperatorName))
-            return "未指定作业员，无法启动";
-        if (!IsPlcConnected || !IsDmmConnected)
+        var result = InspectionStartValidator.Validate(request);
+        if (!result.IsValid)
         {
-            var notReady = GetNotReadyDevices();
-            return $"设备未就绪：{string.Join(", ", notReady)}，无法启动";
+            _logger.LogWarning("[启动复核][拒绝] {Message}", result.ErrorMessage);
         }
-
-        // 最新 PLC 快照未读到复位/停止/急停信号
-        if (_lastPlcInputs != null)
-        {
-            if (_lastPlcInputs.IsResetRequested)
-                return "PLC 复位信号(DT121)未释放，无法启动";
-            if (_lastPlcInputs.IsStopRequested)
-                return "PLC 停止信号(DT122)未释放，无法启动";
-            if (_lastPlcInputs.IsEmergencyStop)
-                return "PLC 急停信号(DT123)未释放，无法启动";
-        }
-
-        // 方案项目列表非空
-        if (TestItems.Count == 0)
-            return "当前方案没有可检测项目，无法启动";
-
-        // 每项引脚合法性校验
-        if (_inspectionEngine != null)
-        {
-            var config = _inspectionEngine.Config;
-            if (config.TestPoints.Count == 0)
-                return "检测配置无测试点，无法启动";
-
-            for (int i = 0; i < config.TestPoints.Count; i++)
-            {
-                var tp = config.TestPoints[i];
-                if (string.IsNullOrWhiteSpace(tp.PinLeft))
-                    return $"第 {i + 1} 项 [{tp.Name}] 左引脚为空，无法启动";
-                if (string.IsNullOrWhiteSpace(tp.PinRight))
-                    return $"第 {i + 1} 项 [{tp.Name}] 右引脚为空，无法启动";
-
-                // 引脚能被 PlcAddressMap 识别
-                try
-                {
-                    PlcAddressMap.GetPinAddresses(tp.PinLeft);
-                    PlcAddressMap.GetPinAddresses(tp.PinRight);
-                }
-                catch (ArgumentException ex)
-                {
-                    return $"第 {i + 1} 项 [{tp.Name}] 引脚无效：{ex.Message}";
-                }
-
-                // 左右引脚不相同
-                if (string.Equals(tp.PinLeft, tp.PinRight, StringComparison.OrdinalIgnoreCase))
-                    return $"第 {i + 1} 项 [{tp.Name}] 左右引脚相同({tp.PinLeft})，无法启动";
-
-                // 左右极性必须一正一负
-                bool leftIsPositive = string.Equals(tp.PinLeftPolarity, PinPolarityConstants.Positive, StringComparison.OrdinalIgnoreCase);
-                bool rightIsNegative = string.Equals(tp.PinRightPolarity, PinPolarityConstants.Negative, StringComparison.OrdinalIgnoreCase);
-                if (!leftIsPositive || !rightIsNegative)
-                    return $"第 {i + 1} 项 [{tp.Name}] 极性必须左正右负，当前左={tp.PinLeftPolarity} 右={tp.PinRightPolarity}";
-
-                // 电阻模式校验
-                if (string.Equals(tp.CheckMode, CheckModeConstants.Resistance, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!tp.LowerLimit.HasValue)
-                        return $"第 {i + 1} 项 [{tp.Name}] 电阻模式下限为空，无法启动";
-                    if (!tp.UpperLimit.HasValue)
-                        return $"第 {i + 1} 项 [{tp.Name}] 电阻模式上限为空，无法启动";
-                    if (InputValidationHelper.ValidateResistanceValue(tp.LowerLimit.Value) != null)
-                        return $"第 {i + 1} 项 [{tp.Name}] 电阻模式下限({tp.LowerLimit})无效，无法启动";
-                    if (InputValidationHelper.ValidateResistanceValue(tp.UpperLimit.Value) != null)
-                        return $"第 {i + 1} 项 [{tp.Name}] 电阻模式上限({tp.UpperLimit})无效，无法启动";
-                    if (tp.LowerLimit.Value > tp.UpperLimit.Value)
-                        return $"第 {i + 1} 项 [{tp.Name}] 电阻模式下限({tp.LowerLimit})大于上限({tp.UpperLimit})，无法启动";
-                }
-
-                // 导通模式校验
-                if (string.Equals(tp.CheckMode, CheckModeConstants.Continuity, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!string.Equals(tp.ModeValue, "OPEN", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(tp.ModeValue, "SHORT", StringComparison.OrdinalIgnoreCase))
-                        return $"第 {i + 1} 项 [{tp.Name}] 导通模式期望值无效(期望 OPEN 或 SHORT)，当前={tp.ModeValue}";
-                }
-            }
-        }
-
-        return null;
+        return result.ErrorMessage;
     }
 
     #region 统一调试命令（Fake 和半实物共用）
@@ -2568,35 +2437,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 写响应超时/中断只说明上位机没等到确认，不等价于 PLC 没收到请求。
-    /// </summary>
-    private static bool IsWriteResponseUncertain(string? message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-            return false;
-
-        return message.Contains("无响应", StringComparison.OrdinalIgnoreCase)
-               || message.Contains("超时", StringComparison.OrdinalIgnoreCase)
-               || message.Contains("被取消", StringComparison.OrdinalIgnoreCase)
-               || message.Contains("被中断", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// 确保调试按钮直接进入流程时，UI 状态更新和内部异步收口都在 UI 线程完整执行完。
-    /// </summary>
-    private static async Task InvokeOnUiAsync(Func<Task> action)
-    {
-        var dispatcher = Application.Current.Dispatcher;
-        if (dispatcher.CheckAccess())
-        {
-            await action();
-            return;
-        }
-
-        await await dispatcher.InvokeAsync(action);
-    }
-
-    /// <summary>
     /// 半实物/真实模式复位按钮（写 DT121=1，写后等待 PLC 轮询统一消费）。
     /// 真实模式下工人按实体按钮时由 PLC 轮询触发 ExecuteResetFlowAsync，
     /// 上位机按钮作为备用入口。
@@ -2631,7 +2471,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         var result = await Task.Run(async () =>
         {
             return await _inspectionEngine.RunInspectionAsync(
-                barcode, modelName, operatorName, 0, CancellationToken.None);
+                barcode, modelName, operatorName, CancellationToken.None);
         }).ConfigureAwait(false);
 
         // 复位后返回的旧检测任务直接丢弃，不再处理结果和弹提示
@@ -2650,12 +2490,35 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
+            if (result.StopReason == InspectionStopReason.SingleItemNg)
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    AddLog($"❎ {result.ErrorMessage}");
+                });
+                _logger.LogWarning("[运行页][审计] 单项 NG 停止: {ErrorMessage}", result.ErrorMessage);
+                return;
+            }
+
             string message = string.IsNullOrWhiteSpace(result.ErrorMessage)
                 ? "检测已中止，请查看运行日志。"
                 : $"检测中止：{result.ErrorMessage}";
 
             _logger.LogWarning("[运行页][审计] {Message}", message);
             await _notificationService.ShowWarningAsync(message, "检测中止").ConfigureAwait(false);
+        }
+        else
+        {
+            // 正常完成 → 处理保存弹窗
+            await Application.Current.Dispatcher.InvokeAsync(async () =>
+            {
+                var msg = result.IsAllPassed
+                    ? $"✅ 检测完成: 良品 (耗时{result.Duration.TotalSeconds:F1}s)"
+                    : $"❌ 检测完成: 不良 (耗时{result.Duration.TotalSeconds:F1}s)";
+                AddLog(msg);
+
+                await OnAllPinsTestedAsync();
+            });
         }
     }
 
@@ -2675,10 +2538,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (_inspectionEngine != null)
         {
-            _inspectionEngine.StateChanged += OnInspectionStateChanged;
             _inspectionEngine.StepStarted += OnStepStarted;
             _inspectionEngine.StepCompleted += OnStepCompleted;
-            _inspectionEngine.InspectionCompleted += OnInspectionCompleted;
             _inspectionEngine.LogMessage += OnInspectionLogMessage;
         }
 
@@ -2697,10 +2558,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (_inspectionEngine != null)
         {
-            _inspectionEngine.StateChanged -= OnInspectionStateChanged;
             _inspectionEngine.StepStarted -= OnStepStarted;
             _inspectionEngine.StepCompleted -= OnStepCompleted;
-            _inspectionEngine.InspectionCompleted -= OnInspectionCompleted;
             _inspectionEngine.LogMessage -= OnInspectionLogMessage;
         }
 
@@ -2758,50 +2617,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         });
     }
 
-    /// <summary>
-    /// 检测引擎状态变更 → 映射为 UI 状态。
-    /// </summary>
-    private void OnInspectionStateChanged(object? sender, InspectionStateChangedEventArgs e)
-    {
-        Application.Current.Dispatcher.Invoke(() =>
-        {
-            if (ShouldIgnoreInspectionCallback())
-            {
-                _logger.LogDebug("[运行页] 已忽略收口期间检测引擎状态回调：{OldState} -> {NewState}",
-                    e.OldState, e.NewState);
-                return;
-            }
+    /// <summary>检测引擎状态变更 → 映射为 UI 状态。</summary>
+    // StateChanged 事件已删除。UI 状态由控制流（Start/Stop/Reset/EmergencyStop）
+    // 和 HandleInspectionResultAsync 统一决定。
 
-            if (_emergencyDialogAcknowledged && e.NewState == InspectionState.PausedByEmergencyStop)
-            {
-                _logger.LogDebug("[运行页] 急停已确认，忽略引擎晚到的急停状态回调");
-                return;
-            }
-
-            var nextState = e.NewState switch
-            {
-                InspectionState.Testing => TestUIState.Testing,
-                InspectionState.CompletedPass => TestUIState.CompletedPass,
-                InspectionState.CompletedFail => TestUIState.CompletedFail,
-                InspectionState.PausedByStop => TestUIState.AwaitingReset,
-                InspectionState.PausedByEmergencyStop => TestUIState.EmergencyStop,
-                InspectionState.StoppedBySingleItemNg => TestUIState.SingleItemNgStopped,
-                InspectionState.ResetRequested => TestUIState.Resetting,
-                InspectionState.Aborted => UiState switch
-                {
-                    TestUIState.AwaitingReset => TestUIState.AwaitingReset,
-                    TestUIState.Paused => TestUIState.AwaitingReset,
-                    TestUIState.Resetting => TestUIState.Resetting,
-                    TestUIState.EmergencyStop => TestUIState.EmergencyStop,
-                    _ => TestUIState.Error
-                },
-                InspectionState.Error => TestUIState.Error,
-                _ => UiState
-            };
-
-            SetUiState(nextState);
-        });
-    }
     /// <summary>
     /// 单步检测开始回调。
     /// </summary>
@@ -2862,82 +2681,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (!string.IsNullOrWhiteSpace(testPoint.ActualContinuityState))
                 return testPoint.ActualContinuityState;
 
-            return InspectionEngine.ResolveContinuityState(value, testPoint.ContinuityThresholdOhm);
+            return InspectionMeasurementEvaluator.ResolveContinuityState(value, testPoint.ContinuityThresholdOhm);
         }
 
         return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";
     }
 
-    /// <summary>
-    /// 全部检测完成回调。
-    /// 使用 Interlocked.Exchange 原子抢占，确保 InspectionCompleted 事件只被处理一次，
-    /// 从根本上杜绝引擎多次触发导致重复弹出保存对话框。
-    /// </summary>
-    private void OnInspectionCompleted(object? sender, InspectionCompletedEventArgs e)
-    {
-        // ★ 原子抢占：只有第一个到达的线程能拿到 0 并置为 1
-        // 后续到达的线程拿到 1 直接返回，不进入 InvokeAsync 排队
-        if (Interlocked.Exchange(ref _inspectionCompletedHandled, 1) == 1)
-        {
-            _logger.LogWarning("[运行页] 检测完成回调重复触发（已被原子拦截），已忽略");
-            return;
-        }
-
-        Application.Current.Dispatcher.InvokeAsync(async () =>
-        {
-            try
-            {
-                if (ShouldIgnoreInspectionCallback())
-                    return;
-
-                if (e.Result.IsAborted)
-                {
-                    AddLog($"⚠️ 检测中止: {e.Result.ErrorMessage}");
-
-                    if (IsExpectedControlStopReason(e.Result.StopReason))
-                    {
-                        _logger.LogWarning("[万用表收尾] 检测因 {StopReason} 中止，保持万用表远程控制模式，等待后续操作",
-                            e.Result.StopReason);
-                    }
-                    else
-                    {
-                        bool isRecoverableDmmStartupFailure = e.Result.ErrorMessage.Contains("万用表通信验证失败", StringComparison.OrdinalIgnoreCase);
-                        if (isRecoverableDmmStartupFailure)
-                        {
-                            bool prepared = await _multimeterDevice.PrepareIdleResistanceModeAsync().ConfigureAwait(false);
-                            _logger.LogWarning("[万用表收尾][审计] 检测初始化通信验证失败，已尝试恢复远程 2 线电阻空闲态，Result={Result}",
-                                prepared);
-                        }
-                        else
-                        {
-                            await _multimeterDevice.ReleaseToLocalAsync().ConfigureAwait(false);
-                            _logger.LogWarning("[万用表收尾] 检测异常中止，万用表已退出远程控制");
-                        }
-                    }
-                    return;
-                }
-
-                if (e.Result.StopReason == InspectionStopReason.SingleItemNg)
-                {
-                    AddLog($"❎ {e.Result.ErrorMessage}");
-                    _logger.LogWarning("[运行页][审计] 单项 NG 停止: {ErrorMessage}", e.Result.ErrorMessage);
-                    return;
-                }
-
-                var msg = e.Result.IsAllPassed
-                    ? $"✅ 检测完成: 良品 (耗时{e.Result.Duration.TotalSeconds:F1}s)"
-                    : $"❌ 检测完成: 不良 (耗时{e.Result.Duration.TotalSeconds:F1}s)";
-                AddLog(msg);
-
-                await OnAllPinsTestedAsync();
-            }
-            finally
-            {
-                // ★ 无论正常完成还是异常，都要重置原子标志
-                Interlocked.Exchange(ref _inspectionCompletedHandled, 0);
-            }
-        });
-    }
+    // InspectionCompleted 事件已删除。
+    // 检测结果处理统一在 RunInspectionAsync 返回后的 HandleInspectionResultAsync 中处理。
 
     /// <summary>
     /// 检测引擎日志订阅。
