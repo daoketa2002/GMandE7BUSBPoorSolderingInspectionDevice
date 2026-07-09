@@ -348,7 +348,7 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
 
     public Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[Fake硬件][审计] Fake 万用表初始化为电阻模式");
+        _logger.LogWarning("[DMM模式][Fake] Fake 万用表初始化为电阻模式");
         return Task.FromResult(true);
     }
 
@@ -357,7 +357,7 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     /// </summary>
     public Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
     {
-        _logger.LogWarning("[Fake硬件][审计] Fake 万用表切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
+        _logger.LogWarning("[DMM模式][Fake] Fake 万用表切换为导通模式，导通阈值={ThresholdOhm}Ω", thresholdOhm);
         return Task.FromResult(true);
     }
 
@@ -367,7 +367,7 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     /// </summary>
     public Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[Fake硬件][审计] Fake 万用表已恢复为远程 2 线电阻空闲态");
+        _logger.LogWarning("[DMM模式][Fake] Fake 万用表已恢复为远程 2 线电阻空闲态");
         return Task.FromResult(true);
     }
 

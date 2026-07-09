@@ -6,6 +6,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models.Measurements;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
@@ -52,6 +53,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private volatile bool _isDisposed;
         private volatile int _isReconnecting;
         private volatile bool _receiveBufferPossiblyDirty;
+
+        /// <summary>当前测量模式缓存，用于跳过相同模式的重复完整初始化</summary>
+        private DmmCachedMode _cachedMode = DmmCachedMode.Unknown;
+        /// <summary>缓存的上一次导通阈值（标准化后），用于判断导通阈值是否变化</summary>
+        private double? _cachedContinuityThresholdOhm;
+
+        /// <summary>驱动内部的测量模式缓存枚举，仅用于跳过重复完整初始化</summary>
+        private enum DmmCachedMode
+        {
+            /// <summary>未知/缓存不可信（首次或断线后）</summary>
+            Unknown,
+            /// <summary>2 线电阻模式</summary>
+            Resistance,
+            /// <summary>导通测量模式</summary>
+            Continuity
+        }
 
         #endregion
 
@@ -192,6 +209,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 }
 
                 _isConnected = true;
+                ResetDmmModeCache(); // 新连接，设备模式不可确认，缓存置为 Unknown
                 _logger.LogInformation("万用表连接成功！设备信息: {IDN}", idn);
 
                 ConnectionStateChanged?.Invoke(this, true);
@@ -222,6 +240,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _commandLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                ResetDmmModeCache(); // 断开连接，缓存不可信
                 await CleanupConnectionAsync().ConfigureAwait(false);
                 _isConnected = false;
                 ConnectionStateChanged?.Invoke(this, false);
@@ -555,38 +574,129 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 初始化为 2 线电阻测量模式。
+        /// 如果缓存命中（当前已是 Resistance 模式），跳过完整初始化。
         /// SCPI 序列：ABOR → *CLS → CONF:RES → 自动量程 → 采样/触发配置
         /// 完成后用 *OPC? + SYST:ERR? 验证切换成功。
         /// 整个初始化在单次锁内完成，内部使用 SendSettingInternalAsync 避免重复加锁。
         /// </summary>
         public async Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
         {
-            return await ConfigureResistanceModeInternalAsync("电阻模式", "CONF:RES", null, ct).ConfigureAwait(false);
+            // ── 缓存命中：当前已是 Resistance，跳过完整初始化 ──
+            if (_cachedMode == DmmCachedMode.Resistance)
+            {
+                _logger.LogWarning(
+                    "[DMM模式][缓存命中] Requested=Resistance, Current=Resistance, Reconfigured=false");
+                return true;
+            }
+
+            var sw = Stopwatch.StartNew();
+            var previousMode = _cachedMode;
+            _logger.LogWarning(
+                "[DMM模式][配置开始] From={From}, To=Resistance, ThresholdOhm=null",
+                previousMode);
+
+            bool result = await ConfigureResistanceModeInternalAsync("电阻模式", "CONF:RES", null, ct).ConfigureAwait(false);
+
+            sw.Stop();
+            if (result)
+            {
+                _cachedMode = DmmCachedMode.Resistance;
+                _cachedContinuityThresholdOhm = null;
+                _logger.LogWarning(
+                    "[DMM模式][配置完成] From={From}, To=Resistance, ThresholdOhm=null, ElapsedMs={ElapsedMs}",
+                    previousMode, sw.ElapsedMilliseconds);
+            }
+            else
+            {
+                ResetDmmModeCache();
+                _logger.LogWarning(
+                    "[DMM模式][配置失败] From={From}, To=Resistance, ThresholdOhm=null, ElapsedMs={ElapsedMs}, CacheReset=Unknown",
+                    previousMode, sw.ElapsedMilliseconds);
+            }
+            return result;
         }
 
         /// <summary>
         /// 恢复万用表为远程可控的 2 线电阻空闲态。
         /// SCPI 序列与 InitializeResistanceModeAsync 相同，但不执行验证。
+        /// 成功后更新模式缓存为 Resistance。
         /// </summary>
         public async Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
         {
-            return await ConfigureResistanceModeInternalAsync("空闲态(电阻)", "CONF:RES", null, ct, verify: false).ConfigureAwait(false);
+            // 如果缓存已经是 Resistance，但 PrepareIdle 是显式请求，仍执行配置
+            // （调用方不期望跳过，因为 PrepareIdle 目的就是确保设备处于电阻模式）
+            var sw = Stopwatch.StartNew();
+            bool result = await ConfigureResistanceModeInternalAsync("空闲态(电阻)", "CONF:RES", null, ct, verify: false).ConfigureAwait(false);
+            sw.Stop();
+
+            if (result)
+            {
+                _cachedMode = DmmCachedMode.Resistance;
+                _cachedContinuityThresholdOhm = null;
+                _logger.LogWarning(
+                    "[DMM模式][配置完成] From=*, To=Resistance(空闲态), ElapsedMs={ElapsedMs}",
+                    sw.ElapsedMilliseconds);
+            }
+            else
+            {
+                ResetDmmModeCache();
+            }
+            return result;
         }
 
         /// <summary>
         /// 初始化为导通测量模式（Continuity），并设置导通阈值。
+        /// 如果缓存命中（当前已是 Continuity 且阈值相同），跳过完整初始化。
         /// SCPI 序列：ABOR → *CLS → CONF:CONT → SENS:CONT:THR {阈值} → 采样/触发配置
         /// 完成后用 *OPC? + SYST:ERR? 验证切换成功。
         /// 使用内部方法避免重复加锁。
         /// </summary>
         public async Task<bool> InitializeContinuityModeAsync(double thresholdOhm = 10.0, CancellationToken ct = default)
         {
-            return await ConfigureResistanceModeInternalAsync(
-                $"导通模式(阈值={thresholdOhm:F2}Ω)",
+            // 标准化阈值，与设备实际发送精度一致（保留2位小数）
+            double normalizedThreshold = Math.Round(thresholdOhm, 2, MidpointRounding.AwayFromZero);
+
+            // ── 缓存命中：当前已是 Continuity 且阈值相同，跳过完整初始化 ──
+            if (_cachedMode == DmmCachedMode.Continuity
+                && _cachedContinuityThresholdOhm.HasValue
+                && Math.Abs(_cachedContinuityThresholdOhm.Value - normalizedThreshold) < 0.001)
+            {
+                _logger.LogWarning(
+                    "[DMM模式][缓存命中] Requested=Continuity, Current=Continuity, ThresholdOhm={ThresholdOhm}, Reconfigured=false",
+                    normalizedThreshold);
+                return true;
+            }
+
+            var sw = Stopwatch.StartNew();
+            string fromMode = _cachedMode.ToString();
+            _logger.LogWarning(
+                "[DMM模式][配置开始] From={From}, To=Continuity, ThresholdOhm={ThresholdOhm}",
+                fromMode, normalizedThreshold);
+
+            bool result = await ConfigureResistanceModeInternalAsync(
+                $"导通模式(阈值={normalizedThreshold:F2}Ω)",
                 "CONF:CONT",
-                $"SENS:CONT:THR {thresholdOhm:F2}",
+                $"SENS:CONT:THR {normalizedThreshold:F2}",
                 ct,
                 verify: true).ConfigureAwait(false);
+
+            sw.Stop();
+            if (result)
+            {
+                _cachedMode = DmmCachedMode.Continuity;
+                _cachedContinuityThresholdOhm = normalizedThreshold;
+                _logger.LogWarning(
+                    "[DMM模式][配置完成] From={From}, To=Continuity, ThresholdOhm={ThresholdOhm}, ElapsedMs={ElapsedMs}",
+                    fromMode, normalizedThreshold, sw.ElapsedMilliseconds);
+            }
+            else
+            {
+                ResetDmmModeCache();
+                _logger.LogWarning(
+                    "[DMM模式][配置失败] From={From}, To=Continuity, ThresholdOhm={ThresholdOhm}, ElapsedMs={ElapsedMs}, CacheReset=Unknown",
+                    fromMode, normalizedThreshold, sw.ElapsedMilliseconds);
+            }
+            return result;
         }
 
         /// <summary>
@@ -640,18 +750,54 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 读取 GDM-9060 READ? 原始返回文本，不在驱动层做 OPEN/SHORT/范围判定。
+        /// 增加 [DMM测量] 耗时日志。
         /// </summary>
         public async Task<string> ReadResistanceRawAsync(CancellationToken ct = default)
         {
-            return await SendQueryAsync("READ?", ct).ConfigureAwait(false);
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                string result = await SendQueryAsync("READ?", ct).ConfigureAwait(false);
+                sw.Stop();
+                _logger.LogWarning(
+                    "[DMM测量][完成] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, RawText={RawText}",
+                    sw.ElapsedMilliseconds, result);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                _logger.LogWarning(
+                    "[DMM测量][失败] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, Error={Error}",
+                    sw.ElapsedMilliseconds, ex.Message);
+                throw;
+            }
         }
 
         /// <summary>
         /// 执行导通测量，发送 MEAS:CONT? 指令并返回原始字符串
+        /// 增加 [DMM测量] 耗时日志。
         /// </summary>
         public async Task<string> ReadContinuityRawAsync(CancellationToken ct = default)
         {
-            return await SendQueryAsync("MEAS:CONT?", ct).ConfigureAwait(false);
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                string result = await SendQueryAsync("MEAS:CONT?", ct).ConfigureAwait(false);
+                sw.Stop();
+                _logger.LogWarning(
+                    "[DMM测量][完成] Command=MEAS:CONT?, Mode=Continuity, ThresholdOhm={ThresholdOhm}, ElapsedMs={ElapsedMs}, RawText={RawText}",
+                    _cachedContinuityThresholdOhm, sw.ElapsedMilliseconds, result);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                _logger.LogWarning(
+                    "[DMM测量][失败] Command=MEAS:CONT?, Mode=Continuity, ElapsedMs={ElapsedMs}, Error={Error}",
+                    sw.ElapsedMilliseconds, ex.Message);
+                throw;
+            }
         }
 
         /// <summary>
@@ -777,6 +923,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             try
             {
                 await SendSettingAsync("SYST:LOC", ct).ConfigureAwait(false);
+                ResetDmmModeCache(); // 进入本地控制后，操作员可能修改仪表模式，缓存不可信
                 _logger.LogInformation("万用表已退出远程控制，返回本地面板操作");
             }
             catch (Exception ex)
@@ -805,13 +952,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
                 await _commandLock.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+                var sw = Stopwatch.StartNew();
                 try
                 {
                     await DrainReceiveBufferAsync(linkedCts.Token).ConfigureAwait(false);
                     var response = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
 
                     bool success = !string.IsNullOrWhiteSpace(response);
-                    _logger.LogDebug("[万用表Ping] 结果={Result}, 响应={Response}", success, response);
+                    sw.Stop();
+                    _logger.LogWarning(
+                        "[DMM性能][Ping] Command=*IDN?, ElapsedMs={ElapsedMs}, Success={Success}, Response={Response}",
+                        sw.ElapsedMilliseconds, success, response);
                     return success;
                 }
                 finally
@@ -847,6 +998,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             try
             {
                 _isConnected = false;
+                ResetDmmModeCache(); // 连接丢失，缓存不可信
                 ConnectionStateChanged?.Invoke(this, false);
                 Notify(NotificationType.Warning, "万用表连接丢失，开始重连...");
 
@@ -891,6 +1043,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         #endregion
 
         #region 通知辅助
+
+        /// <summary>
+        /// 重置模式缓存为 Unknown，标记设备当前模式不可信。
+        /// 在断线、重连、通信异常、ReleaseToLocal 等场景调用。
+        /// </summary>
+        private void ResetDmmModeCache()
+        {
+            _cachedMode = DmmCachedMode.Unknown;
+            _cachedContinuityThresholdOhm = null;
+        }
 
         private void Notify(NotificationType type, string message)
         {

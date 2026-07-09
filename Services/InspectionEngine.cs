@@ -101,7 +101,17 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                 // ── 本轮检测开始时清上一轮残留 ──
                 // 清 DT130~DT185、DT302，确保引脚输出区和继电器完成标志为初始状态
-                await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
+                var startCleanupResult = await ClearPlcOutputsAndRelayFlagAsync("InspectionStart", _inspectionCts.Token).ConfigureAwait(false);
+                if (!startCleanupResult.pinCleared || !startCleanupResult.relayCleared)
+                {
+                    await AbortCurrentRunAsync(
+                        result,
+                        "检测启动前 PLC 输出清理失败，已禁止开始本轮检测",
+                        InspectionState.Error,
+                        "InspectionStartCleanupFailed").ConfigureAwait(false);
+
+                    return result;
+                }
 
                 int passCount = 0;
                 int failCount = 0;
@@ -112,7 +122,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     _currentExecutionStage = "CheckInterrupts";
 
+                    PlcCallerScope? checkScope = null;
+                    try { checkScope = new PlcCallerScope(_logger, "EngineInterruptCheck"); } catch { }
                     var interruptResult = await CheckPlcInterruptsAsync(_inspectionCts.Token).ConfigureAwait(false);
+                    checkScope?.Dispose();
                     if (interruptResult != PlcInterruptAction.Continue)
                     {
                         bool canContinue = await HandlePlcInterruptAsync(interruptResult, i, _inspectionCts.Token).ConfigureAwait(false);
@@ -140,6 +153,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode})");
 
                     _currentExecutionStage = "WritePinsToPlc";
+                    PlcCallerScope? writeScope = null;
+                    try { writeScope = new PlcCallerScope(_logger, "EngineWritePins"); } catch { }
                     var writeResult = await _plcDevice.WriteCurrentTestPointAsync(
                         testPoint.PinLeft,
                         testPoint.PinRight,
@@ -147,13 +162,26 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         testPoint.PinRightPolarityCode,
                         _inspectionCts.Token).ConfigureAwait(false);
 
+                    writeScope?.Dispose();
                     if (!writeResult.IsSuccess)
                     {
-                        InspectionMeasurementEvaluator.MarkNg(testPoint, writeResult.Message);
-                        failCount++;
-                        if (firstNgIndex < 0) firstNgIndex = i;
-                        StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, InspectionMeasurementEvaluator.Failed(writeResult.Message)));
-                        continue;
+                        _logger.LogError(
+                            "[PLC动作][点位写失败] INS={INS}, Index={Index}, Point={Point}, Error={Error}. 当前PLC输出状态视为Unknown，停止本轮检测并执行安全清理。",
+                            inspectionId, i, testPoint.Name, writeResult.Message);
+
+                        InspectionMeasurementEvaluator.MarkDeviceError(testPoint, writeResult.Message);
+                        StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, InspectionMeasurementEvaluator.PlcWriteFailed(writeResult.Message)));
+
+                        result.StopPointIndex = i;
+                        result.StopPointName = testPoint.Name;
+
+                        await AbortCurrentRunAsync(
+                            result,
+                            $"PLC测试点写入失败：{testPoint.Name}，{writeResult.Message}",
+                            InspectionState.Error,
+                            "PointWriteFailed").ConfigureAwait(false);
+
+                        return result;
                     }
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
@@ -169,17 +197,19 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     else
                     {
                         var relaySw = Stopwatch.StartNew();
-                        var relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
-                            TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
-                            _inspectionCts.Token).ConfigureAwait(false);
+                        PlcOperationResult? relayResult;
+                        using (new PlcCallerScope(_logger, "EngineInterruptCheck"))
+                            relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
+                                TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
+                                _inspectionCts.Token).ConfigureAwait(false);
                         relaySw.Stop();
                         LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT302", relaySw.ElapsedMilliseconds);
 
-                        if (!relayResult.IsSuccess)
+                        if (relayResult == null || !relayResult.IsSuccess)
                         {
                             result.StopReason = InspectionStopReason.RelayTimeout;
                             result.ErrorMessage = $"等待 DT302 = 1 超时（点位 {testPoint.Name}）";
-                            await AbortCurrentRunAsync(result, result.ErrorMessage, InspectionState.Aborted).ConfigureAwait(false);
+                            await AbortCurrentRunAsync(result, result.ErrorMessage, InspectionState.Aborted, "RelayTimeout").ConfigureAwait(false);
                             return result;
                         }
                     }
@@ -211,39 +241,55 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     // ── 按检查方式切换万用表模式 ──
                     _currentExecutionStage = "SetupMultimeterMode";
+                    var dmmTotalSw = Stopwatch.StartNew();
+                    var modeSw = Stopwatch.StartNew();
                     bool modeReady;
+                    string requestedMode;
                     if (testPoint.CheckMode == CheckModeConstants.Continuity)
                     {
+                        requestedMode = "Continuity";
                         modeReady = await _multimeterDevice.InitializeContinuityModeAsync(
                             _config.ContinuityThresholdOhm, _inspectionCts.Token).ConfigureAwait(false);
                     }
                     else
                     {
+                        requestedMode = "Resistance";
                         modeReady = await _multimeterDevice.InitializeResistanceModeAsync(
                             _inspectionCts.Token).ConfigureAwait(false);
                     }
+                    modeSw.Stop();
                     if (!modeReady)
                     {
                         await AbortCurrentRunAsync(result, $"万用表模式切换失败：{testPoint.CheckMode}", InspectionState.Aborted).ConfigureAwait(false);
                         return result;
                     }
                     // ★ 万用表模式切换后等待硬件稳定（100~300ms），避免读值抖动
+                    var delaySw = Stopwatch.StartNew();
                     await Task.Delay(200, _inspectionCts.Token).ConfigureAwait(false);
+                    delaySw.Stop();
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
 
                     _currentExecutionStage = "ReadMultimeter";
+                    var measureSw = Stopwatch.StartNew();
                     string rawText;
                     if (testPoint.CheckMode == CheckModeConstants.Continuity)
                     {
                         rawText = await _multimeterDevice.ReadContinuityRawAsync(_inspectionCts.Token).ConfigureAwait(false);
-                        _logger.LogWarning("[检测流程][审计][{INS}] GDM-9060 MEAS:CONT? RawText={RawText}", inspectionId, rawText);
                     }
                     else
                     {
                         rawText = await _multimeterDevice.ReadResistanceRawAsync(_inspectionCts.Token).ConfigureAwait(false);
-                        _logger.LogWarning("[检测流程][审计][{INS}] GDM-9060 READ? RawText={RawText}", inspectionId, rawText);
                     }
+                    measureSw.Stop();
+                    dmmTotalSw.Stop();
+
+                    _logger.LogWarning(
+                        "[DMM性能][点位完成] INS={INS}, Index={Index}, Point={Point}, Mode={Mode}, ModePrepareMs={ModePrepareMs}, PostModeDelayMs={DelayMs}, MeasureMs={MeasureMs}, TotalDmmMs={TotalMs}, RawText={RawText}",
+                        inspectionId, i, testPoint.Name, requestedMode,
+                        modeSw.ElapsedMilliseconds, delaySw.ElapsedMilliseconds,
+                        measureSw.ElapsedMilliseconds, dmmTotalSw.ElapsedMilliseconds,
+                        rawText);
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
 
@@ -294,7 +340,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     _currentExecutionStage = "WritePointResult";
-                    await _plcDevice.WritePointResultAsync(i, judgment == "OK", _inspectionCts.Token).ConfigureAwait(false);
+                    using (new PlcCallerScope(_logger, "EngineWriteResult"))
+                        await _plcDevice.WritePointResultAsync(i, judgment == "OK", _inspectionCts.Token).ConfigureAwait(false);
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
                     _progress.CurrentItemIndex = i + 1;
@@ -315,7 +362,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         result.EndTime = DateTime.Now;
 
                         _currentExecutionStage = "ClearPointOutputs";
-                        await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        await ClearPlcOutputsAndRelayFlagAsync("Stop", _inspectionCts.Token).ConfigureAwait(false);
                         _currentExecutionStage = "ClearPcReady";
                         await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
                         // 单项 NG 不写 DT304/DT305，等待复位或终了
@@ -325,7 +372,23 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
 
                     _currentExecutionStage = "ClearPointOutputs";
-                    await ClearPlcOutputsAndRelayFlagAsync(_inspectionCts.Token).ConfigureAwait(false);
+                    PlcCallerScope? cleanScope = null;
+                    try { cleanScope = new PlcCallerScope(_logger, "EngineCleanup"); } catch { }
+                    var stepCleanupResult = await ClearPlcOutputsAndRelayFlagAsync("StepCompleted", _inspectionCts.Token).ConfigureAwait(false);
+                    cleanScope?.Dispose();
+                    if (!stepCleanupResult.pinCleared || !stepCleanupResult.relayCleared)
+                    {
+                        result.StopPointIndex = i;
+                        result.StopPointName = testPoint.Name;
+
+                        await AbortCurrentRunAsync(
+                            result,
+                            $"PLC安全清理失败：点位 {testPoint.Name} 完成后未能可靠清除PLC输出，已停止本轮检测",
+                            InspectionState.Error,
+                            "StepCleanupFailed").ConfigureAwait(false);
+
+                        return result;
+                    }
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     _currentExecutionStage = "UpdateProgress";
                     _progress.CurrentItemIndex = i + 1;
@@ -341,10 +404,11 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 _progress.CurrentStep = "Completed";
                 SetState(result.IsAllPassed ? InspectionState.CompletedPass : InspectionState.CompletedFail);
 
-                await _plcDevice.WriteFinalResultAsync(
-                    result.IsAllPassed,
-                    firstNgIndex >= 0 ? firstNgIndex : null,
-                    _inspectionCts.Token).ConfigureAwait(false);
+                using (new PlcCallerScope(_logger, "EngineWriteResult"))
+                    await _plcDevice.WriteFinalResultAsync(
+                        result.IsAllPassed,
+                        firstNgIndex >= 0 ? firstNgIndex : null,
+                        _inspectionCts.Token).ConfigureAwait(false);
 
                 // 正常完成时只写 DT304/DT305 最终结果。
                 // DT120/DT234 的正常完成收口必须等用户处理保存弹窗后由 TestPageViewModel 执行。
@@ -355,7 +419,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             }
             catch (OperationCanceledException)
             {
-                await ClearPlcOutputsAndRelayFlagSafelyAsync().ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagSafelyAsync("Canceled").ConfigureAwait(false);
                 await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
                 SetState(InspectionState.Aborted);
                 result.IsAborted = true;
@@ -397,16 +461,16 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 检测初始化——验证万用表通信正常。
-    /// 实际模式切换在每项测试前根据 CheckMode 单独进行，不在全局固定为电阻模式。
+    /// 启动前已由 TestPageViewModel 通过 PingAsync 验证 DMM 通信，
+    /// 检测引擎不再无条件切换到电阻模式，
+    /// 实际测量模式由第一个测试点按业务需求决定。
     /// </summary>
-    private async Task InitializeInspectionAsync(CancellationToken ct)
+    private Task InitializeInspectionAsync(CancellationToken ct)
     {
-        // 先以电阻模式做一次连通性验证
-        bool connected = await _multimeterDevice.InitializeResistanceModeAsync(ct).ConfigureAwait(false);
-        if (!connected)
-            throw new InvalidOperationException("万用表通信验证失败");
-
-        LogInfo("检测初始化完成：万用表通信正常");
+        // 启动前已由 TestPageViewModel 通过 PingAsync 验证 DMM 通信，
+        // 此处无需额外模式切换，实际测量模式由第一个测试点按业务需求决定。
+        LogInfo("检测初始化完成：万用表通信正常（启动前已 Ping 验证）");
+        return Task.CompletedTask;
     }
 
     private enum PlcInterruptAction
@@ -438,7 +502,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 _abortReason = InspectionStopReason.PlcStop;
                 SetState(InspectionState.PausedByStop);
                 _progress.LastErrorMessage = "停止触发，检测中止";
-                await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagAsync("Stop", ct).ConfigureAwait(false);
                 LogInfo($"PLC 停止信号 DT122=1，检测中止（不保留断点）");
                 return false;
 
@@ -446,7 +510,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 _abortReason = InspectionStopReason.Reset;
                 SetState(InspectionState.ResetRequested);
                 _progress.Reset();
-                await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagAsync("Reset", ct).ConfigureAwait(false);
                 // DT121 由 TestPageViewModel 在界面结果、内部状态和 PLC 输出全部清理完成后统一清零。
                 // 引擎只负责中止当前检测，避免先清 DT121 导致运行界面轮询错过复位信号。
                 _progress.LastErrorMessage = "复位触发，检测中止";
@@ -456,7 +520,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 _abortReason = InspectionStopReason.EmergencyStop;
                 SetState(InspectionState.PausedByEmergencyStop);
                 _progress.LastErrorMessage = "急停触发，必须复位后重新启动";
-                await ClearPlcOutputsAndRelayFlagAsync(ct).ConfigureAwait(false);
+                await ClearPlcOutputsAndRelayFlagAsync("EmergencyStop", ct).ConfigureAwait(false);
                 return false;
 
             default:
@@ -464,7 +528,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         }
     }
 
-    private async Task AbortCurrentRunAsync(InspectionResult result, string message, InspectionState state)
+    private async Task AbortCurrentRunAsync(InspectionResult result, string message, InspectionState state, string cleanupReason = "Exception")
     {
         _currentExecutionStage = "Faulted";
         _progress.LastErrorMessage = message;
@@ -472,32 +536,66 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         result.IsAborted = true;
         result.ErrorMessage = message;
         result.EndTime = DateTime.Now;
-        await ClearPlcOutputsAndRelayFlagSafelyAsync().ConfigureAwait(false);
-        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
-        await _plcDevice.WritePcErrorAsync(CancellationToken.None).ConfigureAwait(false);
+        await ClearPlcOutputsAndRelayFlagSafelyAsync(cleanupReason).ConfigureAwait(false);
+        using (new PlcCallerScope(_logger, "EngineCleanup"))
+            await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
+        using (new PlcCallerScope(_logger, "EngineCleanup"))
+            await _plcDevice.WritePcErrorAsync(CancellationToken.None).ConfigureAwait(false);
         SetState(state);
     }
 
     /// <summary>
     /// 统一清理引脚输出区(DT130~DT185)和继电器动作完成标志(DT302)。
     /// 在每项完成后、复位、停止、急停、异常中止时调用。
+    /// 记录每一步的清理结果，调用方通过返回值判断是否全部成功。
+    /// reason 参数用于日志标识调用来源（StepCompleted/PointWriteFailed/SingleItemNg/Stop/Reset/EmergencyStop/Canceled/Exception/RelayTimeout）。
+    /// DIAG-KEEP: Reason 用于异常收口定位，应长期保留。
+    /// 正常成功日志可以继续保持 Debug。
     /// </summary>
-    private async Task ClearPlcOutputsAndRelayFlagAsync(CancellationToken ct)
+    private async Task<(bool pinCleared, bool relayCleared)> ClearPlcOutputsAndRelayFlagAsync(
+        string reason, CancellationToken ct)
     {
-        await _plcDevice.ClearPinOutputsAsync(ct).ConfigureAwait(false);
-        await _plcDevice.ClearRelayActionCompletedAsync(ct).ConfigureAwait(false);
-        LogInfo("已清空 DT130~DT185 和 DT302");
+        bool pinOk = false;
+        bool relayOk = false;
+
+        var pinResult = await _plcDevice.ClearPinOutputsAsync(ct).ConfigureAwait(false);
+        pinOk = pinResult.IsSuccess;
+
+        var relayResult = await _plcDevice.ClearRelayActionCompletedAsync(ct).ConfigureAwait(false);
+        relayOk = relayResult.IsSuccess;
+
+        bool allOk = pinOk && relayOk;
+        if (allOk)
+        {
+            _logger.LogDebug(
+                "[PLC安全收口][完成] Reason={Reason}, PinCleared=true, RelayCleared=true, AllSucceeded=true",
+                reason);
+        }
+        else
+        {
+            _logger.LogError(
+                "[PLC安全收口][失败] Reason={Reason}, PinCleared={PinCleared}, RelayCleared={RelayCleared}, PinMessage={PinMessage}, RelayMessage={RelayMessage}",
+                reason, pinOk, relayOk, pinResult.Message, relayResult.Message);
+        }
+
+        return (pinOk, relayOk);
     }
 
-    private async Task ClearPlcOutputsAndRelayFlagSafelyAsync()
+    private async Task ClearPlcOutputsAndRelayFlagSafelyAsync(string reason)
     {
         try
         {
-            await ClearPlcOutputsAndRelayFlagAsync(CancellationToken.None).ConfigureAwait(false);
+            var (pinCleared, relayCleared) = await ClearPlcOutputsAndRelayFlagAsync(reason, CancellationToken.None).ConfigureAwait(false);
+            if (!pinCleared || !relayCleared)
+            {
+                _logger.LogError(
+                    "[PLC安全收口][审计] 安全清理未全部成功: Reason={Reason}, PinCleared={PinCleared}, RelayCleared={RelayCleared}",
+                    reason, pinCleared, relayCleared);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[检测流程] 清空 DT130~DT185 和 DT302 失败");
+            _logger.LogError(ex, "[PLC安全收口][审计] 安全清理异常: Reason={Reason}, Message={Message}", reason, ex.Message);
         }
     }
 

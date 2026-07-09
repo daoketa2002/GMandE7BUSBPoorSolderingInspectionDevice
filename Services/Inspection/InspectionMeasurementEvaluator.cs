@@ -179,6 +179,30 @@ public static class InspectionMeasurementEvaluator
         };
     }
 
+    /// <summary>
+    /// 构造 PLC 写入失败测量结果。
+    /// PLC 写失败时 DMM 未进入测量，不应显示"测量失败"。
+    /// </summary>
+    public static MeasurementResult PlcWriteFailed(string message)
+    {
+        return new MeasurementResult
+        {
+            RawValue = string.Empty,
+            IsValid = false,
+            ErrorMessage = message,
+            DisplayTextOverride = "PLC写入失败",
+            Timestamp = DateTime.Now
+        };
+    }
+
+    /// <summary>标记设备异常（非产品 NG），不清除测量值但将判定置空</summary>
+    public static void MarkDeviceError(TestPointConfig testPoint, string message)
+    {
+        testPoint.Judgment = string.Empty;
+        testPoint.IsTested = false;
+        testPoint.ErrorMessage = message;
+    }
+
     /// <summary>标记测试点为 NG</summary>
     public static void MarkNg(TestPointConfig testPoint, string message)
     {
