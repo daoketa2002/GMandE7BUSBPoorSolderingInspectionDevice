@@ -37,21 +37,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private readonly CsvStoragePathManager _pathManager;
         private readonly ILogger<CsvTestRecordStorage> _logger;
         private readonly IPlanStorageService _planStorageService;
+        private readonly MonthlyLogIndexService _monthlyLogIndexService;
 
         private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _fileLocks = new();
 
         private static readonly HashSet<string> FixedColumnNames = new(StringComparer.OrdinalIgnoreCase)
         {
-            "序号", "机种名称", "序列号", "方案名称", "检查者", "综合判定", "日期", "时间"
+            "序号", "机种名称", "序列号", "方案名称", "检查者", "综合判定", "日期", "时间", "方案版本"
         };
 
         public CsvTestRecordStorage(
             CsvStoragePathManager pathManager,
             IPlanStorageService planStorageService,
+            MonthlyLogIndexService monthlyLogIndexService,
             ILogger<CsvTestRecordStorage> logger)
         {
             _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
+            _monthlyLogIndexService = monthlyLogIndexService ?? throw new ArgumentNullException(nameof(monthlyLogIndexService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             _logger.LogInformation("CsvTestRecordStorage 初始化完成");
@@ -90,18 +93,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 // 使用记录的时间戳确定月份（而非当前时间）
                 var recordDate = record.Timestamp == default ? DateTime.Now : record.Timestamp;
-                string filePath = _pathManager.GetAvailableCsvFilePath(effectiveMachineType, record.PlanName, recordDate);
-                var fileLock = _fileLocks.GetOrAdd(filePath, _ => new ReaderWriterLockSlim());
+                string monthFolder = _pathManager.GetMonthFolderPath(recordDate);
+                Directory.CreateDirectory(monthFolder);
+
+                string baseFileName = _pathManager.GetBaseFileName(effectiveMachineType, record.PlanName);
+                string expectedHeader = BuildCsvHeader(record);
+                string logicalLockKey = Path.Combine(monthFolder, baseFileName);
+                var fileLock = _fileLocks.GetOrAdd(logicalLockKey, _ => new ReaderWriterLockSlim());
+                string writtenFileName = string.Empty;
+                int writtenRowNumber = 0;
 
                 await Task.Run(() =>
                 {
                     if (!fileLock.TryEnterWriteLock(TimeSpan.FromSeconds(30)))
                     {
-                        throw new TimeoutException($"获取文件写锁超时: {filePath}");
+                        throw new TimeoutException($"获取文件写锁超时: {logicalLockKey}");
                     }
 
                     try
                     {
+                        string filePath = SelectWritableCsvFile(monthFolder, baseFileName, expectedHeader, record.PlanVersion);
                         bool fileExists = File.Exists(filePath);
                         int rowIndex = _pathManager.CountDataRows(filePath) + 1;
 
@@ -119,6 +130,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                             writer.WriteLine(dataRow);
                         }
 
+                        writtenFileName = Path.GetFileName(filePath);
+                        writtenRowNumber = rowIndex;
+
                         _logger.LogInformation(
                             "CSV保存成功 - 机种:{MachineType}, 方案:{Plan}, SN:{Serial}, 结果:{Result}",
                             effectiveMachineType, record.PlanName, record.SerialNumber,
@@ -129,6 +143,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         fileLock.ExitWriteLock();
                     }
                 });
+
+                if (!string.IsNullOrWhiteSpace(writtenFileName) && writtenRowNumber > 0)
+                {
+                    try
+                    {
+                        await _monthlyLogIndexService.AppendAsync(monthFolder, record, writtenFileName, writtenRowNumber);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[日志索引] 追加失败，正式 CSV 已保留: {FileName}", writtenFileName);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -157,6 +183,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         {
             return await Task.Run(() =>
             {
+                var queryResult = TryQueryRecordsByIndex(
+                    series, serialNumber, planName,
+                    startDate, endDate, finalResult,
+                    pageIndex, pageSize);
+
+                if (queryResult != null)
+                {
+                    _logger.LogDebug(
+                        "CSV索引查询完成 - 条件(Series:{Series}, SN:{SN}, Plan:{Plan}) → 共{Total}条, 返回{Count}条",
+                        series ?? "*", serialNumber ?? "*", planName ?? "*",
+                        queryResult.Value.TotalCount, queryResult.Value.Records.Count);
+
+                    return queryResult.Value;
+                }
+
                 var allRecords = LoadAllFilteredRecords(
                     series, serialNumber, planName,
                     startDate, endDate, finalResult);
@@ -179,6 +220,38 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     totalCount, pagedRecords.Count);
 
                 return (pagedRecords, totalCount);
+            });
+        }
+
+        public async Task<List<LogRecord>> QueryAllRecordsAsync(
+            string? series = null,
+            string? serialNumber = null,
+            string? planName = null,
+            DateTime? startDate = null,
+            DateTime? endDate = null,
+            string? finalResult = null)
+        {
+            return await Task.Run(() =>
+            {
+                var indexedRecords = TryQueryAllRecordsByIndex(
+                    series, serialNumber, planName,
+                    startDate, endDate, finalResult);
+
+                if (indexedRecords != null)
+                {
+                    _logger.LogDebug(
+                        "CSV索引全量查询完成 - 条件(Series:{Series}, SN:{SN}, Plan:{Plan}) → 返回{Count}条",
+                        series ?? "*", serialNumber ?? "*", planName ?? "*",
+                        indexedRecords.Count);
+
+                    return indexedRecords;
+                }
+
+                return LoadAllFilteredRecords(
+                        series, serialNumber, planName,
+                        startDate, endDate, finalResult)
+                    .OrderByDescending(record => record.Timestamp)
+                    .ToList();
             });
         }
 
@@ -211,30 +284,58 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                 foreach (var monthFolder in GetMonthFoldersInRange(startTime, endTime))
                 {
-                    string[] csvFiles;
-                    try
-                    {
-                        csvFiles = Directory.GetFiles(monthFolder, searchPattern);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "重复测试检查扫描月份文件夹失败: {Folder}", monthFolder);
-                        continue;
-                    }
+                    var entries = ReadOrRebuildMonthIndex(monthFolder);
+                    var hit = entries.FirstOrDefault(entry =>
+                        string.Equals(entry.MachineType, expectedMachineType, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(entry.SerialNumber, expectedSerialNumber, StringComparison.OrdinalIgnoreCase)
+                        && entry.Timestamp >= startTime
+                        && entry.Timestamp <= endTime);
 
-                    foreach (var csvFile in csvFiles)
+                    if (hit != null)
                     {
-                        if (CsvFileContainsRecord(csvFile, expectedMachineType, expectedSerialNumber, startTime, endTime))
-                        {
-                            _logger.LogWarning(
-                                "[重复测试] 最近记录命中 - 机种:{MachineType}, SN:{SerialNumber}, 文件:{FileName}",
-                                machineType, serialNumber, Path.GetFileName(csvFile));
-                            return true;
-                        }
+                        _logger.LogWarning(
+                            "[重复测试] 最近记录命中 - 机种:{MachineType}, SN:{SerialNumber}, 文件:{FileName}",
+                            machineType, serialNumber, hit.FileName);
+                        return true;
                     }
                 }
 
                 return false;
+            });
+        }
+
+        public async Task<List<string>> GetDynamicHeadersAsync(
+            string? series = null,
+            string? serialNumber = null,
+            string? planName = null,
+            DateTime? startDate = null,
+            DateTime? endDate = null,
+            string? finalResult = null)
+        {
+            return await Task.Run(() =>
+            {
+                var matchingFiles = GetMatchingIndexEntries(
+                        series, serialNumber, planName, startDate, endDate, finalResult)
+                    .Select(item => Path.Combine(item.MonthFolder, item.Entry.FileName))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(path => Path.GetDirectoryName(path), StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(path => GetCsvBaseNameForSorting(path), StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(GetCsvVolumeNumber)
+                    .ToList();
+
+                var headers = new List<string>();
+                foreach (var filePath in matchingFiles)
+                {
+                    foreach (var header in ReadDynamicHeadersFromCsvHeader(filePath))
+                    {
+                        if (!headers.Contains(header, StringComparer.OrdinalIgnoreCase))
+                        {
+                            headers.Add(header);
+                        }
+                    }
+                }
+
+                return headers;
             });
         }
 
@@ -258,7 +359,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         /// <summary>
         /// 构建 CSV 表头行
-        /// 格式：序号,机种名称,序列号,方案名称,检查者,综合判定,{动态Pin列...},日期,时间
+        /// 格式：序号,机种名称,序列号,方案名称,检查者,综合判定,{动态Pin列...},日期,时间,方案版本
         /// </summary>
         private string BuildCsvHeader(LogRecord record)
         {
@@ -277,15 +378,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 }
             }
 
-            // 日期和时间放在最后
-            headerBuilder.Append(",日期,时间");
+            // 日期、时间和方案版本放在最后
+            headerBuilder.Append(",日期,时间,方案版本");
 
             return headerBuilder.ToString();
         }
 
         /// <summary>
         /// 构建 CSV 数据行
-        /// 格式：序号,机种名称,序列号,方案名称,检查者,综合判定,{动态值...},日期,时间
+        /// 格式：序号,机种名称,序列号,方案名称,检查者,综合判定,{动态值...},日期,时间,方案版本
         /// </summary>
         private string BuildCsvDataRow(LogRecord record, int rowIndex)
         {
@@ -321,6 +422,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             dataBuilder.Append(record.Timestamp.ToString("yyyy年MM月dd日", CultureInfo.InvariantCulture));
             dataBuilder.Append(',');
             dataBuilder.Append(record.Timestamp.ToString("HH时mm分ss秒", CultureInfo.InvariantCulture));
+            dataBuilder.Append(',');
+            dataBuilder.Append($"V{Math.Max(1, record.PlanVersion)}");
 
             return dataBuilder.ToString();
         }
@@ -337,6 +440,122 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return field;
         }
 
+        private string SelectWritableCsvFile(string monthFolder, string baseFileName, string expectedHeader, int planVersion)
+        {
+            var existingFiles = GetExistingPlanFiles(monthFolder, baseFileName);
+            if (existingFiles.Count == 0)
+            {
+                return Path.Combine(monthFolder, $"{baseFileName}.csv");
+            }
+
+            var lastFile = existingFiles.OrderByDescending(f => f.Number).First();
+            var rowCount = _pathManager.CountDataRows(lastFile.FullPath);
+            var headerCompatible = IsHeaderCompatible(lastFile.FullPath, expectedHeader);
+            var lastVersion = GetLastRecordPlanVersion(lastFile.FullPath);
+            var samePlanVersion = lastVersion == Math.Max(1, planVersion);
+
+            if (headerCompatible && samePlanVersion && rowCount < _pathManager.MaxRowsPerFile)
+            {
+                _logger.LogInformation("[CSV分卷] 当前文件兼容，继续追加: {FileName}", Path.GetFileName(lastFile.FullPath));
+                return lastFile.FullPath;
+            }
+
+            int newFileNumber = lastFile.Number + 1;
+            var newFilePath = Path.Combine(monthFolder, $"{baseFileName}({newFileNumber}).csv");
+
+            if (!headerCompatible)
+            {
+                _logger.LogWarning("[CSV分卷] 表头变化，创建新分卷: {FileName}", Path.GetFileName(newFilePath));
+            }
+            else if (!samePlanVersion)
+            {
+                _logger.LogWarning("[CSV分卷] 方案版本变化 V{OldVersion} -> V{NewVersion}，创建新分卷: {FileName}",
+                    lastVersion, Math.Max(1, planVersion), Path.GetFileName(newFilePath));
+            }
+            else
+            {
+                _logger.LogWarning("[CSV分卷] 文件达到 {MaxRows} 行，创建新分卷: {FileName}",
+                    _pathManager.MaxRowsPerFile, Path.GetFileName(newFilePath));
+            }
+
+            return newFilePath;
+        }
+
+        private static List<CsvPlanFileInfo> GetExistingPlanFiles(string monthFolder, string baseFileName)
+        {
+            var result = new List<CsvPlanFileInfo>();
+            if (!Directory.Exists(monthFolder))
+                return result;
+
+            foreach (var filePath in Directory.GetFiles(monthFolder, $"{baseFileName}*.csv"))
+            {
+                var fileName = Path.GetFileNameWithoutExtension(filePath);
+                if (string.Equals(fileName, baseFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(new CsvPlanFileInfo(filePath, 0));
+                    continue;
+                }
+
+                if (fileName.StartsWith(baseFileName + "(", StringComparison.OrdinalIgnoreCase)
+                    && fileName.EndsWith(")", StringComparison.Ordinal))
+                {
+                    var numberText = fileName.Substring(baseFileName.Length + 1, fileName.Length - baseFileName.Length - 2);
+                    if (int.TryParse(numberText, out var number) && number > 0)
+                    {
+                        result.Add(new CsvPlanFileInfo(filePath, number));
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static bool IsHeaderCompatible(string filePath, string expectedHeader)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                    return true;
+
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream, DetectFileEncoding(filePath), detectEncodingFromByteOrderMarks: true);
+                var existingHeader = reader.ReadLine()?.TrimStart('\uFEFF') ?? string.Empty;
+                return string.Equals(existingHeader, expectedHeader, StringComparison.Ordinal);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int GetLastRecordPlanVersion(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                    return 1;
+
+                var lines = File.ReadAllLines(filePath, DetectFileEncoding(filePath));
+                if (lines.Length < 2)
+                    return 1;
+
+                var headers = ParseCsvLine(lines[0]);
+                var headerMap = BuildHeaderMap(headers);
+                var lastDataLine = lines.LastOrDefault(line => !string.IsNullOrWhiteSpace(line) && line != lines[0]);
+                if (string.IsNullOrWhiteSpace(lastDataLine))
+                    return 1;
+
+                var columns = ParseCsvLine(lastDataLine);
+                return ParsePlanVersion(GetColumnValue(headerMap, columns, "方案版本"));
+            }
+            catch
+            {
+                return 1;
+            }
+        }
+
+        private sealed record CsvPlanFileInfo(string FullPath, int Number);
+
         #endregion
 
         #region CSV 读取与解析
@@ -349,6 +568,235 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// 2. 如果指定了机种名称，只加载文件名匹配的 CSV
         /// 3. 其他条件在内存中筛选
         /// </summary>
+        private (List<LogRecord> Records, int TotalCount)? TryQueryRecordsByIndex(
+            string? series,
+            string? serialNumber,
+            string? planName,
+            DateTime? startDate,
+            DateTime? endDate,
+            string? finalResult,
+            int pageIndex,
+            int pageSize)
+        {
+            try
+            {
+                var sortedEntries = GetMatchingIndexEntries(
+                        series, serialNumber, planName, startDate, endDate, finalResult)
+                    .OrderByDescending(item => item.Entry.Timestamp)
+                    .ToList();
+
+                var totalCount = sortedEntries.Count;
+                if (pageIndex < 1) pageIndex = 1;
+
+                var pageEntries = sortedEntries
+                    .Skip((pageIndex - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToList();
+
+                var records = new List<LogRecord>();
+                foreach (var item in pageEntries)
+                {
+                    var csvPath = Path.Combine(item.MonthFolder, item.Entry.FileName);
+                    var record = LoadRecordByRowNumber(csvPath, item.Entry.RowNumber);
+                    if (record != null)
+                    {
+                        records.Add(record);
+                    }
+                }
+
+                return (records, totalCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[日志索引] 索引查询失败，回退正式 CSV 全量解析");
+                return null;
+            }
+        }
+
+        private List<LogRecord>? TryQueryAllRecordsByIndex(
+            string? series,
+            string? serialNumber,
+            string? planName,
+            DateTime? startDate,
+            DateTime? endDate,
+            string? finalResult)
+        {
+            try
+            {
+                var sortedEntries = GetMatchingIndexEntries(
+                        series, serialNumber, planName, startDate, endDate, finalResult)
+                    .OrderByDescending(item => item.Entry.Timestamp)
+                    .ToList();
+
+                var records = new List<LogRecord>(sortedEntries.Count);
+                foreach (var item in sortedEntries)
+                {
+                    var csvPath = Path.Combine(item.MonthFolder, item.Entry.FileName);
+                    var record = LoadRecordByRowNumber(csvPath, item.Entry.RowNumber);
+                    if (record != null)
+                    {
+                        records.Add(record);
+                    }
+                }
+
+                return records;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[日志索引] 全量索引查询失败，回退正式 CSV 全量解析");
+                return null;
+            }
+        }
+
+        private List<(string MonthFolder, LogIndexEntry Entry)> GetMatchingIndexEntries(
+            string? series,
+            string? serialNumber,
+            string? planName,
+            DateTime? startDate,
+            DateTime? endDate,
+            string? finalResult)
+        {
+            var monthFolders = startDate.HasValue || endDate.HasValue
+                ? GetMonthFoldersInRange(startDate, endDate)
+                : GetAllMonthFolders();
+
+            var allEntries = new List<(string MonthFolder, LogIndexEntry Entry)>();
+            foreach (var monthFolder in monthFolders)
+            {
+                var entries = ReadOrRebuildMonthIndex(monthFolder);
+                allEntries.AddRange(entries.Select(entry => (monthFolder, entry)));
+            }
+
+            var filtered = allEntries.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(series))
+            {
+                var machine = series.Trim();
+                filtered = filtered.Where(item =>
+                    string.Equals(item.Entry.MachineType, machine, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.IsNullOrWhiteSpace(planName))
+            {
+                var plan = planName.Trim();
+                filtered = filtered.Where(item =>
+                    string.Equals(item.Entry.PlanName, plan, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.IsNullOrWhiteSpace(serialNumber))
+            {
+                var sn = serialNumber.Trim();
+                filtered = filtered.Where(item =>
+                    item.Entry.SerialNumber.Contains(sn, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.IsNullOrWhiteSpace(finalResult) && finalResult != "全部")
+            {
+                filtered = filtered.Where(item =>
+                    string.Equals(item.Entry.FinalResult, finalResult, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (startDate.HasValue)
+            {
+                var start = startDate.Value.Date;
+                filtered = filtered.Where(item => item.Entry.Timestamp.Date >= start);
+            }
+
+            if (endDate.HasValue)
+            {
+                var end = endDate.Value.Date;
+                filtered = filtered.Where(item => item.Entry.Timestamp.Date <= end);
+            }
+
+            return filtered.ToList();
+        }
+
+        private static List<string> ReadDynamicHeadersFromCsvHeader(string filePath)
+        {
+            if (!File.Exists(filePath))
+                return new List<string>();
+
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream, DetectFileEncoding(filePath), detectEncodingFromByteOrderMarks: true);
+            var headerLine = reader.ReadLine();
+            if (string.IsNullOrWhiteSpace(headerLine))
+                return new List<string>();
+
+            return ParseCsvLine(headerLine)
+                .Select(h => h.Trim().TrimStart('\uFEFF'))
+                .Where(h => !FixedColumnNames.Contains(h) && !string.IsNullOrWhiteSpace(h))
+                .ToList();
+        }
+
+        private static string GetCsvBaseNameForSorting(string filePath)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(filePath);
+            var parenIndex = fileName.IndexOf('(');
+            return parenIndex > 0 ? fileName[..parenIndex] : fileName;
+        }
+
+        private static int GetCsvVolumeNumber(string filePath)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(filePath);
+            var parenIndex = fileName.LastIndexOf('(');
+            if (parenIndex <= 0 || !fileName.EndsWith(")", StringComparison.Ordinal))
+                return 0;
+
+            var numberText = fileName.Substring(parenIndex + 1, fileName.Length - parenIndex - 2);
+            return int.TryParse(numberText, out var number) && number > 0 ? number : 0;
+        }
+
+        private List<string> GetAllMonthFolders()
+        {
+            var testLogRoot = _pathManager.GetTestLogRootPath();
+            if (!Directory.Exists(testLogRoot))
+                return new List<string>();
+
+            try
+            {
+                return Directory.GetDirectories(testLogRoot)
+                    .Where(dir => DateTime.TryParseExact(Path.GetFileName(dir), "yyyy-MM",
+                        CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                    .OrderBy(dir => dir)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "扫描 TestLog 子文件夹失败");
+                return new List<string>();
+            }
+        }
+
+        private LogRecord? LoadRecordByRowNumber(string filePath, int rowNumber)
+        {
+            if (rowNumber <= 0 || !File.Exists(filePath))
+                return null;
+
+            var encoding = DetectFileEncoding(filePath);
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
+
+            var headerLine = reader.ReadLine();
+            if (string.IsNullOrWhiteSpace(headerLine))
+                return null;
+
+            var headers = ParseCsvLine(headerLine);
+            var headerMap = BuildHeaderMap(headers);
+
+            string? line = null;
+            for (int currentRow = 1; currentRow <= rowNumber; currentRow++)
+            {
+                line = reader.ReadLine();
+                if (line == null)
+                    return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+                return null;
+
+            return ParseRecordLine(headers, headerMap, line);
+        }
+
         private List<LogRecord> LoadAllFilteredRecords(
             string? series,
             string? serialNumber,
@@ -419,7 +867,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         searchPattern = "*.csv";
                     }
 
-                    var csvFiles = Directory.GetFiles(monthFolder, searchPattern);
+                    var csvFiles = Directory.GetFiles(monthFolder, searchPattern)
+                        .Where(path => !string.Equals(Path.GetFileName(path), MonthlyLogIndexService.IndexFileName, StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
 
                     foreach (var csvFile in csvFiles)
                     {
@@ -509,64 +959,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return result.OrderBy(d => d).ToList();
         }
 
-        private bool CsvFileContainsRecord(
-            string filePath,
-            string machineType,
-            string serialNumber,
-            DateTime startTime,
-            DateTime endTime)
+        private List<LogIndexEntry> ReadOrRebuildMonthIndex(string monthFolder)
         {
             try
             {
-                var encoding = DetectFileEncoding(filePath);
-                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
-
-                var headerLine = reader.ReadLine();
-                if (string.IsNullOrWhiteSpace(headerLine))
-                    return false;
-
-                var headers = ParseCsvLine(headerLine);
-                var headerMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                for (int i = 0; i < headers.Length; i++)
+                var indexPath = Path.Combine(monthFolder, MonthlyLogIndexService.IndexFileName);
+                if (!File.Exists(indexPath))
                 {
-                    var headerName = headers[i].Trim();
-                    if (!headerMap.ContainsKey(headerName))
-                    {
-                        headerMap[headerName] = i;
-                    }
+                    _monthlyLogIndexService.RebuildMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
                 }
 
-                string? line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    if (string.IsNullOrWhiteSpace(line))
-                        continue;
-
-                    var columns = ParseCsvLine(line);
-                    var rowMachineType = GetColumnValue(headerMap, columns, "机种名称");
-                    var rowSerialNumber = GetColumnValue(headerMap, columns, "序列号");
-
-                    if (!string.Equals(rowMachineType, machineType, StringComparison.OrdinalIgnoreCase)
-                        || !string.Equals(rowSerialNumber, serialNumber, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var timestamp = ParseDateTime(
-                        GetColumnValue(headerMap, columns, "日期"),
-                        GetColumnValue(headerMap, columns, "时间"));
-
-                    if (timestamp >= startTime && timestamp <= endTime)
-                        return true;
-                }
+                return _monthlyLogIndexService.ReadMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "重复测试检查解析 CSV 失败: {File}", Path.GetFileName(filePath));
+                _logger.LogWarning(ex, "[日志索引] 读取或重建索引失败: {MonthFolder}", monthFolder);
+                return new List<LogIndexEntry>();
             }
-
-            return false;
         }
 
         /// <summary>
@@ -582,56 +991,75 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             if (lines.Length < 2) return records;
 
             var headers = ParseCsvLine(lines[0]);
+            var headerMap = BuildHeaderMap(headers);
+
+            for (int i = 1; i < lines.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i])) continue;
+
+                var record = ParseRecordLine(headers, headerMap, lines[i]);
+                if (record != null)
+                {
+                    records.Add(record);
+                }
+            }
+
+            return records;
+        }
+
+        private static LogRecord? ParseRecordLine(string[] headers, Dictionary<string, int> headerMap, string line)
+        {
+            var columns = ParseCsvLine(line);
+            if (columns.Length == 0)
+                return null;
+
+            string dateStr = GetColumnValue(headerMap, columns, "日期");
+            string timeStr = GetColumnValue(headerMap, columns, "时间");
+            DateTime timestamp = ParseDateTime(dateStr, timeStr);
+
+            var dynamicHeaders = headers
+                .Select(h => h.Trim().TrimStart('\uFEFF'))
+                .Where(h => !FixedColumnNames.Contains(h) && !string.IsNullOrWhiteSpace(h))
+                .ToList();
+
+            var record = new LogRecord
+            {
+                Timestamp = timestamp,
+                Series = GetColumnValue(headerMap, columns, "机种名称"),
+                MachineType = GetColumnValue(headerMap, columns, "机种名称"),
+                SerialNumber = GetColumnValue(headerMap, columns, "序列号"),
+                PlanName = GetColumnValue(headerMap, columns, "方案名称"),
+                PlanVersion = ParsePlanVersion(GetColumnValue(headerMap, columns, "方案版本")),
+                Operator = GetColumnValue(headerMap, columns, "检查者"),
+                FinalResult = GetColumnValue(headerMap, columns, "综合判定"),
+                PinResults = new List<PinResult>()
+            };
+
+            foreach (var dh in dynamicHeaders)
+            {
+                record.PinResults.Add(new PinResult
+                {
+                    PinName = dh,
+                    Result = GetColumnValue(headerMap, columns, dh)
+                });
+            }
+
+            return record;
+        }
+
+        private static Dictionary<string, int> BuildHeaderMap(string[] headers)
+        {
             var headerMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < headers.Length; i++)
             {
-                var headerName = headers[i].Trim();
+                var headerName = headers[i].Trim().TrimStart('\uFEFF');
                 if (!headerMap.ContainsKey(headerName))
                 {
                     headerMap[headerName] = i;
                 }
             }
 
-            var dynamicHeaders = headers
-                .Select(h => h.Trim())
-                .Where(h => !FixedColumnNames.Contains(h) && !string.IsNullOrWhiteSpace(h))
-                .ToList();
-
-            for (int i = 1; i < lines.Length; i++)
-            {
-                if (string.IsNullOrWhiteSpace(lines[i])) continue;
-
-                var columns = ParseCsvLine(lines[i]);
-                if (columns.Length == 0) continue;
-
-                string dateStr = GetColumnValue(headerMap, columns, "日期");
-                string timeStr = GetColumnValue(headerMap, columns, "时间");
-                DateTime timestamp = ParseDateTime(dateStr, timeStr);
-
-                var record = new LogRecord
-                {
-                    Timestamp = timestamp,
-                    Series = GetColumnValue(headerMap, columns, "机种名称"),
-                    SerialNumber = GetColumnValue(headerMap, columns, "序列号"),
-                    PlanName = GetColumnValue(headerMap, columns, "方案名称"),
-                    Operator = GetColumnValue(headerMap, columns, "检查者"),
-                    FinalResult = GetColumnValue(headerMap, columns, "综合判定"),
-                    PinResults = new List<PinResult>()
-                };
-
-                foreach (var dh in dynamicHeaders)
-                {
-                    record.PinResults.Add(new PinResult
-                    {
-                        PinName = dh,
-                        Result = GetColumnValue(headerMap, columns, dh)
-                    });
-                }
-
-                records.Add(record);
-            }
-
-            return records;
+            return headerMap;
         }
 
         private static string GetColumnValue(Dictionary<string, int> headerMap, string[] columns, string columnName)
@@ -639,6 +1067,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             if (headerMap.TryGetValue(columnName, out int index) && index < columns.Length)
                 return columns[index].Trim();
             return string.Empty;
+        }
+
+        private static int ParsePlanVersion(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return 1;
+
+            value = value.Trim();
+            if (value.StartsWith("V", StringComparison.OrdinalIgnoreCase))
+                value = value[1..];
+
+            return int.TryParse(value, out var version) && version > 0 ? version : 1;
         }
 
         private static DateTime ParseDateTime(string dateStr, string timeStr)

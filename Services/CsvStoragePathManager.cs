@@ -49,6 +49,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <summary>
+        /// 单个正式 CSV 文件最大数据行数。
+        /// </summary>
+        public int MaxRowsPerFile => _maxRowsPerFile;
+
+        /// <summary>
         /// 获取 TestLog 根目录路径（实时从配置读取，支持动态切换）
         /// </summary>
         public string GetTestLogRootPath()
@@ -157,7 +162,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 foreach (var monthDir in Directory.GetDirectories(rootPath))
                 {
-                    foreach (var filePath in Directory.GetFiles(monthDir, "*.csv"))
+                    foreach (var filePath in Directory.GetFiles(monthDir, "*.csv")
+                                 .Where(path => !string.Equals(Path.GetFileName(path), MonthlyLogIndexService.IndexFileName, StringComparison.OrdinalIgnoreCase)))
                     {
                         var fileName = Path.GetFileNameWithoutExtension(filePath);
                         var parenIndex = fileName.IndexOf('(');
@@ -197,7 +203,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 foreach (var monthDir in Directory.GetDirectories(rootPath))
                 {
-                    foreach (var filePath in Directory.GetFiles(monthDir, "*.csv"))
+                    foreach (var filePath in Directory.GetFiles(monthDir, "*.csv")
+                                 .Where(path => !string.Equals(Path.GetFileName(path), MonthlyLogIndexService.IndexFileName, StringComparison.OrdinalIgnoreCase)))
                     {
                         var fileName = Path.GetFileNameWithoutExtension(filePath);
                         var parenIndex = fileName.IndexOf('(');

@@ -158,6 +158,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private bool _waitDt120ReleaseAfterReset;
 
+    /// <summary>当前已加载方案的业务版本，保存检测记录时写入 CSV。</summary>
+    private int _currentPlanVersion = 1;
+
     /// <summary>
     /// Starting 流程的取消令牌源。Stop/Reset/EmergencyStop 可取消 Starting 以立即执行自身流程。</summary>
     private CancellationTokenSource? _startingCts;
@@ -909,6 +912,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
+        _currentPlanVersion = Math.Max(1, currentPlan.Version);
         AddLog($"📋 已加载方案: {currentPlan.MachineType} - {currentPlan.PlanName}");
 
         var orderedItems = currentPlan.Items.OrderBy(i => i.Index).ToList();
@@ -1096,6 +1100,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 MachineType = machineType,
                 SerialNumber = SerialNumber,
                 PlanName = planName,
+                PlanVersion = _currentPlanVersion,
                 Operator = OperatorName,
                 FinalResult = finalResult,
                 PinResults = TestItems.Select(item => new PinResult

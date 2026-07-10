@@ -72,21 +72,7 @@ var tests = new List<(string Name, Action Body)>
         var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-exists-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["CsvStorage:RootPath"] = root,
-                    ["CsvStorage:MaxRowsPerFile"] = "50000"
-                })
-                .Build();
-
-            var pathManager = new CsvStoragePathManager(
-                new CsvStorageSettings(configuration),
-                NullLogger<CsvStoragePathManager>.Instance);
-            var storage = new CsvTestRecordStorage(
-                pathManager,
-                new EmptyPlanStorageService(),
-                NullLogger<CsvTestRecordStorage>.Instance);
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
 
             storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-001", DateTime.Now.AddDays(-3))).GetAwaiter().GetResult();
             storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-OLD", DateTime.Now.AddMonths(-2))).GetAwaiter().GetResult();
@@ -112,21 +98,7 @@ var tests = new List<(string Name, Action Body)>
         var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-row-index-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["CsvStorage:RootPath"] = root,
-                    ["CsvStorage:MaxRowsPerFile"] = "3"
-                })
-                .Build();
-
-            var pathManager = new CsvStoragePathManager(
-                new CsvStorageSettings(configuration),
-                NullLogger<CsvStoragePathManager>.Instance);
-            var storage = new CsvTestRecordStorage(
-                pathManager,
-                new EmptyPlanStorageService(),
-                NullLogger<CsvTestRecordStorage>.Instance);
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 3);
 
             var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
             for (int i = 1; i <= 5; i++)
@@ -137,7 +109,7 @@ var tests = new List<(string Name, Action Body)>
             }
 
             var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
-            var files = Directory.GetFiles(monthFolder, "*.csv").OrderBy(x => x).ToList();
+            var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
             AssertEqual(2, files.Count);
 
             var firstFileRows = ReadCsvDataRows(files[0]);
@@ -150,6 +122,186 @@ var tests = new List<(string Name, Action Body)>
             AssertEqual("3", firstFileRows[2].Split(',')[0]);
             AssertEqual("1", secondFileRows[0].Split(',')[0]);
             AssertEqual("2", secondFileRows[1].Split(',')[0]);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    }),
+    ("CSV 保存方案版本列且版本变化自动新分卷", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-version-roll-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
+            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-V1", timestamp, planVersion: 1))
+                .GetAwaiter()
+                .GetResult();
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-V2", timestamp.AddSeconds(1), planVersion: 2))
+                .GetAwaiter()
+                .GetResult();
+
+            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
+            AssertEqual(2, files.Count);
+
+            var firstLines = File.ReadAllLines(files[0]);
+            var secondLines = File.ReadAllLines(files[1]);
+            AssertEqual(true, firstLines[0].EndsWith(",方案版本", StringComparison.Ordinal));
+            AssertEqual(true, firstLines[1].EndsWith(",V1", StringComparison.Ordinal));
+            AssertEqual(true, secondLines[1].EndsWith(",V2", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    }),
+    ("CSV 表头结构变化自动新分卷且旧记录按 V1 兼容解析", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-header-roll-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
+            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-OLD", timestamp, planVersion: 1, pins: new[] { "A1-B1" }))
+                .GetAwaiter()
+                .GetResult();
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-NEW", timestamp.AddSeconds(1), planVersion: 1, pins: new[] { "B1-B2" }))
+                .GetAwaiter()
+                .GetResult();
+
+            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
+            AssertEqual(2, files.Count);
+
+            var (records, total) = storage.QueryRecordsAsync(
+                    series: "GM",
+                    planName: "P1",
+                    startDate: new DateTime(2026, 7, 1),
+                    endDate: new DateTime(2026, 7, 31),
+                    pageIndex: 1,
+                    pageSize: 10)
+                .GetAwaiter()
+                .GetResult();
+
+            AssertEqual(2, total);
+            AssertEqual(2, records.Count);
+            AssertEqual(1, records.Single(r => r.SerialNumber == "SN-OLD").PlanVersion);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    }),
+    ("动态列并集从索引命中文件表头计算", (Action)(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-dynamic-headers-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
+            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-H1", timestamp, planVersion: 1, pins: new[] { "A1-B1", "A2-B2" }))
+                .GetAwaiter()
+                .GetResult();
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-H2", timestamp.AddSeconds(1), planVersion: 2, pins: new[] { "B1-B2", "A2-B2" }))
+                .GetAwaiter()
+                .GetResult();
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P2", "SN-H3", timestamp.AddSeconds(2), planVersion: 1, pins: new[] { "Z1-Z2" }))
+                .GetAwaiter()
+                .GetResult();
+
+            var headers = storage.GetDynamicHeadersAsync(
+                    series: "GM",
+                    planName: "P1",
+                    startDate: new DateTime(2026, 7, 1),
+                    endDate: new DateTime(2026, 7, 31))
+                .GetAwaiter()
+                .GetResult();
+
+            AssertEqual("A1-B1,A2-B2,B1-B2", string.Join(",", headers));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    })),
+    ("索引导出查询返回全部命中记录不受 10000 条限制", (Action)(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-export-all-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 20000);
+            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
+
+            for (int i = 1; i <= 10005; i++)
+            {
+                storage.SaveRecordAsync(CreateLogRecord("GM", "P1", $"SN-EXPORT-{i:00000}", timestamp.AddSeconds(i), planVersion: 1))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            var records = storage.QueryAllRecordsAsync(
+                    series: "GM",
+                    planName: "P1",
+                    startDate: new DateTime(2026, 7, 1),
+                    endDate: new DateTime(2026, 7, 31))
+                .GetAwaiter()
+                .GetResult();
+
+            AssertEqual(10005, records.Count);
+            AssertEqual("SN-EXPORT-10005", records[0].SerialNumber);
+            AssertEqual("SN-EXPORT-00001", records[^1].SerialNumber);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    })),
+    ("月度索引随正式 CSV 追加并可重建", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-index-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
+            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-IDX-1", timestamp, planVersion: 3))
+                .GetAwaiter()
+                .GetResult();
+
+            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var indexPath = Path.Combine(monthFolder, "record-index.csv");
+            AssertEqual(true, File.Exists(indexPath));
+            var indexLines = File.ReadAllLines(indexPath);
+            AssertEqual("Timestamp,MachineType,SerialNumber,PlanName,PlanVersion,FinalResult,FileName,RowNumber", indexLines[0]);
+            AssertEqual(true, indexLines[1].Contains(",GM,SN-IDX-1,P1,3,OK,GM_P1.csv,1", StringComparison.Ordinal));
+
+            File.Delete(indexPath);
+            var indexService = new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance);
+            indexService.RebuildMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
+
+            indexLines = File.ReadAllLines(indexPath);
+            AssertEqual(2, indexLines.Length);
+            AssertEqual(true, indexLines[1].Contains(",GM,SN-IDX-1,P1,3,OK,GM_P1.csv,1", StringComparison.Ordinal));
         }
         finally
         {
@@ -336,8 +488,37 @@ static List<string> ReadCsvDataRows(string filePath)
         .ToList();
 }
 
-static LogRecord CreateLogRecord(string machineType, string planName, string serialNumber, DateTime timestamp)
+static CsvTestRecordStorage CreateCsvStorage(string root, int maxRowsPerFile)
 {
+    var configuration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["CsvStorage:RootPath"] = root,
+            ["CsvStorage:MaxRowsPerFile"] = maxRowsPerFile.ToString()
+        })
+        .Build();
+
+    var pathManager = new CsvStoragePathManager(
+        new CsvStorageSettings(configuration),
+        NullLogger<CsvStoragePathManager>.Instance);
+
+    return new CsvTestRecordStorage(
+        pathManager,
+        new EmptyPlanStorageService(),
+        new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance),
+        NullLogger<CsvTestRecordStorage>.Instance);
+}
+
+static LogRecord CreateLogRecord(
+    string machineType,
+    string planName,
+    string serialNumber,
+    DateTime timestamp,
+    int planVersion = 1,
+    string[]? pins = null)
+{
+    pins ??= new[] { "A1-B1" };
+
     return new LogRecord
     {
         Timestamp = timestamp,
@@ -345,12 +526,10 @@ static LogRecord CreateLogRecord(string machineType, string planName, string ser
         MachineType = machineType,
         SerialNumber = serialNumber,
         PlanName = planName,
+        PlanVersion = planVersion,
         Operator = "测试员",
         FinalResult = "OK",
-        PinResults =
-        [
-            new PinResult { PinName = "A1-B1", Result = "OK" }
-        ]
+        PinResults = pins.Select(pin => new PinResult { PinName = pin, Result = "OK" }).ToList()
     };
 }
 

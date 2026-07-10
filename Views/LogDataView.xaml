@@ -617,6 +617,10 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
+                <!-- 方案版本 -->
+                <DataGridTextColumn Header="方案版本"
+                        Binding="{Binding PlanVersionText}"
+                        Width="90"/>
 
                 <!-- 注：动态列由 LogDataView.xaml.cs 在运行时生成 -->
             </DataGrid.Columns>

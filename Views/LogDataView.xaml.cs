@@ -19,7 +19,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
     /// 负责运行时根据 DynamicHeaders 集合动态生成 DataGrid 列
     /// 
     /// 列结构：固定列（XAML静态定义）→ 动态Pin列（代码生成）→ 日期列 → 时间列
-    /// 固定列：序号、机种名称、序列号、方案名称、操作员、综合判定（共6列）
+    /// 固定列：序号、机种名称、序列号、方案名称、操作员、综合判定、方案版本（共7列）
     /// </remarks>
     [NavigationViewModel(typeof(LogDataViewModel))]
     public partial class LogDataView : UserControl
@@ -27,10 +27,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         private readonly LogDataViewModel _viewModel;
 
         /// <summary>
-        /// ⭐ 固定列数量改为6：序号、机种名称、序列号、方案名称、操作员、综合判定
+        /// 固定列数量：序号、机种名称、序列号、方案名称、操作员、综合判定、方案版本
         /// （日期和时间列移到动态生成区域）
         /// </summary>
-        private const int FIXED_COLUMN_COUNT = 6;
+        private const int FIXED_COLUMN_COUNT = 7;
 
         public LogDataView(LogDataViewModel viewModel)
         {
@@ -120,7 +120,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
         /// <summary>
         /// 移除运行时生成的动态列，仅保留XAML中定义的固定列
-        /// ⭐ 固定列 = 序号、机种名称、序列号、方案名称、操作员、综合判定（共6列）
+        /// 固定列 = 序号、机种名称、序列号、方案名称、操作员、综合判定、方案版本
         /// </summary>
         private void RemoveDynamicColumns()
         {

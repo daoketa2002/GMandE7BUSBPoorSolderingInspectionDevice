@@ -134,6 +134,27 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return (records, totalCount);
         }
 
+        public async Task<List<LogRecord>> QueryAllRecordsAsync(
+            string? series = null,
+            string? serialNumber = null,
+            string? planName = null,
+            DateTime? startDate = null,
+            DateTime? endDate = null,
+            string? finalResult = null)
+        {
+            var (records, _) = await QueryRecordsAsync(
+                series,
+                serialNumber,
+                planName,
+                startDate,
+                endDate,
+                finalResult,
+                pageIndex: 1,
+                pageSize: int.MaxValue);
+
+            return records;
+        }
+
         public async Task<bool> ExistsRecentTestRecordAsync(
             string machineType,
             string serialNumber,
@@ -152,6 +173,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 && r.SerialNumber == expectedSerialNumber
                 && r.Timestamp >= startTime
                 && r.Timestamp <= endTime);
+        }
+
+        public async Task<List<string>> GetDynamicHeadersAsync(
+            string? series = null,
+            string? serialNumber = null,
+            string? planName = null,
+            DateTime? startDate = null,
+            DateTime? endDate = null,
+            string? finalResult = null)
+        {
+            var (records, _) = await QueryRecordsAsync(
+                series,
+                serialNumber,
+                planName,
+                startDate,
+                endDate,
+                finalResult,
+                pageIndex: 1,
+                pageSize: int.MaxValue);
+
+            return records
+                .SelectMany(record => record.PinResults)
+                .Select(pin => pin.PinName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         /// <summary>

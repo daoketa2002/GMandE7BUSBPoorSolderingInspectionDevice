@@ -71,6 +71,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         public string PlanName { get; set; } = string.Empty;
 
         /// <summary>
+        /// 检测时实际使用的方案版本。旧 CSV 缺失该列时按 V1 处理。
+        /// </summary>
+        public int PlanVersion { get; set; } = 1;
+
+        /// <summary>
+        /// UI 显示用版本号。
+        /// </summary>
+        [NotMapped]
+        public string PlanVersionText => $"V{Math.Max(1, PlanVersion)}";
+
+        /// <summary>
         /// 操作员名称
         /// 来源于全局 OperatorStateService 的当前作业员
         /// </summary>

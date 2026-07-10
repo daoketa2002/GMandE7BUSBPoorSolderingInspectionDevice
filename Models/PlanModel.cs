@@ -32,6 +32,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         public string PlanName { get; set; } = string.Empty;
 
         /// <summary>
+        /// 方案业务版本。旧 JSON 缺失该字段时按 V1 处理。
+        /// </summary>
+        [JsonPropertyName("Version")]
+        public int Version { get; set; } = 1;
+
+        /// <summary>
         /// 方案创建时间
         /// </summary>
         [JsonPropertyName("CreatedTime")]

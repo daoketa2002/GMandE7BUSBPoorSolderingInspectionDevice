@@ -447,6 +447,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 {
                     MachineType = MachineType.Trim(),
                     PlanName = PlanName.Trim(),
+                    Version = _isEditMode ? Math.Max(1, _originalPlan?.Version ?? 1) : 1,
                     CreatedTime = _isEditMode ? CreatedTime : DateTime.Now,
                     LastModifiedTime = DateTime.Now,
                     Items = Items.Select(item => new PlanItem
@@ -468,6 +469,36 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                             : item.ModeValue                // 导通模式：保存用户选择的 OPEN/SHORT
                     }).ToList()
                 };
+
+                if (_isEditMode && _originalPlan != null)
+                {
+                    var contentChanged = HasPlanBusinessContentChanged(_originalPlan, plan);
+                    if (contentChanged)
+                    {
+                        var oldVersion = Math.Max(1, _originalPlan.Version);
+                        var newVersion = oldVersion + 1;
+                        var confirmed = await _notificationService.ConfirmAsync(
+                            $"当前方案内容已发生变化。\n\n保存后，方案版本将由 V{oldVersion} 更新为 V{newVersion}。\n后续检测将使用新的检测条件。\n历史测试记录不会被修改。\n\n是否继续保存？",
+                            "方案版本更新确认");
+
+                        if (!confirmed)
+                        {
+                            _logger.LogWarning("[方案版本] 用户取消版本更新保存：{MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
+                            return;
+                        }
+
+                        plan.Version = newVersion;
+                        _logger.LogWarning("[方案版本] 方案内容变化：V{OldVersion} -> V{NewVersion}", oldVersion, newVersion);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[方案版本] 内容未变化，版本保持 V{Version}", plan.Version);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[方案版本] 新方案创建：Version=V1");
+                }
 
                 // 同时传递原机种名和原方案名，确保方案名变更时也能正确删除旧文件
                 await _planStorageService.SavePlanAsync(plan, _originalPlan?.MachineType, _originalPlan?.PlanName);
@@ -534,6 +565,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (!string.IsNullOrWhiteSpace(PlanName)) return true;
             if (Items.Count > 0) return true;
             return false;
+        }
+
+        private static bool HasPlanBusinessContentChanged(PlanModel originalPlan, PlanModel currentPlan)
+        {
+            var originalItems = originalPlan.Items.OrderBy(i => i.Index).ToList();
+            var currentItems = currentPlan.Items.OrderBy(i => i.Index).ToList();
+
+            if (originalItems.Count != currentItems.Count)
+                return true;
+
+            for (int i = 0; i < originalItems.Count; i++)
+            {
+                if (!IsSameBusinessItem(originalItems[i], currentItems[i]))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsSameBusinessItem(PlanItem left, PlanItem right)
+        {
+            return left.Index == right.Index
+                && string.Equals(left.ItemName, right.ItemName, StringComparison.Ordinal)
+                && string.Equals(left.PinLeftPolarity, right.PinLeftPolarity, StringComparison.Ordinal)
+                && string.Equals(left.PinRightPolarity, right.PinRightPolarity, StringComparison.Ordinal)
+                && string.Equals(left.CheckMode, right.CheckMode, StringComparison.Ordinal)
+                && Nullable.Equals(left.LowerLimit, right.LowerLimit)
+                && Nullable.Equals(left.UpperLimit, right.UpperLimit)
+                && string.Equals(left.ModeValue, right.ModeValue, StringComparison.Ordinal);
         }
 
         #endregion

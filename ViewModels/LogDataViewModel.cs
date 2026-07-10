@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 文件: ViewModels/LogDataViewModel.cs
 // 描述: 日志数据页面 ViewModel —— 重构版
 // 改动:
@@ -317,8 +317,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 TotalPages = (int)Math.Ceiling((double)total / PageSize);
                 LogDataList = new ObservableCollection<LogRecord>(records);
 
-                // 更新动态列（方案联动）
-                await UpdateDynamicHeadersAsync(records);
+                // 更新动态列：按当前筛选范围并集计算，避免翻页时列结构变化。
+                await UpdateDynamicHeadersAsync();
 
                 // 更新UI状态
                 UpdatePageInfo();
@@ -400,27 +400,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 _logger.LogInformation("执行导出，当前筛选共{Total}条", TotalCount);
 
-                // 查询全部数据（不分页，最多导出10000条防止内存溢出）
-                var (allRecords, _) = await _testRecordStorage.QueryRecordsAsync(
+                // 查询全部匹配记录：导出不沿用页面分页上限，CSV 实现会优先走月度索引定位。
+                var allRecords = await _testRecordStorage.QueryAllRecordsAsync(
                     series: string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
                     serialNumber: string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
                     planName: SelectedPlanName == "全部方案" ? null : SelectedPlanName,
                     startDate: StartDate,
                     endDate: EndDate,
-                    finalResult: FilterFinalResult == "全部" ? null : FilterFinalResult,
-                    pageIndex: 1,
-                    pageSize: 10000);
+                    finalResult: FilterFinalResult == "全部" ? null : FilterFinalResult);
+
+                var rowNumbers = allRecords
+                    .Select((record, index) => new { record, rowNumber = index + 1 })
+                    .ToDictionary(item => item.record, item => item.rowNumber);
 
                 // 构建导出列定义
                 var dynamicHeaders = DynamicHeaders.ToList();
                 var headers = new List<(string Header, Func<LogRecord, string> ValueSelector)>
                                 {
-                                    ("序号",       m => (allRecords.IndexOf(m) + 1).ToString()),
-                                    ("机种名称",   m => m.Series),
+                                    ("序号",       m => rowNumbers.TryGetValue(m, out var rowNumber) ? rowNumber.ToString() : string.Empty),
+                                    ("机种名称",   m => !string.IsNullOrWhiteSpace(m.MachineType) ? m.MachineType : m.Series),
                                     ("序列号",     m => m.SerialNumber),
                                     ("方案名称",   m => m.PlanName),
                                     ("操作员",     m => m.Operator),
                                     ("综合判定",   m => m.FinalResult),
+                                    ("方案版本",   m => m.PlanVersionText),
                                 };
 
                 // 动态列
@@ -578,15 +581,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 更新动态列名集合（方案联动核心逻辑）
         /// 统一从实际数据中提取Pin列名，确保始终有列显示
         /// </summary>
-        private async Task UpdateDynamicHeadersAsync(List<LogRecord> records)
+        private async Task UpdateDynamicHeadersAsync()
         {
-            List<string> headers;
-
-            headers = records
-                .SelectMany(r => r.PinResults ?? new List<PinResult>())
-                .Select(p => p.PinName)
-                .Distinct()
-                .ToList();
+            List<string> headers = await _testRecordStorage.GetDynamicHeadersAsync(
+                series: string.IsNullOrWhiteSpace(SelectedMachineType) ? null : SelectedMachineType.Trim(),
+                serialNumber: string.IsNullOrWhiteSpace(SearchSerialNumber) ? null : SearchSerialNumber.Trim(),
+                planName: SelectedPlanName == "全部方案" ? null : SelectedPlanName,
+                startDate: StartDate,
+                endDate: EndDate,
+                finalResult: FilterFinalResult == "全部" ? null : FilterFinalResult);
 
             // 如果数据中有具体方案名，且方案JSON存在，则按JSON定义顺序排序
             if (SelectedPlanName != "全部方案" && !string.IsNullOrWhiteSpace(SelectedPlanName))

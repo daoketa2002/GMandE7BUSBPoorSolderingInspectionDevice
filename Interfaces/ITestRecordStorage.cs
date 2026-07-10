@@ -50,6 +50,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
             int pageSize = 20);
 
         /// <summary>
+        /// 查询当前筛选范围内全部检测记录，用于导出等不分页场景。
+        /// CSV 实现优先走月度索引定位行号，避免沿用页面查询的数量上限。
+        /// </summary>
+        Task<List<LogRecord>> QueryAllRecordsAsync(
+            string? series = null,
+            string? serialNumber = null,
+            string? planName = null,
+            DateTime? startDate = null,
+            DateTime? endDate = null,
+            string? finalResult = null);
+
+        /// <summary>
+        /// 获取当前筛选范围内所有命中记录结构的动态 Pin 列并集。
+        /// CSV 实现可通过索引命中的文件表头计算，避免加载全部完整记录。
+        /// </summary>
+        Task<List<string>> GetDynamicHeadersAsync(
+            string? series = null,
+            string? serialNumber = null,
+            string? planName = null,
+            DateTime? startDate = null,
+            DateTime? endDate = null,
+            string? finalResult = null);
+
+        /// <summary>
         /// 判断指定机种和序列号在时间范围内是否已有检测记录。
         /// 用于运行页重复测试提醒，找到第一条即可返回。
         /// </summary>

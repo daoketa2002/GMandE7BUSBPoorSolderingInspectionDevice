@@ -194,6 +194,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // CSV 路径管理器
             services.AddSingleton<CsvStoragePathManager>();
+            services.AddSingleton<MonthlyLogIndexService>();
 
             // ⭐ 核心改动：ITestRecordStorage → CSV 实现
             services.AddSingleton<ITestRecordStorage, CsvTestRecordStorage>();

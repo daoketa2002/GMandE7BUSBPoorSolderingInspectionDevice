@@ -175,6 +175,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     // 从文件名反推方案名（去除.json扩展名）
                     var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(filePath);
                     plan.PlanName = fileNameWithoutExtension ?? plan.PlanName;
+                    plan.Version = Math.Max(1, plan.Version);
 
                     // ★ 兼容旧数据：将英文 CheckMode 统一转为中文
                     NormalizeCheckModeInPlan(plan);
@@ -362,6 +363,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     {
                         plan.CreatedTime = DateTime.Now;
                     }
+
+                    plan.Version = Math.Max(1, plan.Version);
 
                     // ================================================================
                     // ★ 核心修复：判断是否需要删除旧文件
