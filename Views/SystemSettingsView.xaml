@@ -196,6 +196,22 @@
                                     <TextBlock Text="开启：遇到 NG 仍继续后续项目，全部结束后统一判定；关闭：首个 NG 停止本轮并显示单项NG，等待操作员复位或终了。"
                                                FontSize="12" Foreground="#95A5A6"
                                                Margin="20,0,0,0" TextWrapping="Wrap"/>
+
+                                    <CheckBox IsChecked="{Binding SaveNgInspectionResult}"
+                                              IsEnabled="{Binding ContinueTestingAfterNg}"
+                                              VerticalAlignment="Center" Margin="20,14,0,4">
+                                        <CheckBox.Content>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="单项 NG 后继续保存"
+                                                           FontSize="15" FontWeight="SemiBold"
+                                                           Foreground="#2C3E50"/>
+                                            </StackPanel>
+                                        </CheckBox.Content>
+                                    </CheckBox>
+
+                                    <TextBlock Text="开启：全部项目完成后，即使最终结果为 NG，也保存本次检测记录。"
+                                               FontSize="12" Foreground="#95A5A6"
+                                               Margin="40,0,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
 

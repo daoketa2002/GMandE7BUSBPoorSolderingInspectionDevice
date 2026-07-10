@@ -2,6 +2,7 @@
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
+using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using System;
 using System.Threading.Tasks;
@@ -15,18 +16,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INotificationService _notificationService;
         private readonly IOperatorStateService _operatorStateService;
         private readonly IDeviceSettingsService _settingsService;
+        private readonly IServiceProvider _serviceProvider;
         private readonly Serilog.ILogger _logger;
 
         public MainMenuViewModel(
             INavigationService navigationService,
             INotificationService notificationService,
             IOperatorStateService operatorStateService,
-            IDeviceSettingsService settingsService)
+            IDeviceSettingsService settingsService,
+            IServiceProvider serviceProvider)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _logger = Log.ForContext<MainMenuViewModel>();
         }
 
@@ -46,30 +50,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var operatorName = _operatorStateService.CurrentOperatorName;
                 _logger.Information("[用户操作] 当前作业员: {Operator} (已选择: {HasOperator})",
                     operatorName, _operatorStateService.HasOperator);
-                if (!_operatorStateService.HasOperator)
+
+                var dialog = _serviceProvider.GetRequiredService<OperatorSelectionDialog>();
+                dialog.Owner = Application.Current.MainWindow;
+                var confirmed = dialog.ShowDialog() == true;
+                if (!confirmed || !_operatorStateService.HasOperator)
                 {
-                    _logger.Information("[用户操作] 未选择作业员，使用默认作业员: {Default}", operatorName);
+                    _logger.Warning("[用户操作] 未确认有效作业员，已取消进入运行界面");
+                    return;
                 }
+
+                _logger.Warning("[用户操作][审计] 进入运行界面前已选择作业员: {Operator}",
+                    _operatorStateService.CurrentOperatorName);
                 await _navigationService.NavigateToAsync<TestPageView>("Main", null);
             }
             catch (Exception ex)
             {
                 _logger.Error(ex, "[导航] 导航到运行界面失败");
-                await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
-            }
-        }
-
-        [RelayCommand]
-        private async Task NavigateToOperatorSettingsAsync()
-        {
-            try
-            {
-                _logger.Information("[用户操作] 用户点击作业员设定按钮");
-                await _navigationService.NavigateToAsync<OperatorSettingsView>();
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "[导航] 导航到作业员设定界面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }

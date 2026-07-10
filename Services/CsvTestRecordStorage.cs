@@ -103,6 +103,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     try
                     {
                         bool fileExists = File.Exists(filePath);
+                        int rowIndex = _pathManager.CountDataRows(filePath) + 1;
 
                         using (var writer = new StreamWriter(
                             filePath, true, new UTF8Encoding(true)))
@@ -114,7 +115,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                                 _logger.LogDebug("已写入表头到新文件: {FilePath}", filePath);
                             }
 
-                            string dataRow = BuildCsvDataRow(record, filePath);
+                            string dataRow = BuildCsvDataRow(record, rowIndex);
                             writer.WriteLine(dataRow);
                         }
 
@@ -182,6 +183,62 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <summary>
+        /// 短路查询指定机种和序列号在时间范围内是否已有记录。
+        /// 只扫描涉及月份下当前机种的 CSV 文件，避免运行页输入时全量扫盘。
+        /// </summary>
+        public async Task<bool> ExistsRecentTestRecordAsync(
+            string machineType,
+            string serialNumber,
+            DateTime startTime,
+            DateTime endTime)
+        {
+            if (string.IsNullOrWhiteSpace(machineType) || string.IsNullOrWhiteSpace(serialNumber))
+                return false;
+
+            if (endTime < startTime)
+                return false;
+
+            return await Task.Run(() =>
+            {
+                var testLogRoot = _pathManager.GetTestLogRootPath();
+                if (!Directory.Exists(testLogRoot))
+                    return false;
+
+                var safeMachineType = _pathManager.SanitizeFileName(machineType.Trim());
+                var searchPattern = $"{safeMachineType}_*.csv";
+                var expectedMachineType = machineType.Trim();
+                var expectedSerialNumber = serialNumber.Trim();
+
+                foreach (var monthFolder in GetMonthFoldersInRange(startTime, endTime))
+                {
+                    string[] csvFiles;
+                    try
+                    {
+                        csvFiles = Directory.GetFiles(monthFolder, searchPattern);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "重复测试检查扫描月份文件夹失败: {Folder}", monthFolder);
+                        continue;
+                    }
+
+                    foreach (var csvFile in csvFiles)
+                    {
+                        if (CsvFileContainsRecord(csvFile, expectedMachineType, expectedSerialNumber, startTime, endTime))
+                        {
+                            _logger.LogWarning(
+                                "[重复测试] 最近记录命中 - 机种:{MachineType}, SN:{SerialNumber}, 文件:{FileName}",
+                                machineType, serialNumber, Path.GetFileName(csvFile));
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            });
+        }
+
+        /// <summary>
         /// 获取所有机种名称
         /// </summary>
         public async Task<List<string>> GetMachineTypesAsync()
@@ -230,12 +287,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// 构建 CSV 数据行
         /// 格式：序号,机种名称,序列号,方案名称,检查者,综合判定,{动态值...},日期,时间
         /// </summary>
-        private string BuildCsvDataRow(LogRecord record, string filePath)
+        private string BuildCsvDataRow(LogRecord record, int rowIndex)
         {
             var dataBuilder = new StringBuilder();
-
-            int rowCount = _pathManager.CountDataRows(filePath);
-            int rowIndex = rowCount + 1;
 
             // 固定列
             dataBuilder.Append(rowIndex);
@@ -453,6 +507,66 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             }
 
             return result.OrderBy(d => d).ToList();
+        }
+
+        private bool CsvFileContainsRecord(
+            string filePath,
+            string machineType,
+            string serialNumber,
+            DateTime startTime,
+            DateTime endTime)
+        {
+            try
+            {
+                var encoding = DetectFileEncoding(filePath);
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
+
+                var headerLine = reader.ReadLine();
+                if (string.IsNullOrWhiteSpace(headerLine))
+                    return false;
+
+                var headers = ParseCsvLine(headerLine);
+                var headerMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < headers.Length; i++)
+                {
+                    var headerName = headers[i].Trim();
+                    if (!headerMap.ContainsKey(headerName))
+                    {
+                        headerMap[headerName] = i;
+                    }
+                }
+
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    var columns = ParseCsvLine(line);
+                    var rowMachineType = GetColumnValue(headerMap, columns, "机种名称");
+                    var rowSerialNumber = GetColumnValue(headerMap, columns, "序列号");
+
+                    if (!string.Equals(rowMachineType, machineType, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(rowSerialNumber, serialNumber, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var timestamp = ParseDateTime(
+                        GetColumnValue(headerMap, columns, "日期"),
+                        GetColumnValue(headerMap, columns, "时间"));
+
+                    if (timestamp >= startTime && timestamp <= endTime)
+                        return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "重复测试检查解析 CSV 失败: {File}", Path.GetFileName(filePath));
+            }
+
+            return false;
         }
 
         /// <summary>

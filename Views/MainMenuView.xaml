@@ -67,12 +67,6 @@
                     Foreground="White"
                     FontWeight="Bold"/>
 
-            <Button x:Name="OperatorSettingsBtn" 
-                    Content="👤 作业员设定"
-                    Background="#9B59B6"
-                    Foreground="White"
-                    FontWeight="Bold"/>
-
             <Button x:Name="PlanSettingBtn" 
                     Content="📋 方案设定"
                     Background="#E67E22"

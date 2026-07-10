@@ -2,9 +2,12 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.Measurements;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 var tests = new List<(string Name, Action Body)>
@@ -58,6 +61,103 @@ var tests = new List<(string Name, Action Body)>
 
         config.ContinueTestingAfterNg = false;
         AssertEqual(false, config.ContinueTestingAfterNg);
+    }),
+    ("NG 结果保存设置默认开启以兼容旧配置", () =>
+    {
+        var settings = new DeviceSettings();
+        AssertEqual(true, settings.SaveNgInspectionResult);
+    }),
+    ("CSV 最近记录查询只命中指定机种和一个月内序列号", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-exists-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["CsvStorage:RootPath"] = root,
+                    ["CsvStorage:MaxRowsPerFile"] = "50000"
+                })
+                .Build();
+
+            var pathManager = new CsvStoragePathManager(
+                new CsvStorageSettings(configuration),
+                NullLogger<CsvStoragePathManager>.Instance);
+            var storage = new CsvTestRecordStorage(
+                pathManager,
+                new EmptyPlanStorageService(),
+                NullLogger<CsvTestRecordStorage>.Instance);
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-001", DateTime.Now.AddDays(-3))).GetAwaiter().GetResult();
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-OLD", DateTime.Now.AddMonths(-2))).GetAwaiter().GetResult();
+            storage.SaveRecordAsync(CreateLogRecord("E78", "P1", "SN-001", DateTime.Now.AddDays(-1))).GetAwaiter().GetResult();
+
+            var start = DateTime.Today.AddMonths(-1);
+            var end = DateTime.Now;
+
+            AssertEqual(true, storage.ExistsRecentTestRecordAsync("GM", "SN-001", start, end).GetAwaiter().GetResult());
+            AssertEqual(false, storage.ExistsRecentTestRecordAsync("GM", "SN-OLD", start, end).GetAwaiter().GetResult());
+            AssertEqual(false, storage.ExistsRecentTestRecordAsync("GM", "SN-NONE", start, end).GetAwaiter().GetResult());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    }),
+    ("CSV sequential save keeps row index and rolls file", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-row-index-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["CsvStorage:RootPath"] = root,
+                    ["CsvStorage:MaxRowsPerFile"] = "3"
+                })
+                .Build();
+
+            var pathManager = new CsvStoragePathManager(
+                new CsvStorageSettings(configuration),
+                NullLogger<CsvStoragePathManager>.Instance);
+            var storage = new CsvTestRecordStorage(
+                pathManager,
+                new EmptyPlanStorageService(),
+                NullLogger<CsvTestRecordStorage>.Instance);
+
+            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
+            for (int i = 1; i <= 5; i++)
+            {
+                storage.SaveRecordAsync(CreateLogRecord("GM", "P1", $"SN-{i:000}", timestamp.AddSeconds(i)))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var files = Directory.GetFiles(monthFolder, "*.csv").OrderBy(x => x).ToList();
+            AssertEqual(2, files.Count);
+
+            var firstFileRows = ReadCsvDataRows(files[0]);
+            var secondFileRows = ReadCsvDataRows(files[1]);
+            AssertEqual(3, firstFileRows.Count);
+            AssertEqual(2, secondFileRows.Count);
+
+            AssertEqual("1", firstFileRows[0].Split(',')[0]);
+            AssertEqual("2", firstFileRows[1].Split(',')[0]);
+            AssertEqual("3", firstFileRows[2].Split(',')[0]);
+            AssertEqual("1", secondFileRows[0].Split(',')[0]);
+            AssertEqual("2", secondFileRows[1].Split(',')[0]);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }),
     ("StoppedBySingleItemNg 状态和停止原因枚举存在", () =>
     {
@@ -226,4 +326,43 @@ static void AssertThrows<TException>(Action action)
     }
 
     throw new InvalidOperationException($"expected {typeof(TException).Name}, no exception");
+}
+
+static List<string> ReadCsvDataRows(string filePath)
+{
+    return File.ReadAllLines(filePath)
+        .Skip(1)
+        .Where(line => !string.IsNullOrWhiteSpace(line))
+        .ToList();
+}
+
+static LogRecord CreateLogRecord(string machineType, string planName, string serialNumber, DateTime timestamp)
+{
+    return new LogRecord
+    {
+        Timestamp = timestamp,
+        Series = machineType,
+        MachineType = machineType,
+        SerialNumber = serialNumber,
+        PlanName = planName,
+        Operator = "测试员",
+        FinalResult = "OK",
+        PinResults =
+        [
+            new PinResult { PinName = "A1-B1", Result = "OK" }
+        ]
+    };
+}
+
+sealed class EmptyPlanStorageService : IPlanStorageService
+{
+    public Task DeletePlanAsync(string machineType, string planName) => Task.CompletedTask;
+
+    public Task<List<string>> GetAllMachineTypesAsync() => Task.FromResult(new List<string>());
+
+    public Task<List<string>> GetPlanNamesByMachineTypeAsync(string machineType) => Task.FromResult(new List<string>());
+
+    public Task<List<PlanModel>> LoadAllPlansAsync() => Task.FromResult(new List<PlanModel>());
+
+    public Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null) => Task.CompletedTask;
 }

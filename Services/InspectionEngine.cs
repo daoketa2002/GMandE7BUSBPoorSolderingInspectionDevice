@@ -363,7 +363,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         _inspectionCts.Token).ConfigureAwait(false);
 
                 // 正常完成时只写 DT304/DT305 最终结果。
-                // DT120/DT234 的正常完成收口必须等用户处理保存弹窗后由 TestPageViewModel 执行。
+                // DT120/DT234 的正常完成收口必须等 TestPageViewModel 完成保存策略处理后执行。
                 totalSw.Stop();
                 LogBeat(inspectionId, "单件总耗时", totalSw.ElapsedMilliseconds);
                 _inspectionCts.Token.ThrowIfCancellationRequested();

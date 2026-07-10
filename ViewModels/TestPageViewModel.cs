@@ -17,6 +17,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
@@ -30,8 +31,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 /// EmergencyStop:  急停中 — DT123 急停，必须复位
 /// Resetting:      复位中 — DT121 复位处理中
 /// ResetFailed:    复位失败 — 引擎超时未退出，待操作员重试
-/// CompletedPass:  检测完成-良品（OK）— 等待操作员保存/取消
-/// CompletedFail:  检测完成-不良（NG）— 等待操作员保存/取消
+/// CompletedPass:  检测完成-良品（OK）— 等待操作员复位
+/// CompletedFail:  检测完成-不良（NG）— 等待操作员复位
 /// Error:          异常 — 板离或不可继续错误
 /// SingleItemNgStopped: 单项 NG 后按系统设置停止本轮
 /// </summary>
@@ -63,6 +64,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private readonly IDeviceSettingsService _settingsService;
     private readonly ITestRecordStorage _testRecordStorage;
     private readonly IConfiguration _configuration;
+    private readonly IServiceProvider _serviceProvider;
 
     // 硬件服务
 
@@ -104,8 +106,17 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>启动失败后是否已清除 DT120（防止重复触发失败日志刷屏）</summary>
     private bool _startupCleared;
 
-    /// <summary>是否正在显示保存对话框（防止重复弹窗）</summary>
-    private bool _isShowingSaveDialog;
+    /// <summary>是否正在处理检测完成收口（防止重复保存、重复清 PLC）。</summary>
+    private bool _inspectionCompletionInProgress;
+
+    /// <summary>重复测试检查防抖取消源。</summary>
+    private CancellationTokenSource? _duplicateCheckCts;
+
+    /// <summary>已提示并允许继续的机种和序列号组合，避免同一组合反复弹窗。</summary>
+    private string? _lastDuplicateCheckKey;
+
+    /// <summary>程序主动清空机种/SN 时抑制重复测试检查。</summary>
+    private bool _suppressDuplicateCheck;
 
     /// <summary>是否正在显示急停对话框（防止轮询重复弹窗）</summary>
     private bool _isShowingEmergencyDialog;
@@ -206,6 +217,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         IPlcDevice plcDevice,
         IMultimeterDevice multimeterDevice,
         IConfiguration configuration,
+        IServiceProvider serviceProvider,
         InspectionEngine? inspectionEngine = null)
     {
         _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
@@ -220,6 +232,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
         _multimeterDevice = multimeterDevice ?? throw new ArgumentNullException(nameof(multimeterDevice));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _inspectionEngine = inspectionEngine;
 
         // 初始化 UiState 为待机
@@ -466,6 +479,31 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogInformation("[状态切换] {OldState} -> {NewState}, Text={SensorStatusText}",
                 oldState, state, SensorStatusText);
         }
+
+        NotifyChangeOperatorCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// 刷新作业员切换命令状态。命令绑定属于 WPF UI 对象，必须回到 UI Dispatcher 线程通知。
+    /// </summary>
+    private void NotifyChangeOperatorCanExecuteChanged()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            _logger.LogDebug("[作业员命令] Dispatcher 不可用，跳过 CanExecute 刷新");
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            ChangeOperatorCommand.NotifyCanExecuteChanged();
+            return;
+        }
+
+        _ = dispatcher.BeginInvoke(
+            new Action(ChangeOperatorCommand.NotifyCanExecuteChanged),
+            DispatcherPriority.Normal);
     }
 
     /// <summary>
@@ -481,6 +519,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         _currentControlAction = action;
+        NotifyChangeOperatorCanExecuteChanged();
         _logger.LogWarning("[运行控制][{Action}][进入] UiState={UiState}", action, UiState);
         return true;
     }
@@ -525,6 +564,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         _logger.LogWarning("[运行控制][{Action}][退出] UiState={UiState}", action, UiState);
         _currentControlAction = InspectionControlAction.None;
+        NotifyChangeOperatorCanExecuteChanged();
         _controlActionLock.Release();
     }
 
@@ -676,9 +716,47 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [ObservableProperty]
     private bool _isOperatorEditable = true;
 
+    [RelayCommand(CanExecute = nameof(CanChangeOperator))]
+    private async Task ChangeOperatorAsync()
+    {
+        var dialog = _serviceProvider.GetRequiredService<OperatorSelectionDialog>();
+        dialog.Owner = Application.Current.MainWindow;
+        var confirmed = dialog.ShowDialog() == true;
+        if (!confirmed || !_operatorStateService.HasOperator)
+            return;
+
+        OperatorName = _operatorStateService.CurrentOperatorName;
+        AddLog($"作业员已切换为：{OperatorName}");
+        _logger.LogWarning("[作业员][审计] 运行页检测前切换作业员: {Operator}", OperatorName);
+        RefreshReadyOrCanStartState();
+        await Task.CompletedTask;
+    }
+
+    private bool CanChangeOperator()
+    {
+        return _currentControlAction == InspectionControlAction.None
+               && UiState is TestUIState.Ready or TestUIState.CanStart;
+    }
+
     partial void OnModelNameChanged(string value)
     {
+        if (!_suppressDuplicateCheck)
+        {
+            _lastDuplicateCheckKey = null;
+        }
+
         _ = HandleModelNameChangedAsync(value);
+        ScheduleDuplicateRecordCheck();
+    }
+
+    partial void OnSerialNumberChanged(string value)
+    {
+        if (!_suppressDuplicateCheck)
+        {
+            _lastDuplicateCheckKey = null;
+        }
+
+        ScheduleDuplicateRecordCheck();
     }
 
     private async Task HandleModelNameChangedAsync(string newMachineType)
@@ -691,6 +769,109 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             TestItems.Clear();
             AddLog($"⚠️ 机种已切换为 [{newMachineType}]，方案 [{SchemeName}] 不属于该机种，检测列表已清空，请重新选择方案");
         }
+    }
+
+    private void ScheduleDuplicateRecordCheck()
+    {
+        if (_suppressDuplicateCheck)
+            return;
+
+        if (string.IsNullOrWhiteSpace(ModelName) || string.IsNullOrWhiteSpace(SerialNumber))
+            return;
+
+        _duplicateCheckCts?.Cancel();
+        _duplicateCheckCts?.Dispose();
+        _duplicateCheckCts = new CancellationTokenSource();
+        var token = _duplicateCheckCts.Token;
+        var machineType = ModelName.Trim();
+        var serialNumber = SerialNumber.Trim();
+
+        _ = CheckDuplicateRecordAfterDelayAsync(machineType, serialNumber, token);
+    }
+
+    private async Task CheckDuplicateRecordAfterDelayAsync(string machineType, string serialNumber, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(400, token).ConfigureAwait(false);
+
+            var inputStillCurrent = await Application.Current.Dispatcher.InvokeAsync(() =>
+                !token.IsCancellationRequested
+                && !_suppressDuplicateCheck
+                && string.Equals(ModelName.Trim(), machineType, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(SerialNumber.Trim(), serialNumber, StringComparison.OrdinalIgnoreCase));
+
+            if (!inputStillCurrent)
+                return;
+
+            var key = $"{machineType}|{serialNumber}";
+            if (string.Equals(_lastDuplicateCheckKey, key, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var startTime = DateTime.Today.AddMonths(-1);
+            var endTime = DateTime.Now;
+            var exists = await _testRecordStorage.ExistsRecentTestRecordAsync(
+                machineType, serialNumber, startTime, endTime).ConfigureAwait(false);
+
+            if (!exists || token.IsCancellationRequested)
+                return;
+
+            var showPromptOperation = Application.Current.Dispatcher.InvokeAsync(
+                () => ShowDuplicateRecordPromptAsync(machineType, serialNumber, key, token));
+            await showPromptOperation.Task.Unwrap().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // 输入继续变化或页面离开时取消，属于正常路径。
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[重复测试] 检查最近记录失败");
+        }
+    }
+
+    private async Task ShowDuplicateRecordPromptAsync(
+        string machineType,
+        string serialNumber,
+        string key,
+        CancellationToken token)
+    {
+        if (token.IsCancellationRequested
+            || _suppressDuplicateCheck
+            || !string.Equals(ModelName.Trim(), machineType, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(SerialNumber.Trim(), serialNumber, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        AddLog($"检测到最近一个月重复测试记录：机种={machineType}, 序列号={serialNumber}");
+        _logger.LogWarning("[重复测试][审计] 最近一个月已有记录：机种={MachineType}, SN={SerialNumber}",
+            machineType, serialNumber);
+
+        var confirmed = await _notificationService.ConfirmAsync(
+            $"该基板在最近一个月内已有测试记录。\n\n机种名称：{machineType}\n序列号：{serialNumber}\n\n是否继续测试？",
+            "重复测试提醒").ConfigureAwait(true);
+
+        if (confirmed)
+        {
+            _lastDuplicateCheckKey = key;
+            AddLog("操作员确认继续重复测试");
+            return;
+        }
+
+        _suppressDuplicateCheck = true;
+        try
+        {
+            ModelName = string.Empty;
+            SerialNumber = string.Empty;
+            _lastDuplicateCheckKey = null;
+        }
+        finally
+        {
+            _suppressDuplicateCheck = false;
+        }
+
+        AddLog("操作员取消重复测试，已清空机种和序列号");
     }
 
     #endregion
@@ -820,28 +1001,25 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     #endregion
 
-    #region 待保存态 —— 弹窗确认与事务保存
+    #region 检测完成态 —— 自动保存与 PLC 收口
 
     /// <summary>
     /// 全部 Pin 检测完成后触发。
-    /// 使用当前 ModelName + SchemeName 精确匹配方案，不再 allPlans.FirstOrDefault()。
+     /// 使用当前 ModelName + SchemeName 精确匹配方案，不再 allPlans.FirstOrDefault()。
     /// </summary>
     private async Task OnAllPinsTestedAsync()
     {
-        // 防重入：如果已经弹出保存对话框，直接返回，避免弹窗堆叠
-        if (_isShowingSaveDialog)
+        if (_inspectionCompletionInProgress)
         {
-            _logger.LogWarning("[UI流程] 保存对话框已在显示中，跳过重复弹窗");
+            _logger.LogWarning("[UI流程] 检测完成收口正在执行，跳过重复完成处理");
             return;
         }
 
-        _isShowingSaveDialog = true;
+        _inspectionCompletionInProgress = true;
         try
         {
             var finalResult = TestItems.All(i => i.Judgment == "OK") ? "OK" : "NG";
-            FinalJudgment = finalResult;
-
-            SetUiState(finalResult == "OK" ? TestUIState.CompletedPass : TestUIState.CompletedFail);
+            AddLog($"所有检查项目已执行完成，正在处理检测结果，综合判定：{finalResult}");
 
             TotalCount++;
             if (finalResult == "OK") PassCount++;
@@ -851,47 +1029,50 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var machineType = string.IsNullOrWhiteSpace(ModelName) ? "Unknown" : ModelName;
             var planName = string.IsNullOrWhiteSpace(SchemeName) ? "Unknown" : SchemeName;
 
-            var ngItems = TestItems.Where(i => i.Judgment == "NG").ToList();
-            var ngDetail = ngItems.Any()
-                ? string.Join("\n", ngItems.Select(i => $"  • {i.ItemName}: {i.CheckResult} → NG"))
-                : "无";
+            var settings = _settingsService.LoadSettings();
+            var shouldSave = finalResult == "OK"
+                || (settings.ContinueTestingAfterNg && settings.SaveNgInspectionResult);
 
-            var confirmed = await _notificationService.ConfirmAsync(
-                $"当前方案 [{planName}] 所有项目已检测完毕\n\n" +
-                $"综合判定: [{finalResult}]\n\n" +
-                $"NG项目:\n{ngDetail}\n\n" +
-                $"是否保存本次检测记录？",
-                "检测完成");
-
-            if (confirmed)
+            if (shouldSave)
             {
-                await SaveLogToDatabaseAsync(machineType, planName, finalResult);
-                await _notificationService.ShowInfoAsync("检测记录已保存！", "保存成功");
+                AddLog(finalResult == "OK"
+                    ? "正在保存检测记录..."
+                    : "当前设置允许保存 NG 检测记录，正在保存...");
 
-                bool cleanupSucceeded = await CompleteNormalInspectionHandshakeAsync().ConfigureAwait(false);
-                if (!cleanupSucceeded)
+                var saved = await SaveLogToDatabaseAsync(machineType, planName, finalResult).ConfigureAwait(false);
+                if (!saved)
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        SetUiState(TestUIState.Error);
+                        AddLog("检测已完成，但检测记录保存失败；本轮结果已保留，请处理保存异常后复位。");
+                    });
                     return;
-
-                await Application.Current.Dispatcher.InvokeAsync(ResetToReadyState);
+                }
             }
             else
             {
-                var cleanupOk2 = await CompleteNormalInspectionHandshakeAsync().ConfigureAwait(false);
-                if (!cleanupOk2)
-                    return;
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    _inspectionStarted = false;
-                    _startSignalHandled = false;
-                    ClearTestItemsForRestart();
-                    ForceRefreshReadyOrCanStartState();
-                });
-                AddLog("📝 操作员取消保存，检测结果已清空，可重新测试");
+                _logger.LogWarning(
+                    "[检测完成][审计] 最终结果为 NG，设置为不保存 NG 检测记录：ContinueTestingAfterNg={ContinueTestingAfterNg}, SaveNgInspectionResult={SaveNgInspectionResult}",
+                    settings.ContinueTestingAfterNg, settings.SaveNgInspectionResult);
+                AddLog("当前设置为不保存 NG 检测记录，本轮跳过 CSV 保存");
             }
+
+            AddLog("正在执行 PLC 检测完成收口...");
+            bool cleanupSucceeded = await CompleteNormalInspectionHandshakeAsync().ConfigureAwait(false);
+            if (!cleanupSucceeded)
+                return;
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                FinalJudgment = finalResult;
+                SetUiState(finalResult == "OK" ? TestUIState.CompletedPass : TestUIState.CompletedFail);
+                AddLog($"本轮检测完成：{finalResult}");
+            });
         }
         finally
         {
-            _isShowingSaveDialog = false;
+            _inspectionCompletionInProgress = false;
         }
 
         // 本轮检测完成后保持当前测量模式，不强制恢复电阻模式
@@ -903,7 +1084,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 保存检测记录到 CSV。
     /// ★ 使用当前 ModelName + SchemeName 精确匹配，不再 allPlans.FirstOrDefault()。
     /// </summary>
-    private async Task SaveLogToDatabaseAsync(string machineType, string planName, string finalResult)
+    private async Task<bool> SaveLogToDatabaseAsync(string machineType, string planName, string finalResult)
     {
         try
         {
@@ -925,13 +1106,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             };
 
             await _testRecordStorage.SaveRecordAsync(record);
-            AddLog($"💾 检测记录已保存 - SN:{SerialNumber}, 结果:{finalResult}");
+            AddLog($"检测记录已保存 - SN:{SerialNumber}, 结果:{finalResult}");
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "保存检测记录失败");
-            AddLog($"❌ 保存失败: {ex.Message}");
+            AddLog($"保存失败: {ex.Message}");
             await _notificationService.ShowErrorAsync($"保存失败：{ex.Message}", "错误");
+            return false;
         }
     }
 
@@ -1099,11 +1282,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>
     /// 正常完成后的 PLC 握手收口。
-    /// 必须在用户处理保存/取消弹窗之后执行，不能在启动复核通过或检测刚完成时提前清 DT120。
+    /// 必须在保存完成或确认跳过保存之后执行，不能在启动复核通过或检测刚完成时提前清 DT120。
     /// </summary>
     private async Task<bool> CompleteNormalInspectionHandshakeAsync()
     {
-        _logger.LogWarning("[PLC动作][审计] 检测完成且保存弹窗已处理，开始清理本轮启动握手信号");
+        _logger.LogWarning("[PLC动作][审计] 检测完成且保存策略已处理，开始清理本轮启动握手信号");
 
         var cleanupResult = await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -1131,6 +1314,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         });
 
         _logger.LogWarning("[PLC动作][审计] 本轮正常完成收口结束：DT120/DT234/DT304/DT305 已清除，界面结果保留到复位");
+        AddLog("PLC 检测完成收口完成");
         return true;
     }
 
@@ -1215,7 +1399,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         string confirmMsg = UiState switch
         {
             TestUIState.Testing => "正在测试中，确定要终止当前测试并返回主菜单吗？\n未完成的测试数据将丢失！",
-            TestUIState.CompletedPass or TestUIState.CompletedFail => "有未保存的检测结果，返回将丢失本次所有数据，确定继续吗？",
+            TestUIState.CompletedPass or TestUIState.CompletedFail => "当前检测结果正在等待复位，返回将丢失本轮界面结果，确定继续吗？",
             TestUIState.EmergencyStop => "急停中返回主菜单将丢失当前数据，确定继续吗？",
             _ => "确定要返回主菜单吗？"
         };
@@ -1234,7 +1418,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         try
         {
             _logger.LogWarning("[终止按钮][审计] 终止按钮触发，写 DT306=1");
-            await _plcDevice.RequestTerminateAsync(CancellationToken.None).ConfigureAwait(false);
+            await _plcDevice.RequestTerminateAsync(CancellationToken.None);
             AddLog("终止信号(DT306=1)已写入");
 
             if (UiState == TestUIState.Testing && _inspectionEngine != null)
@@ -1251,15 +1435,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             StopPlcPolling();
-            await ClearAllRunSignalsAsync(CancellationToken.None).ConfigureAwait(false);
-            await _multimeterDevice.ReleaseToLocalAsync().ConfigureAwait(false);
+            await ClearAllRunSignalsAsync(CancellationToken.None);
+            await _multimeterDevice.ReleaseToLocalAsync();
             _logger.LogInformation("[万用表收尾] 终止按钮触发，万用表已退出远程控制");
 
-            await Application.Current.Dispatcher.Invoke(async () =>
-            {
-                ResetToReadyState();
-                await _navigationService.NavigateToAsync<MainMenuView>();
-            });
+            ResetToReadyState();
+            await _navigationService.NavigateToAsync<MainMenuView>();
 
             _ = Task.Run(async () =>
             {
@@ -2646,14 +2827,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         else
         {
-            // 正常完成 → 处理保存弹窗
+            // 正常完成 → 自动保存、PLC 收口，最后再显示 OK/NG
             await Application.Current.Dispatcher.InvokeAsync(async () =>
             {
-                var msg = result.IsAllPassed
-                    ? $"✅ 检测完成: 良品 (耗时{result.Duration.TotalSeconds:F1}s)"
-                    : $"❌ 检测完成: 不良 (耗时{result.Duration.TotalSeconds:F1}s)";
-                AddLog(msg);
-
+                AddLog($"所有检查项目已执行完成，正在处理结果... (耗时{result.Duration.TotalSeconds:F1}s)");
                 await OnAllPinsTestedAsync();
             });
         }
@@ -2850,13 +3027,22 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogInformation("进入运行界面");
 
-        var operatorName = _operatorStateService?.CurrentOperatorName ?? "默认作业员";
+        var hasOperator = _operatorStateService?.HasOperator == true;
+        var operatorName = hasOperator ? _operatorStateService.CurrentOperatorName : string.Empty;
         OperatorName = operatorName;
         IsOperatorEditable = false;
         IsInputEnabled = true;
         UiState = TestUIState.Ready;
 
-        AddLog($"当前作业员: {operatorName}");
+        if (hasOperator)
+        {
+            AddLog($"当前作业员: {operatorName}");
+        }
+        else
+        {
+            AddLog("未选择作业员，请返回主菜单重新进入运行界面并选择作业员");
+            _logger.LogWarning("[运行页初始化][审计] 当前作业员为空，运行页不允许启动");
+        }
 
         // 加载方案信息
         await RefreshPlanNameOptionsAsync(ModelName);
@@ -2890,6 +3076,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     public async Task OnNavigatedFromAsync()
     {
         _logger.LogInformation("离开运行界面");
+        _duplicateCheckCts?.Cancel();
+        _duplicateCheckCts?.Dispose();
+        _duplicateCheckCts = null;
         StopPlcPolling();
         UnsubscribeFromHardwareEvents();
 
@@ -2999,6 +3188,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _clockTimer?.Stop();
         _clockTimer = null;
+        _duplicateCheckCts?.Cancel();
+        _duplicateCheckCts?.Dispose();
+        _duplicateCheckCts = null;
         StopPlcPolling();
         UnsubscribeFromHardwareEvents();
         _controlActionLock.Dispose();

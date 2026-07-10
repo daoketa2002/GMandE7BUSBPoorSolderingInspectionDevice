@@ -36,6 +36,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         public bool ContinueTestingAfterNg { get; set; } = true;
 
         /// <summary>
+        /// 单项 NG 后继续测试时，最终 NG 结果是否保存到 CSV。
+        /// 默认 true，用于兼容旧配置文件，避免升级后 NG 记录突然不落盘。
+        /// </summary>
+        public bool SaveNgInspectionResult { get; set; } = true;
+
+        /// <summary>
         /// DAQ-9600
         /// </summary>
         public TcpClientGWInstekSettings TcpClientGWInstek { get; set; } = new TcpClientGWInstekSettings();

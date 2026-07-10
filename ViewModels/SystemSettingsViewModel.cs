@@ -70,6 +70,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private bool _continueTestingAfterNg = true;
 
+        /// <summary>
+        /// 单项 NG 后继续测试时，最终 NG 记录是否继续保存。
+        /// 仅在 ContinueTestingAfterNg 开启时生效。
+        /// </summary>
+        [ObservableProperty]
+        private bool _saveNgInspectionResult = true;
+
         /// <summary>当前选中的Tab页索引（0=常规设置, 1=PLC, 2=扫描仪, 3=万用表）</summary>
         [ObservableProperty]
         private int _selectedTabIndex = 0;
@@ -253,13 +260,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     ScannerSerialCommunication = ScannerConfig,
                     GDM9060Communication = Gdm9060Config,
                     IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled,
-                    ContinueTestingAfterNg = ContinueTestingAfterNg
+                    ContinueTestingAfterNg = ContinueTestingAfterNg,
+                    SaveNgInspectionResult = ContinueTestingAfterNg && SaveNgInspectionResult
                 };
 
                 _settingsService.SaveSettings(deviceSettings);
                 await SaveCsvStoragePathAsync();
 
-                _logger.Warning("[系统设置][审计] 单项 NG 后继续测试={ContinueTestingAfterNg}", ContinueTestingAfterNg);
+                _logger.Warning(
+                    "[系统设置][审计] 单项 NG 后继续测试={ContinueTestingAfterNg}, 单项 NG 后继续保存={SaveNgInspectionResult}",
+                    ContinueTestingAfterNg, SaveNgInspectionResult);
                 await _notificationService.ShowInfoAsync("所有配置已保存成功！存储路径修改立即生效，无需重启。");
             }
             catch (Exception ex)
@@ -793,6 +803,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 IsPlcCommunicationTestEnabled = deviceSettings.IsPlcCommunicationTestEnabled;
                 ContinueTestingAfterNg = deviceSettings.ContinueTestingAfterNg;
+                SaveNgInspectionResult = deviceSettings.SaveNgInspectionResult;
                 LoadCsvStoragePath();
 
                 _logger.Debug("设备配置加载完成");

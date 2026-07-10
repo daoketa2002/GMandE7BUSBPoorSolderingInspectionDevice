@@ -30,7 +30,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
             // 绑定各按钮命令
             RunScreenBtn.Command = viewModel.NavigateToRunScreenCommand;
-            OperatorSettingsBtn.Command = viewModel.NavigateToOperatorSettingsCommand;
             PlanSettingBtn.Command = viewModel.NavigateToPlanSettingCommand;      
             DataExtractBtn.Command = viewModel.NavigateToDataExtractCommand;
             PlcTestBtn.Command = viewModel.NavigateToPlcCommunicationTestCommand;

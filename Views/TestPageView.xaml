@@ -408,27 +408,21 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Text="作业员：" FontSize="16" FontWeight="Bold"
                                Foreground="#495057" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox Text="{Binding OperatorName, UpdateSourceTrigger=PropertyChanged}"
-                             IsReadOnly="{Binding IsOperatorEditable, Converter={StaticResource BoolInverterConverter}}"
-                             FontSize="16" Width="180" Height="36"
-                             VerticalContentAlignment="Center" BorderBrush="#CED4DA"
-                             x:Name="OperatorTextBox" KeyDown="InputTextBox_KeyDown">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox">
-                                <Setter Property="Background" Value="White"/>
-                                <Setter Property="BorderBrush" Value="#CED4DA"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsOperatorEditable}" Value="False">
-                                        <Setter Property="Background" Value="#E8F8F5"/>
-                                        <Setter Property="BorderBrush" Value="#27AE60"/>
-                                        <Setter Property="BorderThickness" Value="2"/>
-                                        <Setter Property="FontWeight" Value="Bold"/>
-                                        <Setter Property="Foreground" Value="#1E8449"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
+                    <Border Width="160" Height="36" Background="#E8F8F5"
+                            BorderBrush="#27AE60" BorderThickness="2" CornerRadius="4"
+                            Margin="0,0,8,0">
+                        <TextBlock Text="{Binding OperatorName}"
+                                   FontSize="16"
+                                   FontWeight="Bold"
+                                   Foreground="#1E8449"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </Border>
+                    <Button Content="重新选择"
+                            Width="86"
+                            Height="36"
+                            Command="{Binding ChangeOperatorCommand}"/>
                 </StackPanel>
             </UniformGrid>
         </Border>

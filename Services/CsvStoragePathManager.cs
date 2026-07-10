@@ -272,7 +272,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 int lineCount = 0;
                 bool isFirstLine = true;
 
-                using (var reader = new StreamReader(filePath, Encoding.UTF8, true))
+                using var stream = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite);
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
                 {
                     while (reader.ReadLine() != null)
                     {

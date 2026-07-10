@@ -50,6 +50,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
             int pageSize = 20);
 
         /// <summary>
+        /// 判断指定机种和序列号在时间范围内是否已有检测记录。
+        /// 用于运行页重复测试提醒，找到第一条即可返回。
+        /// </summary>
+        Task<bool> ExistsRecentTestRecordAsync(
+            string machineType,
+            string serialNumber,
+            DateTime startTime,
+            DateTime endTime);
+
+        /// <summary>
         /// 获取所有机种名称（去重）
         /// </summary>
         Task<List<string>> GetMachineTypesAsync();

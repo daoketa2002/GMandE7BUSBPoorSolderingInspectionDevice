@@ -135,8 +135,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
         /// <summary>
         /// 输入框回车键自动跳转焦点
-        /// 机种名称 → 序列号 → 作业员
-        /// 在作业员输入框按回车不做特殊处理（测试由PLC信号触发）
+        /// 机种名称 → 序列号。作业员由选择弹窗维护。
         /// </summary>
         private void InputTextBox_KeyDown(object sender, KeyEventArgs e)
         {
@@ -152,11 +151,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
                 }
                 else if (sender == SerialNumberTextBox)
                 {
-                    // 序列号 → 跳转到作业员
-                    OperatorTextBox.Focus();
-                    OperatorTextBox.SelectAll();
+                    SerialNumberTextBox.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
                 }
-                // 作业员输入框按回车不自动触发测试（由PLC信号触发）
             }
         }
     }

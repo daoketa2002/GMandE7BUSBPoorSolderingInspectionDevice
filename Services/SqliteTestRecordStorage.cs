@@ -134,6 +134,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return (records, totalCount);
         }
 
+        public async Task<bool> ExistsRecentTestRecordAsync(
+            string machineType,
+            string serialNumber,
+            DateTime startTime,
+            DateTime endTime)
+        {
+            if (string.IsNullOrWhiteSpace(machineType) || string.IsNullOrWhiteSpace(serialNumber))
+                return false;
+
+            await using var dbContext = await _dbContextFactory.CreateDbContextAsync();
+            var expectedMachineType = machineType.Trim();
+            var expectedSerialNumber = serialNumber.Trim();
+
+            return await dbContext.LogRecords.AsNoTracking().AnyAsync(r =>
+                (r.MachineType == expectedMachineType || r.Series == expectedMachineType)
+                && r.SerialNumber == expectedSerialNumber
+                && r.Timestamp >= startTime
+                && r.Timestamp <= endTime);
+        }
+
         /// <summary>
         /// 获取所有机种名称
         /// </summary>
