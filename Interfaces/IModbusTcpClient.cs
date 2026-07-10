@@ -29,22 +29,22 @@ public interface IModbusTcpClient
     // ── Modbus 标准操作 ──
 
     /// <summary>读线圈 (FC 0x01)</summary>
-    Task<ModbusResponse?> ReadCoilsAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default);
+    Task<ModbusResponse?> ReadCoilsAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default, int timeoutMs = 1000);
 
     /// <summary>读保持寄存器 (FC 0x03)</summary>
-    Task<ModbusResponse?> ReadHoldingRegistersAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default);
+    Task<ModbusResponse?> ReadHoldingRegistersAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default, int timeoutMs = 1000);
 
     /// <summary>写单线圈 (FC 0x05)</summary>
-    Task<ModbusResponse?> WriteSingleCoilAsync(byte unitId, ushort address, bool value, CancellationToken ct = default);
+    Task<ModbusResponse?> WriteSingleCoilAsync(byte unitId, ushort address, bool value, CancellationToken ct = default, int timeoutMs = 1000);
 
     /// <summary>写单保持寄存器 (FC 0x06)</summary>
-    Task<ModbusResponse?> WriteSingleRegisterAsync(byte unitId, ushort address, ushort value, CancellationToken ct = default);
+    Task<ModbusResponse?> WriteSingleRegisterAsync(byte unitId, ushort address, ushort value, CancellationToken ct = default, int timeoutMs = 1000);
 
     /// <summary>写多保持寄存器 (FC 0x10)</summary>
-    Task<ModbusResponse?> WriteMultipleRegistersAsync(byte unitId, ushort startAddress, ushort[] values, CancellationToken ct = default);
+    Task<ModbusResponse?> WriteMultipleRegistersAsync(byte unitId, ushort startAddress, ushort[] values, CancellationToken ct = default, int timeoutMs = 1000);
 
     /// <summary>发送自定义 Modbus TCP 请求帧并等待匹配事务 ID 的响应</summary>
-    Task<ModbusResponse?> SendCustomRequestAsync(byte[] requestFrame, CancellationToken ct = default);
+    Task<ModbusResponse?> SendCustomRequestAsync(byte[] requestFrame, CancellationToken ct = default, int timeoutMs = 1000);
 
     /// <summary>
     /// 独立测试连接（不修改内部状态，用于设定页"测试连接"按钮）。

@@ -11,7 +11,10 @@ public class PlcOperationResult
     /// <summary>操作是否成功</summary>
     public bool IsSuccess { get; init; }
 
-    /// <summary>操作结果描述（成功/失败原因）</summary>
+    /// <summary>操作是否因取消而失败（用于区分 Cancellation 与无响应/异常）</summary>
+    public bool IsCancelled { get; init; }
+
+    /// <summary>操作结果描述（成功/失败原因/取消）</summary>
     public string Message { get; init; } = string.Empty;
 
     /// <summary>原始 Modbus 响应（仅诊断用途，业务代码不应依赖此字段做判定）</summary>
@@ -24,6 +27,10 @@ public class PlcOperationResult
     /// <summary>创建失败结果</summary>
     public static PlcOperationResult Failure(string message, ModbusResponse? rawResponse = null)
         => new() { IsSuccess = false, Message = message, RawResponse = rawResponse };
+
+    /// <summary>创建取消结果（区别于普通失败，调用方不应触发重连或弹窗）</summary>
+    public static PlcOperationResult Cancelled(string message = "操作被取消")
+        => new() { IsSuccess = false, IsCancelled = true, Message = message };
 }
 
 /// <summary>
@@ -34,6 +41,9 @@ public sealed class PlcOperationResult<T>
 {
     /// <summary>操作是否成功</summary>
     public bool IsSuccess { get; init; }
+
+    /// <summary>操作是否因取消而失败</summary>
+    public bool IsCancelled { get; init; }
 
     /// <summary>操作结果描述</summary>
     public string Message { get; init; } = string.Empty;
@@ -51,4 +61,8 @@ public sealed class PlcOperationResult<T>
     /// <summary>创建失败结果</summary>
     public static PlcOperationResult<T> Failure(string message, ModbusResponse? rawResponse = null)
         => new() { IsSuccess = false, Message = message, RawResponse = rawResponse };
+
+    /// <summary>创建取消结果（区别于普通失败，调用方不应触发重连或弹窗）</summary>
+    public static PlcOperationResult<T> Cancelled(string message = "操作被取消")
+        => new() { IsSuccess = false, IsCancelled = true, Message = message };
 }

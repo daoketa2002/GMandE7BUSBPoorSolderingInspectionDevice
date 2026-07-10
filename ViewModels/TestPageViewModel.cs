@@ -83,6 +83,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>PLC 轮询非阻塞门禁。上一轮未结束时跳过本轮，避免控制信号快照排队。</summary>
     private int _plcPollingInProgress;
 
+    /// <summary>PLC 轮询暂停标志。控制动作（Stop/Reset/EmergencyStop）执行期间为 true，暂停低优先级 UI 轮询。</summary>
+    private bool _plcPollingSuspended;
+
+    /// <summary>当前轮询操作的取消令牌源。供控制动作取消正在进行的 Poll 请求。</summary>
+    private CancellationTokenSource? _plcPollingOperationCts;
+
     /// <summary>Start/Stop/Reset/EmergencyStop/Finish 统一动作门禁。</summary>
     private readonly SemaphoreSlim _controlActionLock = new(1, 1);
 
@@ -90,7 +96,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private InspectionControlAction _currentControlAction = InspectionControlAction.None;
 
     /// <summary>轮询中上一次 PLC 输入快照，用于检测信号变化</summary>
-    private PlcMachineInputs? _lastPlcInputs;
+    private PlcControlSignals? _lastPlcInputs;
 
     /// <summary>是否已向引擎发起检测（防止 DT120=1 重复触发多次 RunInspectionAsync）</summary>
     private bool _inspectionStarted;
@@ -970,7 +976,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         await Task.Delay(100, ct).ConfigureAwait(false);
-        var first = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+        var first = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
         if (!first.IsSuccess || first.Value == null)
         {
             _logger.LogWarning("[停止流程][DT122] 第一次稳定确认读取失败：{Message}", first.Message);
@@ -984,7 +990,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         await Task.Delay(100, ct).ConfigureAwait(false);
-        var second = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+        var second = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
         if (!second.IsSuccess || second.Value == null)
         {
             _logger.LogWarning("[停止流程][DT122] 第二次稳定确认读取失败：{Message}", second.Message);
@@ -1017,7 +1023,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             await Task.Delay(100, ct).ConfigureAwait(false);
-            var readResult = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+            var readResult = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
             if (!readResult.IsSuccess || readResult.Value == null)
             {
                 _logger.LogWarning("[复位流程][DT122] 第 {Attempt} 次读取失败：{Message}", attempt, readResult.Message);
@@ -1044,31 +1050,30 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         try
         {
-            PlcOperationResult<PlcMachineInputs>? snapshot;
+            PlcOperationResult<PlcControlSignals>? snapshot;
             using (new PlcCallerScope(_logger, "ResetFlow"))
-                snapshot = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+                snapshot = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
             if (snapshot == null || !snapshot.IsSuccess || snapshot.Value == null)
             {
-                _logger.LogWarning("[复位流程][验证] 读取 PLC 输入快照失败：{Message}", snapshot.Message);
+                _logger.LogWarning("[复位流程][验证] 读取 PLC 控制信号快照失败：{Message}", snapshot.Message);
                 return ResetCompletionValidationResult.PlcReadFailed;
             }
 
-            var inputs = snapshot.Value;
+            var signals = snapshot.Value;
             _logger.LogWarning(
-                "[复位流程][验证] PLC 快照：DT120={DT120}, DT121={DT121}, DT122={DT122}, DT123={DT123}, DT302={DT302}",
-                inputs.IsStartRequested ? 1 : 0,
-                inputs.IsResetRequested ? 1 : 0,
-                inputs.IsStopRequested ? 1 : 0,
-                inputs.IsEmergencyStop ? 1 : 0,
-                inputs.IsRelayActionCompleted ? 1 : 0);
+                "[复位流程][验证] PLC 快照：DT120={DT120}, DT121={DT121}, DT122={DT122}, DT123={DT123}",
+                signals.IsStartRequested ? 1 : 0,
+                signals.IsResetRequested ? 1 : 0,
+                signals.IsStopRequested ? 1 : 0,
+                signals.IsEmergencyStop ? 1 : 0);
 
-            if (inputs.IsStartRequested)
+            if (signals.IsStartRequested)
                 return ResetCompletionValidationResult.StartSignalStillActive;
-            if (inputs.IsResetRequested)
+            if (signals.IsResetRequested)
                 return ResetCompletionValidationResult.ResetSignalStillActive;
-            if (inputs.IsStopRequested)
+            if (signals.IsStopRequested)
                 return ResetCompletionValidationResult.StopSignalStillActive;
-            if (inputs.IsEmergencyStop)
+            if (signals.IsEmergencyStop)
                 return ResetCompletionValidationResult.EmergencyStopStillActive;
             return ResetCompletionValidationResult.Success;
         }
@@ -1318,11 +1323,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 根据当前运行模式选择 PLC 轮询周期。调试模式要响应快，真实模式保留通信余量。
+    /// 根据当前运行模式选择 PLC 轮询周期。
+    /// 统一 200ms，降低常驻 Modbus 请求负载。
     /// </summary>
     private TimeSpan GetPlcPollingInterval()
     {
-        return TimeSpan.FromMilliseconds(100);
+        return TimeSpan.FromMilliseconds(200);
     }
 
     /// <summary>
@@ -1339,10 +1345,39 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// PLC 轮询主体：读取输入信号 → 更新 UI 状态 → 检测 DT120 启动请求。
+    /// 暂停低优先级 UI 轮询并取消当前正在进行的轮询请求。
+    /// 控制动作（Stop/Reset/EmergencyStop）执行前调用。
+    /// </summary>
+    private void SuspendPlcPolling()
+    {
+        _plcPollingSuspended = true;
+        _plcPollingOperationCts?.Cancel();
+        _plcPollingOperationCts?.Dispose();
+        _plcPollingOperationCts = null;
+        _logger.LogDebug("[PLC轮询] 已暂停");
+    }
+
+    /// <summary>
+    /// 恢复低优先级 UI 轮询。控制动作完成后调用。
+    /// </summary>
+    private void ResumePlcPolling()
+    {
+        _plcPollingSuspended = false;
+        _logger.LogDebug("[PLC轮询] 已恢复");
+    }
+
+    /// <summary>
+    /// PLC 轮询主体：读取控制信号 → 更新 UI 状态 → 检测 DT120 启动请求。
     /// </summary>
     private async Task PollPlcInputsAsync()
     {
+        // 控制动作执行期间暂停低优先级轮询
+        if (_plcPollingSuspended)
+        {
+            _logger.LogDebug("[PLC轮询][暂停] 控制动作执行中，跳过本轮");
+            return;
+        }
+
         if (Interlocked.Exchange(ref _plcPollingInProgress, 1) == 1)
         {
             _logger.LogDebug("[PLC轮询][跳过] 上一轮尚未结束，跳过本轮");
@@ -1353,14 +1388,27 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             if (!_plcDevice.IsConnected || _inspectionEngine == null) return;
 
-            PlcOperationResult<PlcMachineInputs>? pollResult;
+            // 创建本轮可取消令牌，供控制动作中断等待
+            _plcPollingOperationCts?.Cancel();
+            _plcPollingOperationCts?.Dispose();
+            _plcPollingOperationCts = new CancellationTokenSource();
+            var pollingCt = _plcPollingOperationCts.Token;
+
+            PlcOperationResult<PlcControlSignals>? pollResult;
             using (new PlcCallerScope(_logger, "UiPolling"))
             {
-                pollResult = await _plcDevice.ReadMachineInputsAsync(CancellationToken.None).ConfigureAwait(false);
+                pollResult = await _plcDevice.ReadControlSignalsAsync(pollingCt).ConfigureAwait(false);
             }
-            if (pollResult == null || !pollResult.IsSuccess || pollResult.Value == null)
+            if (pollResult == null || !pollResult.IsSuccess)
             {
-                _logger.LogWarning("[PLC轮询][诊断] 读取 PLC 输入失败：{Message}", pollResult?.Message ?? "null");
+                if (pollResult?.IsCancelled == true)
+                {
+                    _logger.LogInformation("[PLC轮询] 本轮读取因控制动作切换已取消");
+                }
+                else
+                {
+                    _logger.LogWarning("[PLC轮询][诊断] 读取控制信号失败：{Message}", pollResult?.Message ?? "null");
+                }
                 return;
             }
 
@@ -1378,6 +1426,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 _lastPlcInputs = inputs;
             }
         }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("[PLC轮询][取消] 本轮轮询被控制动作取消");
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[PLC轮询] 轮询异常");
@@ -1394,7 +1446,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     ///   2. 上位机操作全部完成后 → 最后清除 DT121
     ///   3. 清除 DT121 后 → 通知 PLC 上位机已就绪
     /// </summary>
-    private async Task UpdateUiStateFromPlcInputsAsync(PlcMachineInputs? previousInputs, PlcMachineInputs inputs)
+    private async Task UpdateUiStateFromPlcInputsAsync(PlcControlSignals? previousInputs, PlcControlSignals inputs)
     {
         // ── 复位信号边沿检测：DT121 从 1→0 时重置处理标志 ──
         if (!inputs.IsResetRequested)
@@ -1547,7 +1599,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>
     /// DT123 只按首次高电平或 0→1 上升沿解释为新的急停事件，避免旧快照重复触发急停流程。
     /// </summary>
-    private static bool IsEmergencyStopTriggered(PlcMachineInputs? previousInputs, PlcMachineInputs currentInputs)
+    private static bool IsEmergencyStopTriggered(PlcControlSignals? previousInputs, PlcControlSignals currentInputs)
     {
         return previousInputs == null
             ? currentInputs.IsEmergencyStop
@@ -1850,6 +1902,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
+        // 暂停低优先级 UI 轮询，减少请求并发，避免 Polling 与 Engine/复位清理交叉
+        SuspendPlcPolling();
+
         // 复位开始即锁门，旧检测任务和旧回调只能到这里为止。
         _ignoreInspectionCallbacksUntilNextStart = true;
         _isResetting = true;
@@ -2011,6 +2066,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         finally
         {
+            ResumePlcPolling();
             ExitControlAction(InspectionControlAction.Resetting);
         }
 
@@ -2062,6 +2118,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogInformation("[停止请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
             return;
         }
+
+        // 暂停低优先级 UI 轮询，减少请求并发
+        SuspendPlcPolling();
 
         try
         {
@@ -2117,6 +2176,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         finally
         {
+            ResumePlcPolling();
             ExitControlAction(InspectionControlAction.Stopping);
         }
 
@@ -2166,6 +2226,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
+        // 暂停低优先级 UI 轮询，减少请求并发
+        SuspendPlcPolling();
+
         _logger.LogWarning("[急停流程][审计] 急停信号 DT123，来源={Source}，执行急停收口", source);
         AddLog($"[急停流程] 急停信号，来源={source}，正在停止检测...");
 
@@ -2195,6 +2258,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         finally
         {
+            // 急停后恢复轮询，检测后续 DT123 急停解除信号
+            ResumePlcPolling();
             ExitControlAction(InspectionControlAction.EmergencyStopping);
         }
     }
@@ -2280,7 +2345,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
                 await Task.Delay(stableDelayMs, ct).ConfigureAwait(false);
 
-                var readBack = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
+                var readBack = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
                 if (!readBack.IsSuccess || readBack.Value == null)
                 {
                     _logger.LogWarning("[急停解除][失败] 读回 PLC 输入失败，第 {Attempt}/{MaxRetries} 次：{Message}",
@@ -2410,10 +2475,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogWarning("[调试按钮][停止][请求] 上位机写入 DT122=1，等待 PLC 轮询统一消费");
 
-        var result = await _plcDevice.RequestStopAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!HandleControlSignalWriteResult(result, "调试面板", "DT122", "停止"))
+        // 暂停 UI 轮询，避免写信号时与 Polling 产生并发 pending
+        SuspendPlcPolling();
+        try
         {
-            return;
+            var result = await _plcDevice.RequestStopAsync(CancellationToken.None).ConfigureAwait(false);
+            if (!HandleControlSignalWriteResult(result, "调试面板", "DT122", "停止"))
+            {
+                return;
+            }
+        }
+        finally
+        {
+            ResumePlcPolling();
         }
     }
 
@@ -2425,10 +2499,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogWarning("[调试按钮][复位][请求] 上位机写入 DT121=1，等待 PLC 轮询统一消费");
 
-        var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!HandleControlSignalWriteResult(result, "调试面板", "DT121", "复位"))
+        SuspendPlcPolling();
+        try
         {
-            return;
+            var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
+            if (!HandleControlSignalWriteResult(result, "调试面板", "DT121", "复位"))
+            {
+                return;
+            }
+        }
+        finally
+        {
+            ResumePlcPolling();
         }
     }
 
@@ -2440,10 +2522,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogWarning("[调试按钮][急停][请求] 上位机写入 DT123=1，等待 PLC 轮询统一消费");
 
-        var result = await _plcDevice.RequestEmergencyStopAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!HandleControlSignalWriteResult(result, "调试面板", "DT123", "急停"))
+        SuspendPlcPolling();
+        try
         {
-            return;
+            var result = await _plcDevice.RequestEmergencyStopAsync(CancellationToken.None).ConfigureAwait(false);
+            if (!HandleControlSignalWriteResult(result, "调试面板", "DT123", "急停"))
+            {
+                return;
+            }
+        }
+        finally
+        {
+            ResumePlcPolling();
         }
     }
 

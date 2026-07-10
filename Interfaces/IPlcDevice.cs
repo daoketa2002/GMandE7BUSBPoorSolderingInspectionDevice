@@ -175,6 +175,27 @@ public interface IPlcDevice : ICommunicationDevice
     /// </summary>
     Task<PlcOperationResult> WritePcErrorAsync(CancellationToken ct = default);
 
+    // ── 阶段 D 新增：拆分读取职责 ──
+
+    /// <summary>
+    /// 读取 PLC 控制信号快照（DT120~DT123）。
+    /// 一次 FC03 读取 4 个保持寄存器，返回启动/复位/停止/急停四路信号。
+    /// 取代高频路径中的 ReadMachineInputsAsync 调用。
+    /// </summary>
+    Task<PlcOperationResult<PlcControlSignals>> ReadControlSignalsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 读取继电器动作完成标志（DT302 单寄存器）。
+    /// 仅用于 InspectionEngine.WaitRelaySwitchCompletedAsync 的内部轮询。
+    /// </summary>
+    Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 读取报警解除信号（DT303 单寄存器）。
+    /// 仅用于 EmergencyStopDialogViewModel 的 500ms 独立轮询。
+    /// </summary>
+    Task<PlcOperationResult<bool>> ReadAlarmReleasedAsync(CancellationToken ct = default);
+
     // ── 事件 ──
 
     /// <summary>PLC 通信通知事件（连接丢失、重连成功、写入失败等）</summary>

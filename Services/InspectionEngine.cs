@@ -120,31 +120,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 for (int i = 0; i < _config.TestPoints.Count; i++)
                 {
                     _inspectionCts.Token.ThrowIfCancellationRequested();
-                    _currentExecutionStage = "CheckInterrupts";
-
-                    PlcCallerScope? checkScope = null;
-                    try { checkScope = new PlcCallerScope(_logger, "EngineInterruptCheck"); } catch { }
-                    var interruptResult = await CheckPlcInterruptsAsync(_inspectionCts.Token).ConfigureAwait(false);
-                    checkScope?.Dispose();
-                    if (interruptResult != PlcInterruptAction.Continue)
-                    {
-                        bool canContinue = await HandlePlcInterruptAsync(interruptResult, i, _inspectionCts.Token).ConfigureAwait(false);
-                        if (!canContinue)
-                        {
-                            result.IsAborted = true;
-                            result.ErrorMessage = _progress.LastErrorMessage ?? "检测被 PLC 信号中断";
-                            result.EndTime = DateTime.Now;
-                            // ★ 从 interruptResult 推断停止原因
-                            result.StopReason = interruptResult switch
-                            {
-                                PlcInterruptAction.Stop => InspectionStopReason.PlcStop,
-                                PlcInterruptAction.Reset => InspectionStopReason.Reset,
-                                PlcInterruptAction.EmergencyStop => InspectionStopReason.EmergencyStop,
-                                _ => InspectionStopReason.None
-                            };
-                            return result;
-                        }
-                    }
 
                     TestPointConfig testPoint = _config.TestPoints[i];
                     testPoint.ContinuityThresholdOhm = _config.ContinuityThresholdOhm;
@@ -198,7 +173,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     {
                         var relaySw = Stopwatch.StartNew();
                         PlcOperationResult? relayResult;
-                        using (new PlcCallerScope(_logger, "EngineInterruptCheck"))
+                        using (new PlcCallerScope(_logger, "EngineDt302Wait"))
                             relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
                                 TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
                                 _inspectionCts.Token).ConfigureAwait(false);
@@ -210,29 +185,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                             result.StopReason = InspectionStopReason.RelayTimeout;
                             result.ErrorMessage = $"等待 DT302 = 1 超时（点位 {testPoint.Name}）";
                             await AbortCurrentRunAsync(result, result.ErrorMessage, InspectionState.Aborted, "RelayTimeout").ConfigureAwait(false);
-                            return result;
-                        }
-                    }
-
-                    _inspectionCts.Token.ThrowIfCancellationRequested();
-
-                    // 等待继电器稳定后、读取万用表前，再检查一次中断信号
-                    var postRelayInterrupt = await CheckPlcInterruptsAsync(_inspectionCts.Token).ConfigureAwait(false);
-                    if (postRelayInterrupt != PlcInterruptAction.Continue)
-                    {
-                        bool canContinue = await HandlePlcInterruptAsync(postRelayInterrupt, i, _inspectionCts.Token).ConfigureAwait(false);
-                        if (!canContinue)
-                        {
-                            result.IsAborted = true;
-                            result.ErrorMessage = _progress.LastErrorMessage ?? "检测被 PLC 信号中断";
-                            result.EndTime = DateTime.Now;
-                            result.StopReason = postRelayInterrupt switch
-                            {
-                                PlcInterruptAction.Stop => InspectionStopReason.PlcStop,
-                                PlcInterruptAction.Reset => InspectionStopReason.Reset,
-                                PlcInterruptAction.EmergencyStop => InspectionStopReason.EmergencyStop,
-                                _ => InspectionStopReason.None
-                            };
                             return result;
                         }
                     }
@@ -425,7 +377,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 result.IsAborted = true;
                 result.ErrorMessage = "检测被取消";
                 result.EndTime = DateTime.Now;
-                // ★ 从当前引擎状态推断停止原因（HandlePlcInterruptAsync 已先 SetState）
+                // ★ 从当前引擎状态推断停止原因（TestPageViewModel 的 Flow 在取消前设置 _abortReason）
                 // ★ 使用原子中断原因字段，避免竞态
                 if (_abortReason != InspectionStopReason.None)
                 {
@@ -471,61 +423,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         // 此处无需额外模式切换，实际测量模式由第一个测试点按业务需求决定。
         LogInfo("检测初始化完成：万用表通信正常（启动前已 Ping 验证）");
         return Task.CompletedTask;
-    }
-
-    private enum PlcInterruptAction
-    {
-        Continue,
-        Stop,
-        Reset,
-        EmergencyStop
-    }
-
-    private async Task<PlcInterruptAction> CheckPlcInterruptsAsync(CancellationToken ct)
-    {
-        var result = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
-        if (!result.IsSuccess || result.Value == null)
-            return PlcInterruptAction.Continue;
-
-        PlcMachineInputs inputs = result.Value;
-        if (inputs.IsEmergencyStop) return PlcInterruptAction.EmergencyStop;
-        if (inputs.IsResetRequested) return PlcInterruptAction.Reset;
-        if (inputs.IsStopRequested) return PlcInterruptAction.Stop;
-        return PlcInterruptAction.Continue;
-    }
-
-    private async Task<bool> HandlePlcInterruptAsync(PlcInterruptAction action, int currentPointIndex, CancellationToken ct)
-    {
-        switch (action)
-        {
-            case PlcInterruptAction.Stop:
-                _abortReason = InspectionStopReason.PlcStop;
-                SetState(InspectionState.PausedByStop);
-                _progress.LastErrorMessage = "停止触发，检测中止";
-                await ClearPlcOutputsAndRelayFlagAsync("Stop", ct).ConfigureAwait(false);
-                LogInfo($"PLC 停止信号 DT122=1，检测中止（不保留断点）");
-                return false;
-
-            case PlcInterruptAction.Reset:
-                _abortReason = InspectionStopReason.Reset;
-                SetState(InspectionState.ResetRequested);
-                _progress.Reset();
-                await ClearPlcOutputsAndRelayFlagAsync("Reset", ct).ConfigureAwait(false);
-                // DT121 由 TestPageViewModel 在界面结果、内部状态和 PLC 输出全部清理完成后统一清零。
-                // 引擎只负责中止当前检测，避免先清 DT121 导致运行界面轮询错过复位信号。
-                _progress.LastErrorMessage = "复位触发，检测中止";
-                return false;
-
-            case PlcInterruptAction.EmergencyStop:
-                _abortReason = InspectionStopReason.EmergencyStop;
-                SetState(InspectionState.PausedByEmergencyStop);
-                _progress.LastErrorMessage = "急停触发，必须复位后重新启动";
-                await ClearPlcOutputsAndRelayFlagAsync("EmergencyStop", ct).ConfigureAwait(false);
-                return false;
-
-            default:
-                return true;
-        }
     }
 
     private async Task AbortCurrentRunAsync(InspectionResult result, string message, InspectionState state, string cleanupReason = "Exception")

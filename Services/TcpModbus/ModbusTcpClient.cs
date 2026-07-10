@@ -28,10 +28,7 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
     private ModbusTcpClientOptions? _options;
     private bool _disposed;
 
-    private const int DefaultModbusTimeoutMs = 3000;
-
     public bool IsConnected => _inner.IsConnected;
-
     public event EventHandler<bool>? ConnectionStateChanged;
     public event EventHandler<PlcNotification>? NotificationReceived;
 
@@ -136,27 +133,27 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
 
     #region Modbus 标准操作委托
 
-    // 现状记录：这些接口保留 CancellationToken 参数，但当前底层 TcpClientPLCMotionService
-    // 仍按请求超时控制等待周期；Stop/Reset 不应被日志伪装成已传入外部取消。
-    public Task<ModbusResponse?> ReadCoilsAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default)
-        => _inner.ExecuteReadOperationAsync(0x01, unitId, startAddress, quantity, DefaultModbusTimeoutMs);
+    // Phase E3: timeoutMs 参数允许调用方按操作类型指定分层超时，
+    // 默认值 1000ms（NormalRequestMs）由调用方传入。
+    public Task<ModbusResponse?> ReadCoilsAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default, int timeoutMs = 1000)
+        => _inner.ExecuteReadOperationAsync(0x01, unitId, startAddress, quantity, timeoutMs, ct);
 
-    public Task<ModbusResponse?> ReadHoldingRegistersAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default)
-        => _inner.ExecuteReadOperationAsync(0x03, unitId, startAddress, quantity, DefaultModbusTimeoutMs);
+    public Task<ModbusResponse?> ReadHoldingRegistersAsync(byte unitId, ushort startAddress, ushort quantity, CancellationToken ct = default, int timeoutMs = 1000)
+        => _inner.ExecuteReadOperationAsync(0x03, unitId, startAddress, quantity, timeoutMs, ct);
 
-    public Task<ModbusResponse?> WriteSingleCoilAsync(byte unitId, ushort address, bool value, CancellationToken ct = default)
+    public Task<ModbusResponse?> WriteSingleCoilAsync(byte unitId, ushort address, bool value, CancellationToken ct = default, int timeoutMs = 1000)
         => _inner.ExecuteWriteOperationAsync(0x05, unitId, address,
-            new ushort[] { value ? (ushort)0xFF00 : (ushort)0x0000 }, DefaultModbusTimeoutMs);
+            new ushort[] { value ? (ushort)0xFF00 : (ushort)0x0000 }, timeoutMs, ct);
 
-    public Task<ModbusResponse?> WriteSingleRegisterAsync(byte unitId, ushort address, ushort value, CancellationToken ct = default)
+    public Task<ModbusResponse?> WriteSingleRegisterAsync(byte unitId, ushort address, ushort value, CancellationToken ct = default, int timeoutMs = 1000)
         => _inner.ExecuteWriteOperationAsync(0x06, unitId, address,
-            new ushort[] { value }, DefaultModbusTimeoutMs);
+            new ushort[] { value }, timeoutMs, ct);
 
-    public Task<ModbusResponse?> WriteMultipleRegistersAsync(byte unitId, ushort startAddress, ushort[] values, CancellationToken ct = default)
-        => _inner.ExecuteWriteOperationAsync(0x10, unitId, startAddress, values, DefaultModbusTimeoutMs);
+    public Task<ModbusResponse?> WriteMultipleRegistersAsync(byte unitId, ushort startAddress, ushort[] values, CancellationToken ct = default, int timeoutMs = 1000)
+        => _inner.ExecuteWriteOperationAsync(0x10, unitId, startAddress, values, timeoutMs, ct);
 
-    public Task<ModbusResponse?> SendCustomRequestAsync(byte[] requestFrame, CancellationToken ct = default)
-        => _inner.SendCustomModbusRequestAsync(requestFrame, DefaultModbusTimeoutMs);
+    public Task<ModbusResponse?> SendCustomRequestAsync(byte[] requestFrame, CancellationToken ct = default, int timeoutMs = 1000)
+        => _inner.SendCustomModbusRequestAsync(requestFrame, timeoutMs, ct);
 
     public Task<bool> TestConnectionAsync(string host, int port, int timeoutMs, CancellationToken ct = default)
         => _inner.TestConnectionAsync(host, port, timeoutMs, ct);

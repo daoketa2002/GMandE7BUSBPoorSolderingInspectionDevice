@@ -20,7 +20,7 @@ public sealed class InspectionStartValidationRequest
     public bool IsSchemeNameInvalid { get; init; }
     public bool IsPlcConnected { get; init; }
     public bool IsDmmConnected { get; init; }
-    public PlcMachineInputs? PlcInputs { get; init; }
+    public PlcControlSignals? PlcInputs { get; init; }
     public InspectionConfig Config { get; init; } = new();
     public int UiItemCount { get; init; }
 }

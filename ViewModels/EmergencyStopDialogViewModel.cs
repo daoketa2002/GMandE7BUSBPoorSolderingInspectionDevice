@@ -66,11 +66,11 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
         {
             try
             {
-                var result = await _plcDevice.ReadMachineInputsAsync(ct).ConfigureAwait(false);
-                if (result.IsSuccess && result.Value != null)
+                var result = await _plcDevice.ReadAlarmReleasedAsync(ct).ConfigureAwait(false);
+                if (result.IsSuccess)
                 {
                     await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                        () => UpdateAlarmState(result.Value.IsAlarmReleased));
+                        () => UpdateAlarmState(result.Value));
                 }
             }
             catch (OperationCanceledException)

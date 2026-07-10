@@ -4,6 +4,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Plc;
 
@@ -37,7 +38,6 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     private bool _disposed;
 
     private const byte DefaultUnitId = 1;
-    private const int DefaultTimeoutMs = 3000;
     private const int ReadInputsRegisterCount = 10; // 一次读 DT120~129 共10个寄存器
 
     public bool IsConnected => _modbusClient.IsConnected;
@@ -124,7 +124,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         {
             // 从 DT120 开始读 10 个保持寄存器（覆盖 DT120~DT129）
             var response = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.StartSignal, ReadInputsRegisterCount, ct).ConfigureAwait(false);
+                DefaultUnitId, PlcAddressMap.StartSignal, ReadInputsRegisterCount, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult<PlcMachineInputs>.Failure("读取 PLC 输入信号失败: 无响应");
@@ -143,7 +143,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             bool relayCompleted = false;
             bool alarmReleased = false;
             var statusResp = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.RelayActionCompleted, 2, ct).ConfigureAwait(false);
+                DefaultUnitId, PlcAddressMap.RelayActionCompleted, 2, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
             if (statusResp?.Data != null && statusResp.Data.Length >= 4)
             {
                 relayCompleted = BinaryPrimitives.ReadUInt16BigEndian(statusResp.Data.AsSpan(0)) == 1;
@@ -230,7 +230,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         var (leftSelectAddr, leftPolarAddr) = PlcAddressMap.GetPinAddresses(leftPinName);
         var (rightSelectAddr, rightPolarAddr) = PlcAddressMap.GetPinAddresses(rightPinName);
 
-        _logger.LogWarning(
+        _logger.LogInformation(
             "[PLC动作][审计] 写入测试点引脚: {LeftPin}(DT{LeftSel}=1,DT{LeftPol}={LeftPolVal}), {RightPin}(DT{RightSel}=1,DT{RightPol}={RightPolVal})",
             leftPinName, leftSelectAddr, leftPolarAddr, leftPolarityCode,
             rightPinName, rightSelectAddr, rightPolarAddr, rightPolarityCode);
@@ -240,7 +240,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             // 先写左引脚：Select=1, Polarity=值
             var leftResp = await _modbusClient.WriteMultipleRegistersAsync(
                 DefaultUnitId, leftSelectAddr,
-                new[] { (ushort)1, leftPolarityCode }, ct).ConfigureAwait(false);
+                new[] { (ushort)1, leftPolarityCode }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (leftResp is null)
                 return PlcOperationResult.Failure("写入左引脚失败: 无响应");
@@ -250,7 +250,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             // 再写右引脚：Select=1, Polarity=值
             var rightResp = await _modbusClient.WriteMultipleRegistersAsync(
                 DefaultUnitId, rightSelectAddr,
-                new[] { (ushort)1, rightPolarityCode }, ct).ConfigureAwait(false);
+                new[] { (ushort)1, rightPolarityCode }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (rightResp is null)
                 return PlcOperationResult.Failure("写入右引脚失败: 无响应");
@@ -290,7 +290,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             try
             {
                 var response = await _modbusClient.ReadHoldingRegistersAsync(
-                    DefaultUnitId, addr, 1, ct).ConfigureAwait(false);
+                    DefaultUnitId, addr, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
                 if (response?.Data != null && response.Data.Length >= 2
                     && BinaryPrimitives.ReadUInt16BigEndian(response.Data.AsSpan(0)) == 1)
@@ -334,7 +334,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         ushort address = (ushort)(UnconfirmedAddresses.PointResultBaseRegister.Value + pointIndex);
         ushort value = isOk ? (ushort)1 : (ushort)0;
 
-        _logger.LogWarning("[PLC动作][审计] 写入单点结果: 索引={Index}, 地址=DT{Addr}, 值={Value} ({Result})",
+        _logger.LogInformation("[PLC动作][审计] 写入单点结果: 索引={Index}, 地址=DT{Addr}, 值={Value} ({Result})",
             pointIndex, address, value, isOk ? "OK" : "NG");
 
         return await WriteSignalAsync($"单点结果[{pointIndex}]", address, value, ct).ConfigureAwait(false);
@@ -347,7 +347,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task<PlcOperationResult> WriteFinalResultAsync(bool isOk, int? ngPointIndex, CancellationToken ct = default)
     {
-        _logger.LogWarning("[PLC动作][审计] 写入综合结果 DT304/DT305: {Result}, NG索引={NgIndex}",
+        _logger.LogInformation("[PLC动作][审计] 写入综合结果 DT304/DT305: {Result}, NG索引={NgIndex}",
             isOk ? "OK" : "NG", ngPointIndex?.ToString() ?? "无");
 
         try
@@ -358,7 +358,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
 
             var response = await _modbusClient.WriteMultipleRegistersAsync(
                 DefaultUnitId, PlcAddressMap.ProductOk,
-                new[] { productOk, productNg }, ct).ConfigureAwait(false);
+                new[] { productOk, productNg }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult.Failure("写入 DT304/DT305 失败：无响应");
@@ -393,13 +393,13 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task<PlcOperationResult> ClearFinalResultAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[PLC动作][审计] PC 复位清空产品结果 → DT304=0, DT305=0");
+        _logger.LogInformation("[PLC动作][审计] PC 复位清空产品结果 → DT304=0, DT305=0");
 
         try
         {
             var response = await _modbusClient.WriteMultipleRegistersAsync(
                 DefaultUnitId, PlcAddressMap.ProductOk,
-                new ushort[] { 0, 0 }, ct).ConfigureAwait(false);
+                new ushort[] { 0, 0 }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult.Failure("清空 DT304/DT305 失败：无响应");
@@ -425,14 +425,14 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task<PlcOperationResult> ClearPinOutputsAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[PLC动作][审计] 清空引脚输出 DT130~DT185");
+        _logger.LogInformation("[PLC动作][审计] 清空引脚输出 DT130~DT185");
 
         try
         {
             // 56 个 0 值寄存器
             ushort[] zeros = new ushort[PlcAddressMap.PinOutputRegisterCount];
             var response = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, PlcAddressMap.PinOutputStart, zeros, ct).ConfigureAwait(false);
+                DefaultUnitId, PlcAddressMap.PinOutputStart, zeros, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult.Failure("清空 DT130~DT185 失败：无响应");
@@ -470,9 +470,123 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task<PlcOperationResult> WritePcErrorAsync(CancellationToken ct = default)
     {
-        _logger.LogWarning("[PLC动作][审计] PC 写入异常状态");
+        _logger.LogInformation("[PLC动作][审计] PC 写入异常状态");
         return PlcOperationResult.Success("上位机异常状态已写入");
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  阶段 D 新增：拆分读取职责
+    // ═══════════════════════════════════════════════════════════════
+
+    #region 分拆读取
+
+    /// <summary>
+    /// 读取 PLC 控制信号快照（DT120~DT123）。
+    /// 一次 FC03 读取 4 个保持寄存器。
+    /// </summary>
+    public async Task<PlcOperationResult<PlcControlSignals>> ReadControlSignalsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _modbusClient.ReadHoldingRegistersAsync(
+                DefaultUnitId, PlcAddressMap.StartSignal, 4, ct, ModbusTimeoutConstants.ControlReadMs).ConfigureAwait(false);
+
+            if (response is null)
+                return PlcOperationResult<PlcControlSignals>.Failure("读取控制信号失败: 无响应");
+            if (response.IsError)
+                return PlcOperationResult<PlcControlSignals>.Failure($"读取控制信号失败: Modbus错误码 {response.ErrorCode}", response);
+
+            var registers = response.Data;
+            int regCount = registers.Length / 2;
+            ushort dt120 = regCount > 0 ? BinaryPrimitives.ReadUInt16BigEndian(registers.AsSpan(0)) : (ushort)0;
+            ushort dt121 = regCount > 1 ? BinaryPrimitives.ReadUInt16BigEndian(registers.AsSpan(2)) : (ushort)0;
+            ushort dt122 = regCount > 2 ? BinaryPrimitives.ReadUInt16BigEndian(registers.AsSpan(4)) : (ushort)0;
+            ushort dt123 = regCount > 3 ? BinaryPrimitives.ReadUInt16BigEndian(registers.AsSpan(6)) : (ushort)0;
+
+            var signals = new PlcControlSignals
+            {
+                IsStartRequested = dt120 == 1,
+                IsResetRequested = dt121 == 1,
+                IsStopRequested = dt122 == 1,
+                IsEmergencyStop = dt123 == 1
+            };
+
+            return PlcOperationResult<PlcControlSignals>.Success(signals, "控制信号读取成功", response);
+        }
+        catch (OperationCanceledException)
+        {
+            return PlcOperationResult<PlcControlSignals>.Cancelled("读取控制信号被取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PLC动作] 读取控制信号异常");
+            return PlcOperationResult<PlcControlSignals>.Failure($"读取控制信号异常: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 读取继电器动作完成标志（DT302）。
+    /// </summary>
+    public async Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _modbusClient.ReadHoldingRegistersAsync(
+                DefaultUnitId, PlcAddressMap.RelayActionCompleted, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+
+            if (response is null)
+                return PlcOperationResult<bool>.Failure("读取 DT302 失败: 无响应");
+            if (response.IsError)
+                return PlcOperationResult<bool>.Failure($"读取 DT302 失败: Modbus错误码 {response.ErrorCode}", response);
+
+            bool completed = response.Data != null && response.Data.Length >= 2
+                && BinaryPrimitives.ReadUInt16BigEndian(response.Data.AsSpan(0)) == 1;
+
+            return PlcOperationResult<bool>.Success(completed, $"DT302={(completed ? 1 : 0)}", response);
+        }
+        catch (OperationCanceledException)
+        {
+            return PlcOperationResult<bool>.Failure("读取 DT302 被取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PLC动作] 读取 DT302 异常");
+            return PlcOperationResult<bool>.Failure($"读取 DT302 异常: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 读取报警解除信号（DT303）。
+    /// </summary>
+    public async Task<PlcOperationResult<bool>> ReadAlarmReleasedAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _modbusClient.ReadHoldingRegistersAsync(
+                DefaultUnitId, PlcAddressMap.AlarmReleased, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+
+            if (response is null)
+                return PlcOperationResult<bool>.Failure("读取 DT303 失败: 无响应");
+            if (response.IsError)
+                return PlcOperationResult<bool>.Failure($"读取 DT303 失败: Modbus错误码 {response.ErrorCode}", response);
+
+            bool released = response.Data != null && response.Data.Length >= 2
+                && BinaryPrimitives.ReadUInt16BigEndian(response.Data.AsSpan(0)) == 1;
+
+            return PlcOperationResult<bool>.Success(released, $"DT303={(released ? 1 : 0)}", response);
+        }
+        catch (OperationCanceledException)
+        {
+            return PlcOperationResult<bool>.Failure("读取 DT303 被取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PLC动作] 读取 DT303 异常");
+            return PlcOperationResult<bool>.Failure($"读取 DT303 异常: {ex.Message}");
+        }
+    }
+
+    #endregion
 
     #endregion
 
@@ -485,11 +599,11 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// <summary>写单保持寄存器（FC 0x06）核心实现，统一记录审计日志</summary>
     private async Task<PlcOperationResult> WriteSignalAsync(string name, ushort address, ushort value, CancellationToken ct)
     {
-        _logger.LogWarning("[PLC动作][审计] 写 {Name} → DT{Address} = {Value}", name, address, value);
+        _logger.LogInformation("[PLC动作][审计] 写 {Name} → DT{Address} = {Value}", name, address, value);
         try
         {
             var response = await _modbusClient.WriteSingleRegisterAsync(
-                DefaultUnitId, address, value, ct).ConfigureAwait(false);
+                DefaultUnitId, address, value, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult.Failure($"{name}写入失败: 无响应");

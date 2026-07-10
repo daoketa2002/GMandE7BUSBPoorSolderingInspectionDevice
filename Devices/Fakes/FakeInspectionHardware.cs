@@ -332,6 +332,42 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake PC 异常已记录"));
     }
 
+    public Task<PlcOperationResult<PlcControlSignals>> ReadControlSignalsAsync(CancellationToken ct = default)
+    {
+        lock (_syncRoot)
+        {
+            var signals = new PlcControlSignals
+            {
+                IsStartRequested = ReadRegister(PlcAddressMap.StartSignal) == 1,
+                IsResetRequested = ReadRegister(PlcAddressMap.ResetSignal) == 1,
+                IsStopRequested = ReadRegister(PlcAddressMap.StopSignal) == 1,
+                IsEmergencyStop = ReadRegister(PlcAddressMap.EmergencyStopSignal) == 1,
+            };
+            return Task.FromResult(
+                PlcOperationResult<PlcControlSignals>.Success(signals, "Fake 控制信号读取成功"));
+        }
+    }
+
+    public Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)
+    {
+        lock (_syncRoot)
+        {
+            bool completed = ReadRegister(PlcAddressMap.RelayActionCompleted) == 1;
+            return Task.FromResult(
+                PlcOperationResult<bool>.Success(completed, $"Fake DT302={(completed ? 1 : 0)}"));
+        }
+    }
+
+    public Task<PlcOperationResult<bool>> ReadAlarmReleasedAsync(CancellationToken ct = default)
+    {
+        lock (_syncRoot)
+        {
+            bool released = ReadRegister(PlcAddressMap.AlarmReleased) == 1;
+            return Task.FromResult(
+                PlcOperationResult<bool>.Success(released, $"Fake DT303={(released ? 1 : 0)}"));
+        }
+    }
+
     public Task<PlcOperationResult> ClearAlarmReleasedAsync(CancellationToken ct = default)
     {
         WriteRegister(PlcAddressMap.AlarmReleased, 0);
