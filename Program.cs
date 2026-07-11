@@ -10,6 +10,9 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.DeviceConnections;
+#if DEBUG
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.Development;
+#endif
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
@@ -277,6 +280,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<PlanEditViewModel>();
             services.AddTransient<LogDataViewModel>();
             services.AddTransient<SystemSettingsViewModel>();
+#if DEBUG
+            services.AddTransient<DevelopmentDataToolViewModel>();
+            services.AddSingleton<TestDataSeeder>();
+#endif
 
             // === Views ===
             services.AddTransient<MainWindow>();
@@ -288,6 +295,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<PlanEditView>();
             services.AddTransient<LogDataView>();
             services.AddTransient<SystemSettingsView>();
+#if DEBUG
+            services.AddTransient<DevelopmentDataToolView>();
+#endif
 
             // === 其他服务 ===
             services.AddLogging();

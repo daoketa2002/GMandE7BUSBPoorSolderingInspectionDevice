@@ -57,6 +57,7 @@
         </Border>
 
         <StackPanel Grid.Row="1" 
+                    x:Name="MainButtonPanel"
                     VerticalAlignment="Center" 
                     HorizontalAlignment="Center"
                     Width="350">

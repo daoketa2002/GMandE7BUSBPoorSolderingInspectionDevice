@@ -153,7 +153,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private static List<LogIndexEntry> ReadIndexFile(string indexPath)
         {
             var entries = new List<LogIndexEntry>();
-            var lines = File.ReadAllLines(indexPath, DetectFileEncoding(indexPath));
+            var lines = File.ReadAllLines(indexPath, DetectFileEncoding(indexPath)); 
             if (lines.Length < 2)
                 return entries;
 

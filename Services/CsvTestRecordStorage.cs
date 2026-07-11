@@ -363,25 +363,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         private string BuildCsvHeader(LogRecord record)
         {
-            var headerBuilder = new StringBuilder();
-
-            // 固定列（日期和时间在最后）
-            headerBuilder.Append("序号,机种名称,序列号,方案名称,检查者,综合判定");
-
-            // 动态 Pin 列（紧跟综合判定之后）
-            if (record.PinResults != null)
-            {
-                foreach (var pinResult in record.PinResults)
-                {
-                    headerBuilder.Append(',');
-                    headerBuilder.Append(EscapeCsvField(pinResult.PinName));
-                }
-            }
-
-            // 日期、时间和方案版本放在最后
-            headerBuilder.Append(",日期,时间,方案版本");
-
-            return headerBuilder.ToString();
+            return CsvRecordFormatter.BuildHeader(record);
         }
 
         /// <summary>
@@ -390,54 +372,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         private string BuildCsvDataRow(LogRecord record, int rowIndex)
         {
-            var dataBuilder = new StringBuilder();
-
-            // 固定列
-            dataBuilder.Append(rowIndex);
-            dataBuilder.Append(',');
-            // ★ 机种名称优先使用 MachineType，兼容旧数据回退 Series
-            dataBuilder.Append(EscapeCsvField(
-                !string.IsNullOrWhiteSpace(record.MachineType) ? record.MachineType : record.Series));
-            dataBuilder.Append(',');
-            dataBuilder.Append(EscapeCsvField(record.SerialNumber));
-            dataBuilder.Append(',');
-            dataBuilder.Append(EscapeCsvField(record.PlanName));
-            dataBuilder.Append(',');
-            dataBuilder.Append(EscapeCsvField(record.Operator));
-            dataBuilder.Append(',');
-            dataBuilder.Append(EscapeCsvField(record.FinalResult));
-
-            // 动态 Pin 结果列
-            if (record.PinResults != null)
-            {
-                foreach (var pinResult in record.PinResults)
-                {
-                    dataBuilder.Append(',');
-                    dataBuilder.Append(EscapeCsvField(pinResult.Result));
-                }
-            }
-
-            // 日期和时间放在最后（中文格式）
-            dataBuilder.Append(',');
-            dataBuilder.Append(record.Timestamp.ToString("yyyy年MM月dd日", CultureInfo.InvariantCulture));
-            dataBuilder.Append(',');
-            dataBuilder.Append(record.Timestamp.ToString("HH时mm分ss秒", CultureInfo.InvariantCulture));
-            dataBuilder.Append(',');
-            dataBuilder.Append($"V{Math.Max(1, record.PlanVersion)}");
-
-            return dataBuilder.ToString();
+            return CsvRecordFormatter.BuildDataRow(record, rowIndex);
         }
 
         private static string EscapeCsvField(string field)
         {
-            if (string.IsNullOrEmpty(field))
-                return string.Empty;
-
-            if (field.Contains(',') || field.Contains('"') || field.Contains('\n') || field.Contains('\r'))
-            {
-                return $"\"{field.Replace("\"", "\"\"")}\"";
-            }
-            return field;
+            return CsvRecordFormatter.EscapeField(field);
         }
 
         private string SelectWritableCsvFile(string monthFolder, string baseFileName, string expectedHeader, int planVersion)

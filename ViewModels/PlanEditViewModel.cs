@@ -333,6 +333,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     await _notificationService.ShowWarningAsync("请输入方案名称！", "校验失败");
                     return;
                 }
+
+                var machineTypeError = NameValidationHelper.ValidateMachineType(MachineType);
+                if (machineTypeError != null)
+                {
+                    _logger.LogWarning("[用户操作] 方案保存被拒绝：机种名称不合法 MachineType={MachineType} Error={Error}", MachineType, machineTypeError);
+                    await _notificationService.ShowWarningAsync(machineTypeError, "校验失败");
+                    return;
+                }
+
+                var planNameError = NameValidationHelper.ValidatePlanName(PlanName);
+                if (planNameError != null)
+                {
+                    _logger.LogWarning("[用户操作] 方案保存被拒绝：方案名称不合法 PlanName={PlanName} Error={Error}", PlanName, planNameError);
+                    await _notificationService.ShowWarningAsync(planNameError, "校验失败");
+                    return;
+                }
+
                 if (Items.Count == 0)
                 {
                     await _notificationService.ShowWarningAsync("请至少添加一个检测项目！", "校验失败");

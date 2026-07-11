@@ -35,6 +35,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
             PlcTestBtn.Command = viewModel.NavigateToPlcCommunicationTestCommand;
             SystemSettingsBtn.Command = viewModel.NavigateToSystemSettingsCommand;
             ExitBtn.Command = viewModel.ExitApplicationCommand;
+
+#if DEBUG
+            var developmentToolButton = new Button
+            {
+                Content = "开发测试工具",
+                Background = new SolidColorBrush(Color.FromRgb(142, 68, 173)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                Command = viewModel.NavigateToDevelopmentDataToolCommand
+            };
+            MainButtonPanel.Children.Insert(MainButtonPanel.Children.Count - 1, developmentToolButton);
+#endif
         }
     }
 }

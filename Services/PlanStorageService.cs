@@ -1,5 +1,6 @@
 ﻿using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Configuration;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -334,11 +335,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// <inheritdoc/>
         public async Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null)
         {
-            // 参数校验
-            if (string.IsNullOrWhiteSpace(plan.MachineType))
-                throw new ArgumentException("机种名称不能为空", nameof(plan.MachineType));
-            if (string.IsNullOrWhiteSpace(plan.PlanName))
-                throw new ArgumentException("方案名称不能为空", nameof(plan.PlanName));
+            ArgumentNullException.ThrowIfNull(plan);
+
+            plan.MachineType = plan.MachineType?.Trim() ?? string.Empty;
+            plan.PlanName = plan.PlanName?.Trim() ?? string.Empty;
+
+            var machineTypeError = NameValidationHelper.ValidateMachineType(plan.MachineType);
+            if (machineTypeError != null)
+            {
+                _logger.LogWarning("[安全审计] 拒绝保存非法机种名称 MachineType={MachineType} Error={Error}", plan.MachineType, machineTypeError);
+                throw new ArgumentException(machineTypeError, nameof(plan.MachineType));
+            }
+
+            var planNameError = NameValidationHelper.ValidatePlanName(plan.PlanName);
+            if (planNameError != null)
+            {
+                _logger.LogWarning("[安全审计] 拒绝保存非法方案名称 PlanName={PlanName} Error={Error}", plan.PlanName, planNameError);
+                throw new ArgumentException(planNameError, nameof(plan.PlanName));
+            }
 
             await Task.Run(() =>
             {

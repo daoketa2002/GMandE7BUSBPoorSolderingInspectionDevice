@@ -117,6 +117,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
+#if DEBUG
+        [RelayCommand]
+        private async Task NavigateToDevelopmentDataToolAsync()
+        {
+            try
+            {
+                _logger.Warning("[用户操作][审计] 用户进入开发测试数据工具");
+                await _navigationService.NavigateToAsync<DevelopmentDataToolView>("Main", null);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "[导航] 导航到开发测试数据工具失败");
+                await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
+            }
+        }
+#endif
+
         /// <summary>
         /// 系统设定导航命令（修改原有的 NavigateToSystemSettingsAsync）
         /// </summary>
