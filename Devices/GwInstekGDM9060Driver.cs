@@ -177,7 +177,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 if (_isConnected)
                 {
-                    _logger.LogWarning("万用表已处于连接状态");
+                    _logger.LogDebug("万用表已处于连接状态，跳过重复连接");
                     return true;
                 }
 
@@ -287,8 +287,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             var cmdBytes = Encoding.ASCII.GetBytes(cmd);
 
             _logger.LogDebug("SCPI查询命令: {Command}", command);
-            await _networkStream.WriteAsync(cmdBytes, ct).ConfigureAwait(false);
-            await _networkStream.FlushAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await _networkStream.WriteAsync(cmdBytes, ct).ConfigureAwait(false);
+                await _networkStream.FlushAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("[DMM查询][取消] Command={Command}", command);
+                throw;
+            }
 
             // 读取响应直到 \n 终止
             using var memoryStream = new MemoryStream();
@@ -296,7 +304,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
             using var readTimeoutCts = new CancellationTokenSource(_timeoutMs);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readTimeoutCts.Token);
-            bool readTimedOut = false;
 
             try
             {
@@ -314,24 +321,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                         break;
                 }
             }
+            catch (OperationCanceledException ex)
+                when (readTimeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                _receiveBufferPossiblyDirty = true;
+                var partialResponse = Encoding.ASCII.GetString(memoryStream.ToArray())
+                    .TrimEnd('\r', '\n', ' ');
+                if (string.IsNullOrWhiteSpace(partialResponse))
+                {
+                    _logger.LogWarning(
+                        "SCPI查询命令超时: {Command}, TimeoutMs={TimeoutMs}",
+                        command, _timeoutMs);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "SCPI查询命令读取到部分响应但未收到结束符: {Command}, Response={Response}, TimeoutMs={TimeoutMs}",
+                        command, partialResponse, _timeoutMs);
+                }
+
+                throw new TimeoutException($"SCPI 查询命令超时: {command}", ex);
+            }
             catch (OperationCanceledException)
             {
-                readTimedOut = true;
-                if (memoryStream.Length == 0)
-                {
-                    _receiveBufferPossiblyDirty = true;
-                    _logger.LogWarning("SCPI查询命令超时: {Command}", command);
-                    return string.Empty;
-                }
+                _logger.LogInformation("[DMM查询][取消] Command={Command}", command);
+                throw;
             }
 
             var result = Encoding.ASCII.GetString(memoryStream.ToArray()).TrimEnd('\r', '\n', ' ');
-            if (readTimedOut)
-            {
-                _receiveBufferPossiblyDirty = true;
-                _logger.LogWarning("SCPI查询命令读取到部分响应但未收到结束符: {Command}, Response={Response}", command, result);
-            }
-            else
+            if (!string.IsNullOrWhiteSpace(result))
             {
                 _receiveBufferPossiblyDirty = false;
             }
@@ -463,6 +481,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 return await SendQueryInternalAsync(command, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "发送SCPI查询命令失败: {Command}", command);
@@ -520,6 +542,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
                 return true;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[万用表] 模式切换验证通信异常");
@@ -573,14 +599,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             // ── 缓存命中：当前已是 Resistance，跳过完整初始化 ──
             if (_cachedMode == DmmCachedMode.Resistance)
             {
-                _logger.LogWarning(
+                _logger.LogDebug(
                     "[DMM模式][缓存命中] Requested=Resistance, Current=Resistance, Reconfigured=false");
                 return true;
             }
 
             var sw = Stopwatch.StartNew();
             var previousMode = _cachedMode;
-            _logger.LogWarning(
+            _logger.LogInformation(
                 "[DMM模式][配置开始] From={From}, To=Resistance, ThresholdOhm=null",
                 previousMode);
 
@@ -591,7 +617,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 _cachedMode = DmmCachedMode.Resistance;
                 _cachedContinuityThresholdOhm = null;
-                _logger.LogWarning(
+                _logger.LogInformation(
                     "[DMM模式][配置完成] From={From}, To=Resistance, ThresholdOhm=null, ElapsedMs={ElapsedMs}",
                     previousMode, sw.ElapsedMilliseconds);
             }
@@ -622,7 +648,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 _cachedMode = DmmCachedMode.Resistance;
                 _cachedContinuityThresholdOhm = null;
-                _logger.LogWarning(
+                _logger.LogInformation(
                     "[DMM模式][配置完成] From=*, To=Resistance(空闲态), ElapsedMs={ElapsedMs}",
                     sw.ElapsedMilliseconds);
             }
@@ -650,7 +676,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 && _cachedContinuityThresholdOhm.HasValue
                 && Math.Abs(_cachedContinuityThresholdOhm.Value - normalizedThreshold) < 0.001)
             {
-                _logger.LogWarning(
+                _logger.LogDebug(
                     "[DMM模式][缓存命中] Requested=Continuity, Current=Continuity, ThresholdOhm={ThresholdOhm}, Reconfigured=false",
                     normalizedThreshold);
                 return true;
@@ -658,7 +684,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
             var sw = Stopwatch.StartNew();
             string fromMode = _cachedMode.ToString();
-            _logger.LogWarning(
+            _logger.LogInformation(
                 "[DMM模式][配置开始] From={From}, To=Continuity, ThresholdOhm={ThresholdOhm}",
                 fromMode, normalizedThreshold);
 
@@ -674,7 +700,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 _cachedMode = DmmCachedMode.Continuity;
                 _cachedContinuityThresholdOhm = normalizedThreshold;
-                _logger.LogWarning(
+                _logger.LogInformation(
                     "[DMM模式][配置完成] From={From}, To=Continuity, ThresholdOhm={ThresholdOhm}, ElapsedMs={ElapsedMs}",
                     fromMode, normalizedThreshold, sw.ElapsedMilliseconds);
             }
@@ -715,12 +741,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     return false;
                 }
 
-                _logger.LogWarning("[万用表][审计] 万用表已切换为 {ModeLabel}", modeLabel);
+                _logger.LogInformation("[DMM模式][配置完成] 万用表已切换为 {ModeLabel}", modeLabel);
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("[DMM模式][取消] Mode={ModeLabel}", modeLabel);
+                throw;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "初始化万用表 {ModeLabel} 失败", modeLabel);
+                if (IsConnectionFailure(ex))
+                {
+                    // 当前方法已持有 _commandLock，直接调用不重复获取锁的断线收口。
+                    await MarkConnectionLostAsync().ConfigureAwait(false);
+                }
+
+                _logger.LogError(ex, "初始化万用表 {ModeLabel} 失败", modeLabel);
                 return false;
             }
             finally
@@ -747,18 +784,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             try
             {
                 string result = await SendQueryAsync("READ?", ct).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    throw new TimeoutException("万用表 READ? 返回空响应");
+                }
+
                 sw.Stop();
-                _logger.LogWarning(
+                _logger.LogInformation(
                     "[DMM测量][完成] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, RawText={RawText}",
                     sw.ElapsedMilliseconds, result);
                 return result;
             }
+            catch (TimeoutException ex)
+            {
+                sw.Stop();
+                _logger.LogError(
+                    ex,
+                    "[DMM测量][无响应] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                    sw.ElapsedMilliseconds, _timeoutMs);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                sw.Stop();
+                _logger.LogInformation(
+                    "[DMM测量][取消] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}",
+                    sw.ElapsedMilliseconds);
+                throw;
+            }
             catch (Exception ex)
             {
                 sw.Stop();
-                _logger.LogWarning(
-                    "[DMM测量][失败] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, Error={Error}",
-                    sw.ElapsedMilliseconds, ex.Message);
+                _logger.LogError(
+                    ex,
+                    "[DMM测量][失败] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}",
+                    sw.ElapsedMilliseconds);
                 throw;
             }
         }
@@ -773,18 +833,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             try
             {
                 string result = await SendQueryAsync("MEAS:CONT?", ct).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    throw new TimeoutException("万用表 MEAS:CONT? 返回空响应");
+                }
+
                 sw.Stop();
-                _logger.LogWarning(
+                _logger.LogInformation(
                     "[DMM测量][完成] Command=MEAS:CONT?, Mode=Continuity, ThresholdOhm={ThresholdOhm}, ElapsedMs={ElapsedMs}, RawText={RawText}",
                     _cachedContinuityThresholdOhm, sw.ElapsedMilliseconds, result);
                 return result;
             }
+            catch (TimeoutException ex)
+            {
+                sw.Stop();
+                _logger.LogError(
+                    ex,
+                    "[DMM测量][无响应] Command=MEAS:CONT?, Mode=Continuity, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                    sw.ElapsedMilliseconds, _timeoutMs);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                sw.Stop();
+                _logger.LogInformation(
+                    "[DMM测量][取消] Command=MEAS:CONT?, Mode=Continuity, ElapsedMs={ElapsedMs}",
+                    sw.ElapsedMilliseconds);
+                throw;
+            }
             catch (Exception ex)
             {
                 sw.Stop();
-                _logger.LogWarning(
-                    "[DMM测量][失败] Command=MEAS:CONT?, Mode=Continuity, ElapsedMs={ElapsedMs}, Error={Error}",
-                    sw.ElapsedMilliseconds, ex.Message);
+                _logger.LogError(
+                    ex,
+                    "[DMM测量][失败] Command=MEAS:CONT?, Mode=Continuity, ElapsedMs={ElapsedMs}",
+                    sw.ElapsedMilliseconds);
                 throw;
             }
         }

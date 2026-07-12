@@ -6,6 +6,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models.TCP报文相关;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Logging;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 #if DEBUG
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.Development;
@@ -32,6 +33,14 @@ using System.Windows.Controls;
 
 var tests = new List<(string Name, Action Body)>
 {
+    ("Stage D semi-physical logging contract", TestStageDSemiPhysicalLogContract),
+    ("日志运行模式按 Fake 优先、半实物次之、默认真实解析", TestRunModeResolution),
+    ("阶段 A 正常日志不再使用 Warning", TestStageALogLevels),
+    ("DMM 空响应中止测量且不返回完成结果", TestDmmEmptyResponseThrows),
+    ("DMM 主动取消向调用方继续抛出取消", TestDmmCancellationIsNotTimeout),
+    ("DMM 阶段 B 异常保留堆栈并收口断线", TestDmmStageBSourceContract),
+    ("DMM 模式初始化连接异常会标记断线", TestDmmModeFailureMarksDisconnected),
+    ("阶段 C Modbus 日志包含拒绝、堆栈、慢请求和释放上下文", TestStageCModbusLogContract),
     ("启动拒绝记录来源原因和是否清除启动请求", () =>
     {
         var source = File.ReadAllText(Path.Combine(
@@ -1064,6 +1073,215 @@ static InspectionValidationResult ValidateStartPolarity(string leftPolarity, str
     });
 }
 
+static void TestRunModeResolution()
+{
+    var fakeConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Hardware:UseFakeInspectionHardware"] = "true",
+            ["Hardware:SemiPhysicalDebug"] = "true"
+        })
+        .Build();
+    var semiPhysicalConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Hardware:UseFakeInspectionHardware"] = "false",
+            ["Hardware:SemiPhysicalDebug"] = "true"
+        })
+        .Build();
+    var realConfiguration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Hardware:UseFakeInspectionHardware"] = "false",
+            ["Hardware:SemiPhysicalDebug"] = "false"
+        })
+        .Build();
+
+    AssertEqual("Fake", ApplicationRunModeResolver.Resolve(fakeConfiguration));
+    AssertEqual("SemiPhysical", ApplicationRunModeResolver.Resolve(semiPhysicalConfiguration));
+    AssertEqual("Real", ApplicationRunModeResolver.Resolve(realConfiguration));
+}
+
+static void TestStageALogLevels()
+{
+    var program = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Program.cs"));
+    var plc = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "Plc", "Fp0hPlcDevice.cs"));
+    var dmm = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "GwInstekGDM9060Driver.cs"));
+    var fake = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "Fakes", "FakeInspectionHardware.cs"));
+    var inspection = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Services", "InspectionEngine.cs"));
+    var testPage = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "ViewModels", "TestPageViewModel.cs"));
+
+    AssertEqual(true, program.Contains("[RunMode={RunMode}]", StringComparison.Ordinal));
+    AssertEqual(false, plc.Contains("_logger.LogWarning(\"[设备连接][PLC] 连接成功", StringComparison.Ordinal));
+    AssertEqual(true, plc.Contains("_logger.LogInformation(\"[设备连接][PLC] 连接成功", StringComparison.Ordinal));
+    AssertEqual(false, plc.Contains("_logger.LogWarning(\"[设备连接][PLC] 断开连接", StringComparison.Ordinal));
+    AssertEqual(true, plc.Contains("_logger.LogInformation(\"[设备连接][PLC] 断开连接", StringComparison.Ordinal));
+    AssertEqual(false, dmm.Contains("_logger.LogWarning(\"[万用表][审计] 万用表已切换", StringComparison.Ordinal));
+    AssertEqual(true, dmm.Contains("_logger.LogInformation(\"[DMM模式][配置完成] 万用表已切换", StringComparison.Ordinal));
+    AssertEqual(false, fake.Contains("_logger.LogWarning(\"[Fake硬件]", StringComparison.Ordinal));
+    AssertEqual(false, fake.Contains("_logger.LogWarning(\"[Fake][审计]", StringComparison.Ordinal));
+    AssertEqual(true, fake.Contains("_logger.LogInformation(\"[Fake][连接]", StringComparison.Ordinal));
+    var normalizedInspection = inspection.Replace("\r\n", "\n", StringComparison.Ordinal);
+    AssertEqual(true, normalizedInspection.Contains(
+        "_logger.LogInformation(\n                        \"[DMM性能][点位完成]",
+        StringComparison.Ordinal));
+    AssertEqual(false, testPage.Contains("_logger.LogWarning(\"[PLC动作][审计] 本轮正常完成收口结束", StringComparison.Ordinal));
+    AssertEqual(true, testPage.Contains("_logger.LogInformation(\"[PLC动作][审计] 本轮正常完成收口结束", StringComparison.Ordinal));
+    AssertEqual(false, testPage.Contains("_logger.LogWarning(\"[停止流程][审计] 停止收口完成", StringComparison.Ordinal));
+    AssertEqual(true, testPage.Contains("_logger.LogInformation(\"[停止流程][审计] 停止收口完成", StringComparison.Ordinal));
+    AssertEqual(false, testPage.Contains("_logger.LogWarning(\"[调试按钮][启动][请求]", StringComparison.Ordinal));
+    AssertEqual(true, testPage.Contains("_logger.LogInformation(\"[调试按钮][启动][请求]", StringComparison.Ordinal));
+}
+
+static void TestDmmEmptyResponseThrows()
+{
+    var pair = CreateDmmSocketPair();
+    using var driver = pair.Driver;
+    using var client = pair.Client;
+    using var server = pair.Server;
+    using var listener = pair.Listener;
+
+    var readTask = driver.ReadResistanceRawAsync();
+    var requestBuffer = new byte[64];
+    int requestBytes = server.GetStream().Read(requestBuffer, 0, requestBuffer.Length);
+    AssertEqual(true, requestBytes > 0);
+
+    server.Close();
+    AssertThrows<TimeoutException>(() => readTask.GetAwaiter().GetResult());
+}
+
+static void TestDmmCancellationIsNotTimeout()
+{
+    var pair = CreateDmmSocketPair();
+    using var driver = pair.Driver;
+    using var client = pair.Client;
+    using var server = pair.Server;
+    using var listener = pair.Listener;
+    using var cancellation = new CancellationTokenSource();
+
+    var readTask = driver.ReadResistanceRawAsync(cancellation.Token);
+    var requestBuffer = new byte[64];
+    int requestBytes = server.GetStream().Read(requestBuffer, 0, requestBuffer.Length);
+    AssertEqual(true, requestBytes > 0);
+
+    cancellation.Cancel();
+    AssertThrows<OperationCanceledException>(() => readTask.GetAwaiter().GetResult());
+}
+
+static void TestDmmStageBSourceContract()
+{
+    var source = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "GwInstekGDM9060Driver.cs"));
+    var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    AssertEqual(true, normalized.Contains(
+        "when (readTimeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)",
+        StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains("[DMM查询][取消]", StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains("[DMM测量][失败] Command=READ?", StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains("await MarkConnectionLostAsync().ConfigureAwait(false);", StringComparison.Ordinal));
+}
+
+static void TestDmmModeFailureMarksDisconnected()
+{
+    using var driver = new GwInstekGDM9060Driver(NullLogger<GwInstekGDM9060Driver>.Instance);
+    SetPrivateField(driver, "_isConnected", true);
+
+    var method = typeof(GwInstekGDM9060Driver).GetMethod(
+        "ConfigureResistanceModeInternalAsync",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("找不到 DMM 模式配置内部方法");
+
+    var task = (Task<bool>)(method.Invoke(driver, new object?[]
+    {
+        "测试模式",
+        "CONF:RES",
+        null,
+        CancellationToken.None,
+        false
+    }) ?? throw new InvalidOperationException("DMM 模式配置方法未返回任务"));
+
+    AssertEqual(false, task.GetAwaiter().GetResult());
+    AssertEqual(false, driver.IsConnected);
+}
+
+static void TestStageCModbusLogContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "TcpModbus",
+        "TcpClientPLCMotionService.cs"));
+    var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    const string writeRejected = "[Modbus诊断][写入拒绝] FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, IsConnected={IsConnected}, IsRunning={IsRunning}";
+    AssertEqual(true, CountOccurrences(normalized, writeRejected) >= 2);
+    AssertEqual(false, normalized.Contains("ExceptionType={ExceptionType}, Error={Error}", StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains(
+        "ex,\n                        \"[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}\"",
+        StringComparison.Ordinal));
+    AssertEqual(false, normalized.Contains("ElapsedMilliseconds >= 100", StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains(">= timeoutMs * 0.8", StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains(">= 300", StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains(
+        "[Modbus诊断][自定义请求超时] TID={TID}, FC={FC}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+        StringComparison.Ordinal));
+    AssertEqual(true, normalized.Contains("_requestLock.Dispose();", StringComparison.Ordinal));
+}
+
+static void TestStageDSemiPhysicalLogContract()
+{
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+    var dialogSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "EmergencyStopDialogViewModel.cs"));
+    var dmmSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "GwInstekGDM9060Driver.cs"));
+
+    AssertEqual(true, viewModelSource.Contains("[半实物][调试动作]", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("[半实物][PLC信号变化]", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("[半实物][异常注入]", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("LogSemiPhysicalSignalChanges", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("if (!IsSemiPhysicalDebugMode)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("DT120", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("DT121", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("DT122", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("DT123", StringComparison.Ordinal));
+
+    AssertEqual(true, dialogSource.Contains("[半实物][调试动作]", StringComparison.Ordinal));
+    AssertEqual(true, dialogSource.Contains("[半实物][PLC信号变化]", StringComparison.Ordinal));
+    AssertEqual(true, dialogSource.Contains("DT303", StringComparison.Ordinal));
+
+    AssertEqual(true, dmmSource.Contains("[DMM模式][配置完成]", StringComparison.Ordinal));
+    AssertEqual(true, dmmSource.Contains("ThresholdOhm={ThresholdOhm}", StringComparison.Ordinal));
+    AssertEqual(true, dmmSource.Contains("RawText={RawText}", StringComparison.Ordinal));
+    AssertEqual(true, dmmSource.Contains("ElapsedMs={ElapsedMs}", StringComparison.Ordinal));
+    AssertEqual(true, dmmSource.Contains("[DMM测量][取消]", StringComparison.Ordinal));
+}
+
+static (GwInstekGDM9060Driver Driver, TcpClient Client, TcpClient Server, TcpListener Listener) CreateDmmSocketPair()
+{
+    var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+    var acceptTask = listener.AcceptTcpClientAsync();
+    var client = new TcpClient();
+    client.Connect(IPAddress.Loopback, port);
+    var server = acceptTask.GetAwaiter().GetResult();
+
+    var driver = new GwInstekGDM9060Driver(NullLogger<GwInstekGDM9060Driver>.Instance);
+    SetPrivateField(driver, "_tcpClient", client);
+    SetPrivateField(driver, "_networkStream", client.GetStream());
+    SetPrivateField(driver, "_isConnected", true);
+    return (driver, client, server, listener);
+}
+
 static TestPointConfig CreateOpenContinuityTestPoint()
 {
     return new TestPointConfig
@@ -1079,6 +1297,19 @@ static void AssertEqual<T>(T expected, T actual)
     {
         throw new InvalidOperationException($"expected {expected}, actual {actual}");
     }
+}
+
+static int CountOccurrences(string text, string value)
+{
+    int count = 0;
+    int index = 0;
+    while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+    {
+        count++;
+        index += value.Length;
+    }
+
+    return count;
 }
 
 static void SetPrivateField<TValue>(object target, string fieldName, TValue value)

@@ -134,18 +134,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                 })
               .UseSerilog((context, configuration) =>
               {
+                  string runMode = ApplicationRunModeResolver.Resolve(context.Configuration);
+
                   configuration
                       .MinimumLevel.Information()
                       .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning) // 减少EF日志
                       .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
                       .Enrich.FromLogContext()
+                      .Enrich.WithProperty("RunMode", runMode)
                       .Enrich.With<SourceContextShortNameEnricher>()
                       .WriteTo.Debug(
-                          outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}")
+                          outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [RunMode={RunMode}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}")
                       .WriteTo.File("logs/app-.log",
                           rollingInterval: RollingInterval.Day,
                           retainedFileCountLimit: 7,
-                          outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}");
+                          outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [RunMode={RunMode}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}");
               });
 
 

@@ -232,7 +232,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     measureSw.Stop();
                     dmmTotalSw.Stop();
 
-                    _logger.LogWarning(
+                    _logger.LogInformation(
                         "[DMM性能][点位完成] INS={INS}, Index={Index}, Point={Point}, Mode={Mode}, ModePrepareMs={ModePrepareMs}, PostModeDelayMs={DelayMs}, MeasureMs={MeasureMs}, TotalDmmMs={TotalMs}, RawText={RawText}",
                         inspectionId, i, testPoint.Name, requestedMode,
                         modeSw.ElapsedMilliseconds, delaySw.ElapsedMilliseconds,
@@ -283,7 +283,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         if (firstNgIndex < 0) firstNgIndex = i;
                     }
 
-                    _logger.LogWarning("[检测流程][审计][{INS}] 判定 {Name}: Raw={RawText}, Result={Judgment}",
+                    _logger.LogInformation("[检测流程][点位完成][{INS}] 判定 {Name}: Raw={RawText}, Result={Judgment}",
                         inspectionId, testPoint.Name, measurement.RawValue, judgment);
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();

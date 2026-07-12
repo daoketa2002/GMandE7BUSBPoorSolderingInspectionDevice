@@ -946,8 +946,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 {
                     sendSw.Stop();
                     _logger.LogError(
-                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, ExceptionType={ExceptionType}, Error={Error}",
-                        transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds, ex.GetType().Name, ex.Message);
+                        ex,
+                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}",
+                        transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds);
                     return null;
                 }
 
@@ -968,14 +969,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         }
                         else
                         {
-                            if (totalSw.ElapsedMilliseconds >= 100)
+                            long elapsedMs = totalSw.ElapsedMilliseconds;
+                            if (elapsedMs >= timeoutMs * 0.8)
                             {
                                 _logger.LogWarning(
                                     "[Modbus性能][慢请求] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, ElapsedMs={ElapsedMs}, PendingCount={PendingCount}, IsConnected={IsConnected}, IsRunning={IsRunning}",
-                                    transactionId.Value, operation, functionCode, unitId, startAddress, quantity, totalSw.ElapsedMilliseconds, _pendingRequests.Count, _isConnected, _isRunning);
+                                    transactionId.Value, operation, functionCode, unitId, startAddress, quantity, elapsedMs, _pendingRequests.Count, _isConnected, _isRunning);
                             }
-                            else
+                            else if (elapsedMs >= 300)
                             {
+                                _logger.LogInformation(
+                                    "[Modbus性能][慢请求] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, ElapsedMs={ElapsedMs}, PendingCount={PendingCount}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                                    transactionId.Value, operation, functionCode, unitId, startAddress, quantity, elapsedMs, _pendingRequests.Count, _isConnected, _isRunning);
                             }
                         }
                     }
@@ -1023,6 +1028,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         {
             if (!IsConnected || !_isRunning)
             {
+                _logger.LogWarning(
+                    "[Modbus诊断][写入拒绝] FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                    functionCode, unitId, startAddress, IsConnected, _isRunning);
                 Notify(NotificationType.Error, "TCP未连接或服务已停止", "ExecuteWriteOperation");
                 return null;
             }
@@ -1041,6 +1049,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 // 获取锁后再次检查连接状态
                 if (!IsConnected || !_isRunning)
                 {
+                    _logger.LogWarning(
+                        "[Modbus诊断][写入拒绝] FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                        functionCode, unitId, startAddress, IsConnected, _isRunning);
                     Notify(NotificationType.Error, "TCP未连接或服务已停止", "ExecuteWriteOperation");
                     return null;
                 }
@@ -1092,8 +1103,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 {
                     sendSw.Stop();
                     _logger.LogError(
-                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, ExceptionType={ExceptionType}, Error={Error}",
-                        transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds, ex.GetType().Name, ex.Message);
+                        ex,
+                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}",
+                        transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds);
                     return null;
                 }
 
@@ -1117,14 +1129,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                             }
                             else
                             {
-                                if (totalSw.ElapsedMilliseconds >= 100)
+                                long elapsedMs = totalSw.ElapsedMilliseconds;
+                                if (elapsedMs >= timeoutMs * 0.8)
                                 {
                                     _logger.LogWarning(
                                         "[Modbus性能][慢请求] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, ElapsedMs={ElapsedMs}, PendingCount={PendingCount}, IsConnected={IsConnected}, IsRunning={IsRunning}",
-                                        transactionId.Value, operation, functionCode, unitId, startAddress, data.Length, totalSw.ElapsedMilliseconds, _pendingRequests.Count, _isConnected, _isRunning);
+                                        transactionId.Value, operation, functionCode, unitId, startAddress, data.Length, elapsedMs, _pendingRequests.Count, _isConnected, _isRunning);
                                 }
-                                else
+                                else if (elapsedMs >= 300)
                                 {
+                                    _logger.LogInformation(
+                                        "[Modbus性能][慢请求] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, ElapsedMs={ElapsedMs}, PendingCount={PendingCount}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                                        transactionId.Value, operation, functionCode, unitId, startAddress, data.Length, elapsedMs, _pendingRequests.Count, _isConnected, _isRunning);
                                 }
                                 // 正常写成功不触发通知（避免噪声），异常由上层业务日志记录
                             }
@@ -1518,6 +1534,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                 _syncLock?.Dispose();
                 _sendLock?.Dispose();
+                _requestLock.Dispose();
                 _receiveBuffer?.Dispose();
             }
 
@@ -1567,6 +1584,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             if (customRequestFrame == null || customRequestFrame.Length < 8)
                 throw new ArgumentException("Modbus TCP 请求帧至少需要8字节（MBAP头+PDU）", nameof(customRequestFrame));
 
+            byte functionCode = customRequestFrame[7];
+            var totalSw = Stopwatch.StartNew();
+
             if (!IsConnected || !_isRunning)
             {
                 Notify(NotificationType.Error, "TCP未连接或服务已停止", "SendCustomModbusRequest");
@@ -1613,12 +1633,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 }
                 catch (TimeoutException)
                 {
-                    _logger.LogWarning("[Modbus][自定义请求超时] TransactionId={TransactionId}, TimeoutMs={TimeoutMs}",
-                        transactionId.Value, timeoutMs);
+                    totalSw.Stop();
+                    _logger.LogWarning(
+                        "[Modbus诊断][自定义请求超时] TID={TID}, FC={FC}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                        transactionId.Value, functionCode, totalSw.ElapsedMilliseconds, timeoutMs, _isConnected, _isRunning);
                     return null;
                 }
                 catch (OperationCanceledException)
                 {
+                    totalSw.Stop();
                     _logger.LogWarning("自定义请求被取消，TID={TID}", transactionId.Value);
                     return null;
                 }

@@ -1321,7 +1321,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             if (!readResult.Value.IsStopRequested)
             {
-                _logger.LogWarning("[复位流程][DT122] 最终确认成功，第 {Attempt} 次后 DT122=0", attempt);
+                _logger.LogInformation("[复位流程][DT122] 最终确认成功，第 {Attempt} 次后 DT122=0", attempt);
                 return true;
             }
 
@@ -1391,7 +1391,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private async Task<bool> CompleteNormalInspectionHandshakeAsync()
     {
-        _logger.LogWarning("[PLC动作][审计] 检测完成且保存策略已处理，开始清理本轮启动握手信号");
+        _logger.LogInformation("[PLC动作][审计] 检测完成且保存策略已处理，开始清理本轮启动握手信号");
 
         var cleanupResult = await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -1417,7 +1417,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             IsPlcStartRequested = false;
         });
 
-        _logger.LogWarning("[PLC动作][审计] 本轮正常完成收口结束：DT120/DT234/DT304/DT305 已清除，界面结果保留到复位");
+        _logger.LogInformation("[PLC动作][审计] 本轮正常完成收口结束：DT120/DT234/DT304/DT305 已清除，界面结果保留到复位");
         AddLog("PLC 检测完成收口完成");
         return true;
     }
@@ -1448,7 +1448,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (result.AllSucceeded)
         {
-            _logger.LogWarning("[PLC清理][成功] DT120={Start}, DT234={PcReady}, DT302={Relay}, DT130~185={Pins}, DT304/305={Final}",
+            _logger.LogInformation("[PLC清理][成功] DT120={Start}, DT234={PcReady}, DT302={Relay}, DT130~185={Pins}, DT304/305={Final}",
                 start.IsSuccess, pcReady.IsSuccess, relay.IsSuccess, pins.IsSuccess, finalResult.IsSuccess);
         }
         else
@@ -1549,7 +1549,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 await Task.Delay(1000);
                 await _plcDevice.ClearTerminateRequestAsync(CancellationToken.None).ConfigureAwait(false);
-                _logger.LogWarning("[终止按钮][审计] 延时 1 秒后已清除 DT306=0");
+                _logger.LogInformation("[终止按钮][审计] 延时 1 秒后已清除 DT306=0");
             });
         }
         finally
@@ -1721,6 +1721,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var previousInputs = _lastPlcInputs;
             var inputs = pollResult.Value;
 
+            LogSemiPhysicalSignalChanges(previousInputs, inputs);
             IsPlcStartRequested = inputs.IsStartRequested;
 
             var operation = Application.Current.Dispatcher.InvokeAsync(
@@ -1913,6 +1914,62 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 半实物模式只记录 PLC 控制信号的变化沿，避免 200ms 轮询重复刷屏。
+    /// </summary>
+    private void LogSemiPhysicalSignalChanges(PlcControlSignals? previousInputs, PlcControlSignals currentInputs)
+    {
+        if (!IsSemiPhysicalDebugMode || previousInputs == null)
+            return;
+
+        LogSemiPhysicalSignalChange("DT120", previousInputs.IsStartRequested, currentInputs.IsStartRequested, "Start");
+        LogSemiPhysicalSignalChange("DT121", previousInputs.IsResetRequested, currentInputs.IsResetRequested, "Reset");
+        LogSemiPhysicalSignalChange("DT122", previousInputs.IsStopRequested, currentInputs.IsStopRequested, "Stop");
+        LogSemiPhysicalSignalChange("DT123", previousInputs.IsEmergencyStop, currentInputs.IsEmergencyStop, "EmergencyStop");
+    }
+
+    private void LogSemiPhysicalSignalChange(string signal, bool previousValue, bool currentValue, string action)
+    {
+        if (previousValue == currentValue)
+            return;
+
+        _logger.LogInformation(
+            "[半实物][PLC信号变化] {Signal}: {Previous} -> {Current}, Action={Action}",
+            signal,
+            previousValue ? 1 : 0,
+            currentValue ? 1 : 0,
+            action);
+    }
+
+    /// <summary>
+    /// 半实物调试面板的主动动作统一使用专用前缀；Fake/真实模式不输出该前缀。
+    /// </summary>
+    private void LogSemiPhysicalDebugAction(string action, string signal, ushort value)
+    {
+        if (!IsSemiPhysicalDebugMode)
+            return;
+
+        _logger.LogInformation(
+            "[半实物][调试动作] Action={Action}, Signal={Signal}, Value={Value}",
+            action,
+            signal,
+            value);
+    }
+
+    /// <summary>
+    /// 半实物主动测试场景中的预期失败标识。真实业务异常仍由原有 Error/Warning 日志记录。
+    /// </summary>
+    private void LogSemiPhysicalExpectedFailure(string scenario, string? message)
+    {
+        if (!IsSemiPhysicalDebugMode)
+            return;
+
+        _logger.LogWarning(
+            "[半实物][异常注入] Scenario={Scenario}, ExpectedFailure=true, Message={Message}",
+            scenario,
+            message);
+    }
+
+    /// <summary>
     /// 启动请求状态分类。在进入完整启动校验前先做静默忽略或拒绝。
     /// </summary>
     private StartRequestDecision EvaluateStartRequestDecision(InspectionActionSource source)
@@ -2052,7 +2109,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             startingToken.ThrowIfCancellationRequested();
 
-            _logger.LogWarning("[启动复核][通过] 条件满足，万用表通信正常，DT234=1 已写入，开始检测");
+            _logger.LogInformation("[启动复核][通过] 条件满足，万用表通信正常，DT234=1 已写入，开始检测");
             _inspectionStarted = true;
             _startSignalHandled = true;
             _ignoreInspectionCallbacksUntilNextStart = false;
@@ -2181,7 +2238,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _waitDt120ReleaseAfterReset = true;
         Interlocked.Increment(ref _inspectionRunVersion);
         SetUiState(TestUIState.Resetting);
-        _logger.LogWarning("[复位请求][执行] 开始执行复位流程，来源={Source}", source);
+        _logger.LogInformation("[复位请求][执行] 开始执行复位流程，来源={Source}", source);
         AddLog($"正在执行上位机复位操作...（来源={source}）");
 
         try
@@ -2428,7 +2485,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (stopSignalReleased)
             {
                 AddLog("[停止流程] 已停止，必须复位后才能重新从第一项开始检测");
-                _logger.LogWarning("[停止流程][审计] 停止收口完成，DT122 已释放，页面进入 AwaitingReset");
+                _logger.LogInformation("[停止流程][审计] 停止收口完成，DT122 已释放，页面进入 AwaitingReset");
             }
             else
             {
@@ -2565,7 +2622,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 _emergencyStopDialogVM = null;
                 return true;
             },
-            canSimulateAlarmRelease: canSimulateAlarmRelease);
+            canSimulateAlarmRelease: canSimulateAlarmRelease,
+            isSemiPhysicalDebugMode: IsSemiPhysicalDebugMode);
 
         dialog.DataContext = vm;
         _emergencyStopDialogVM = vm;
@@ -2625,7 +2683,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                         AddLog("急停信号已确认释放，请复位后重新启动");
                     });
 
-                    _logger.LogWarning("[急停解除][确认成功] DT123=0，状态切换 AwaitingReset");
+                    _logger.LogInformation("[急停解除][确认成功] DT123=0，状态切换 AwaitingReset");
                     return true;
                 }
                 else
@@ -2665,6 +2723,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugStartAsync()
     {
+        LogSemiPhysicalDebugAction("Start", "DT120", 1);
+
         if (_inspectionEngine == null) return;
 
         // ── 重复启动快速忽略（不写 DT120）──
@@ -2705,7 +2765,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _logger.LogWarning("[调试按钮][启动][请求] 上位机写入 DT120=1，等待 PLC 轮询统一消费");
+        _logger.LogInformation("[调试按钮][启动][请求] 上位机写入 DT120=1，等待 PLC 轮询统一消费");
 
         var result = await _plcDevice.RequestStartAsync(CancellationToken.None).ConfigureAwait(false);
         if (!result.IsSuccess)
@@ -2727,7 +2787,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugStopAsync()
     {
-        _logger.LogWarning("[调试按钮][停止][请求] 上位机写入 DT122=1，等待 PLC 轮询统一消费");
+        LogSemiPhysicalDebugAction("Stop", "DT122", 1);
+
+        _logger.LogInformation("[调试按钮][停止][请求] 上位机写入 DT122=1，等待 PLC 轮询统一消费");
 
         // 暂停 UI 轮询，避免写信号时与 Polling 产生并发 pending
         SuspendPlcPolling();
@@ -2751,7 +2813,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugResetAsync()
     {
-        _logger.LogWarning("[调试按钮][复位][请求] 上位机写入 DT121=1，等待 PLC 轮询统一消费");
+        LogSemiPhysicalDebugAction("Reset", "DT121", 1);
+
+        _logger.LogInformation("[调试按钮][复位][请求] 上位机写入 DT121=1，等待 PLC 轮询统一消费");
 
         SuspendPlcPolling();
         try
@@ -2774,7 +2838,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerDebugEmergencyStopAsync()
     {
-        _logger.LogWarning("[调试按钮][急停][请求] 上位机写入 DT123=1，等待 PLC 轮询统一消费");
+        LogSemiPhysicalDebugAction("EmergencyStop", "DT123", 1);
+
+        _logger.LogInformation("[调试按钮][急停][请求] 上位机写入 DT123=1，等待 PLC 轮询统一消费");
 
         SuspendPlcPolling();
         try
@@ -2805,6 +2871,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return true;
         }
 
+        LogSemiPhysicalExpectedFailure($"{actionName}WriteFailure", result.Message);
         if (!_plcDevice.IsConnected)
         {
             AddLog($"[{sourceName}] 写入 {signalName}=1 失败：PLC 未连接");
@@ -2834,7 +2901,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        _logger.LogWarning("[复位按钮][请求] 已写入 DT121=1，等待 PLC 轮询统一消费");
+        _logger.LogInformation("[复位按钮][请求] 已写入 DT121=1，等待 PLC 轮询统一消费");
     }
 
     /// <summary>

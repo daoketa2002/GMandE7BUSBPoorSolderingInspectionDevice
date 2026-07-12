@@ -15,6 +15,7 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
     private readonly IPlcDevice _plcDevice;
     private readonly Func<Task<bool>> _releaseEmergencyStop;
     private readonly bool _canSimulateAlarmRelease;
+    private readonly bool _isSemiPhysicalDebugMode;
     private CancellationTokenSource? _pollingCts;
 
     [ObservableProperty]
@@ -30,11 +31,13 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
         IPlcDevice plcDevice,
         Func<Task<bool>> releaseEmergencyStop,
         bool canSimulateAlarmRelease,
+        bool isSemiPhysicalDebugMode = false,
         ILogger<EmergencyStopDialogViewModel>? logger = null)
     {
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
         _releaseEmergencyStop = releaseEmergencyStop ?? throw new ArgumentNullException(nameof(releaseEmergencyStop));
         _canSimulateAlarmRelease = canSimulateAlarmRelease;
+        _isSemiPhysicalDebugMode = isSemiPhysicalDebugMode;
         _logger = logger;
     }
 
@@ -94,6 +97,14 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
         if (IsAlarmReleased == alarmReleased)
             return;
 
+        if (_isSemiPhysicalDebugMode)
+        {
+            _logger?.LogInformation(
+                "[半实物][PLC信号变化] DT303: {Previous} -> {Current}, Action=AlarmRelease",
+                IsAlarmReleased ? 1 : 0,
+                alarmReleased ? 1 : 0);
+        }
+
         IsAlarmReleased = alarmReleased;
 
         if (alarmReleased)
@@ -135,9 +146,22 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
         if (!_canSimulateAlarmRelease)
             return;
 
+        if (_isSemiPhysicalDebugMode)
+        {
+            _logger?.LogInformation(
+                "[半实物][调试动作] Action=AlarmRelease, Signal=DT303, Value=1");
+        }
+
         var result = await _plcDevice.RequestAlarmReleaseAsync(default).ConfigureAwait(false);
         if (!result.IsSuccess)
         {
+            if (_isSemiPhysicalDebugMode)
+            {
+                _logger?.LogWarning(
+                    "[半实物][异常注入] Scenario=AlarmReleaseWriteFailure, ExpectedFailure=true, Message={Message}",
+                    result.Message);
+            }
+
             _logger?.LogWarning("[急停弹窗] 模拟写入 DT303=1 失败: {Message}", result.Message);
             return;
         }

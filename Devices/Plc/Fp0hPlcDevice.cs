@@ -104,7 +104,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         bool result = await _modbusClient.ConnectAsync(options, ct).ConfigureAwait(false);
 
         if (result)
-            _logger.LogWarning("[设备连接][PLC] 连接成功: {Host}:{Port}", options.Host, options.Port);
+            _logger.LogInformation("[设备连接][PLC] 连接成功: {Host}:{Port}", options.Host, options.Port);
         else
             _logger.LogWarning("[设备连接][PLC] 连接失败: {Host}:{Port}", options.Host, options.Port);
 
@@ -113,7 +113,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
 
     public async Task DisconnectAsync()
     {
-        _logger.LogWarning("[设备连接][PLC] 断开连接");
+        _logger.LogInformation("[设备连接][PLC] 断开连接");
         await _modbusClient.DisconnectAsync().ConfigureAwait(false);
     }
 
