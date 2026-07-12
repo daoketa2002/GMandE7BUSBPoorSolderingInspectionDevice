@@ -128,8 +128,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     LogInfo($"正在检测 [{i + 1}/{_config.TestPoints.Count}] {testPoint.Name} ({testPoint.CheckMode})");
 
                     _currentExecutionStage = "WritePinsToPlc";
-                    PlcCallerScope? writeScope = null;
-                    try { writeScope = new PlcCallerScope(_logger, "EngineWritePins"); } catch { }
                     var writeResult = await _plcDevice.WriteCurrentTestPointAsync(
                         testPoint.PinLeft,
                         testPoint.PinRight,
@@ -137,7 +135,6 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         testPoint.PinRightPolarityCode,
                         _inspectionCts.Token).ConfigureAwait(false);
 
-                    writeScope?.Dispose();
                     if (!writeResult.IsSuccess)
                     {
                         _logger.LogError(
@@ -173,10 +170,9 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     {
                         var relaySw = Stopwatch.StartNew();
                         PlcOperationResult? relayResult;
-                        using (new PlcCallerScope(_logger, "EngineDt302Wait"))
-                            relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
-                                TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
-                                _inspectionCts.Token).ConfigureAwait(false);
+                        relayResult = await _plcDevice.WaitRelaySwitchCompletedAsync(
+                            TimeSpan.FromMilliseconds(_config.RelaySwitchTimeoutMs),
+                            _inspectionCts.Token).ConfigureAwait(false);
                         relaySw.Stop();
                         LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT302", relaySw.ElapsedMilliseconds);
 
@@ -292,8 +288,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
 
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     _currentExecutionStage = "WritePointResult";
-                    using (new PlcCallerScope(_logger, "EngineWriteResult"))
-                        await _plcDevice.WritePointResultAsync(i, judgment == "OK", _inspectionCts.Token).ConfigureAwait(false);
+                    await _plcDevice.WritePointResultAsync(i, judgment == "OK", _inspectionCts.Token).ConfigureAwait(false);
                     _inspectionCts.Token.ThrowIfCancellationRequested();
                     StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, measurement));
                     _progress.CurrentItemIndex = i + 1;
@@ -324,10 +319,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
 
                     _currentExecutionStage = "ClearPointOutputs";
-                    PlcCallerScope? cleanScope = null;
-                    try { cleanScope = new PlcCallerScope(_logger, "EngineCleanup"); } catch { }
                     var stepCleanupResult = await ClearPlcOutputsAndRelayFlagAsync("StepCompleted", _inspectionCts.Token).ConfigureAwait(false);
-                    cleanScope?.Dispose();
                     if (!stepCleanupResult.pinCleared || !stepCleanupResult.relayCleared)
                     {
                         result.StopPointIndex = i;
@@ -356,11 +348,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 _progress.CurrentStep = "Completed";
                 SetState(result.IsAllPassed ? InspectionState.CompletedPass : InspectionState.CompletedFail);
 
-                using (new PlcCallerScope(_logger, "EngineWriteResult"))
-                    await _plcDevice.WriteFinalResultAsync(
-                        result.IsAllPassed,
-                        firstNgIndex >= 0 ? firstNgIndex : null,
-                        _inspectionCts.Token).ConfigureAwait(false);
+                await _plcDevice.WriteFinalResultAsync(
+                    result.IsAllPassed,
+                    firstNgIndex >= 0 ? firstNgIndex : null,
+                    _inspectionCts.Token).ConfigureAwait(false);
 
                 // 正常完成时只写 DT304/DT305 最终结果。
                 // DT120/DT234 的正常完成收口必须等 TestPageViewModel 完成保存策略处理后执行。
@@ -434,10 +425,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         result.ErrorMessage = message;
         result.EndTime = DateTime.Now;
         await ClearPlcOutputsAndRelayFlagSafelyAsync(cleanupReason).ConfigureAwait(false);
-        using (new PlcCallerScope(_logger, "EngineCleanup"))
-            await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
-        using (new PlcCallerScope(_logger, "EngineCleanup"))
-            await _plcDevice.WritePcErrorAsync(CancellationToken.None).ConfigureAwait(false);
+        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
+        await _plcDevice.WritePcErrorAsync(CancellationToken.None).ConfigureAwait(false);
         SetState(state);
     }
 

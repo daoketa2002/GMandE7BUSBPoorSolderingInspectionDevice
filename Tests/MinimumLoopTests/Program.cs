@@ -32,6 +32,50 @@ using System.Windows.Controls;
 
 var tests = new List<(string Name, Action Body)>
 {
+    ("启动拒绝记录来源原因和是否清除启动请求", () =>
+    {
+        var source = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "ViewModels",
+            "TestPageViewModel.cs"));
+
+        AssertEqual(true, source.Contains("bool clearStartRequest = true", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains(
+            "Source={Source}, Reason={Reason}, ClearStartRequest={ClearStartRequest}, DiagnosticMessage={DiagnosticMessage}",
+            StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("if (clearStartRequest)", StringComparison.Ordinal));
+    }),
+    ("调试启动在写入 DT120 前校验 PLC 离线并统一拒绝", () =>
+    {
+        var source = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "ViewModels",
+            "TestPageViewModel.cs"));
+        const string validation = "var validationResult = BuildStartValidationResult();";
+        const string request = "var result = await _plcDevice.RequestStartAsync";
+
+        AssertEqual(true, source.Contains(
+            "await RejectStartAsync(validationResult, InspectionActionSource.DebugPanel, clearStartRequest: false);",
+            StringComparison.Ordinal));
+        AssertEqual(true, source.IndexOf(validation, StringComparison.Ordinal) < source.IndexOf(request, StringComparison.Ordinal));
+    }),
+    ("启动失败均回到统一拒绝出口且操作员提示不暴露 DT234", () =>
+    {
+        var source = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "ViewModels",
+            "TestPageViewModel.cs"));
+
+        AssertEqual(true, source.Contains(
+            "CreateStartFailureResult(\"万用表无法通信，请检查网络连接后重试。\"", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains(
+            "CreateStartFailureResult(\"启动允许信号发送失败，请检查 PLC 通信状态后重试。\"", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains(
+            "await RejectStartAsync(CreateStartFailureResult(operatorMessage", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains(
+            "启动请求发送失败，请检查 PLC 通信状态后重试。", StringComparison.Ordinal));
+        AssertEqual(false, source.Contains("ShowWarningAsync($\"写 DT234 失败", StringComparison.Ordinal));
+    }),
     ("设备连接失败计数区分健康检查和自动重连", () =>
     {
         var sourcePath = Path.Combine(
@@ -171,6 +215,74 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual(false, ValidateStartPolarity(
             PinPolarityConstants.Negative, PinPolarityConstants.Negative).IsValid);
         AssertEqual(false, ValidateStartPolarity("未知", PinPolarityConstants.Negative).IsValid);
+    }),
+    ("方案仍在加载时启动校验必须拒绝", () =>
+    {
+        var config = new InspectionConfig
+        {
+            TestPoints = { CreateOpenContinuityTestPoint() }
+        };
+
+        var result = InspectionStartValidator.Validate(new InspectionStartValidationRequest
+        {
+            UiState = TestUIState.Ready,
+            ModelName = "GM",
+            SerialNumber = "SN-TEST",
+            SchemeName = "启动状态方案",
+            OperatorName = "测试员",
+            IsPlcConnected = true,
+            IsDmmConnected = true,
+            IsPlanLoading = true,
+            Config = config,
+            UiItemCount = config.TestPoints.Count
+        });
+
+        AssertEqual(false, result.IsValid);
+    }),
+    ("真实模式运行日志隐藏 PLC 地址而调试模式保留", () =>
+    {
+        const string message = "DT120=1，等待 DT302，随后写入 DT304";
+
+        string realModeText = InvokeToOperatorText(message, showTechnicalDetails: false);
+        AssertEqual(false, realModeText.Contains("DT120", StringComparison.Ordinal));
+        AssertEqual(false, realModeText.Contains("DT302", StringComparison.Ordinal));
+        AssertEqual(false, realModeText.Contains("DT304", StringComparison.Ordinal));
+
+        string debugModeText = InvokeToOperatorText(message, showTechnicalDetails: true);
+        AssertEqual(message, debugModeText);
+    }),
+    ("阶段 C 主菜单和真实模式主操作按钮复用工业样式", () =>
+    {
+        var mainMenuXaml = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "Views",
+            "MainMenuView.xaml"));
+        var testPageXaml = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "Views",
+            "TestPageView.xaml"));
+
+        AssertEqual(true, mainMenuXaml.Contains("x:Key=\"IndustrialMenuButtonStyle\"", StringComparison.Ordinal));
+        AssertEqual(true, mainMenuXaml.Contains("VerticalScrollBarVisibility=\"Auto\"", StringComparison.Ordinal));
+        AssertEqual(false, mainMenuXaml.Contains("Width=\"350\"", StringComparison.Ordinal));
+
+        AssertEqual(true, testPageXaml.Contains("x:Key=\"MainOperationButtonStyle\"", StringComparison.Ordinal));
+        AssertEqual(true, testPageXaml.Contains("Style=\"{StaticResource MainOperationButtonStyle}\"", StringComparison.Ordinal));
+        AssertEqual(true, testPageXaml.Contains("Content=\"复位(DT121)\"", StringComparison.Ordinal));
+        AssertEqual(true, testPageXaml.Contains("Style=\"{StaticResource DebugButtonStyle}\"", StringComparison.Ordinal));
+    }),
+    ("主菜单按钮具有与终了按钮一致的软拟物光影层次", () =>
+    {
+        var mainMenuXaml = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "Views",
+            "MainMenuView.xaml"));
+
+        AssertEqual(true, mainMenuXaml.Contains("<LinearGradientBrush", StringComparison.Ordinal));
+        AssertEqual(true, mainMenuXaml.Contains("x:Name=\"buttonHighlight\"", StringComparison.Ordinal));
+        AssertEqual(true, mainMenuXaml.Contains("x:Name=\"buttonInnerStroke\"", StringComparison.Ordinal));
+        AssertEqual(true, mainMenuXaml.Contains("x:Name=\"buttonShadow\"", StringComparison.Ordinal));
+        AssertEqual(true, mainMenuXaml.Contains("TargetName=\"buttonContent\" Property=\"Margin\" Value=\"0,2,0,0\"", StringComparison.Ordinal));
     }),
     ("半实物 DT302 旁路默认关闭且可显式开启（新名 SkipDt302Wait）", () =>
     {
@@ -985,6 +1097,17 @@ static string InvokeFormatMeasurementResult(MeasurementResult measurement, TestP
 
     return (string)(method.Invoke(null, new object[] { measurement, testPoint })
         ?? throw new InvalidOperationException("FormatMeasurementResult 返回空值"));
+}
+
+static string InvokeToOperatorText(string message, bool showTechnicalDetails)
+{
+    var method = typeof(TestPageViewModel).GetMethod(
+        "ToOperatorText",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("找不到 ToOperatorText 方法");
+
+    return (string)(method.Invoke(null, new object[] { message, showTechnicalDetails })
+        ?? throw new InvalidOperationException("ToOperatorText 返回空值"));
 }
 
 static void AssertThrows<TException>(Action action)

@@ -20,6 +20,12 @@ public sealed class InspectionStartValidationRequest
     public bool IsSchemeNameInvalid { get; init; }
     public bool IsPlcConnected { get; init; }
     public bool IsDmmConnected { get; init; }
+    /// <summary>方案列表或检测项目仍在异步加载时，不允许依据旧数据启动。</summary>
+    public bool IsPlanLoading { get; init; }
+    /// <summary>已有运行控制动作时，禁止并发启动。</summary>
+    public bool IsControlActionInProgress { get; init; }
+    /// <summary>检测引擎已运行时，禁止重复启动。</summary>
+    public bool IsInspectionEngineRunning { get; init; }
     public PlcControlSignals? PlcInputs { get; init; }
     public InspectionConfig Config { get; init; } = new();
     public int UiItemCount { get; init; }
@@ -47,6 +53,13 @@ public static class InspectionStartValidator
         }
         if (request.UiState == TestUIState.EmergencyStop)
             return Fail("设备处于急停状态，请先复位后再启动检测");
+
+        if (request.IsControlActionInProgress)
+            return Fail("系统正在处理其他动作，请等待当前操作完成");
+        if (request.IsInspectionEngineRunning)
+            return Fail("检测已在运行中，无需重复启动");
+        if (request.IsPlanLoading)
+            return Fail("当前方案仍在加载，请等待加载完成后再启动");
 
         // 基本信息检查
         if (string.IsNullOrWhiteSpace(request.ModelName))

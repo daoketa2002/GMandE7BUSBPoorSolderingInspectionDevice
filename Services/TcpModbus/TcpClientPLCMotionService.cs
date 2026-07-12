@@ -911,13 +911,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
             try
             {
-                // Phase E2: 记录门禁等待耗时（用于评估锁竞争导致的控制信号响应延迟）
-                var gateSw = Stopwatch.StartNew();
-
                 // Phase E1: 完整生命周期串行化 — 在锁内创建 TID/Pending、发送、等待响应
                 await _requestLock.WaitAsync(ct).ConfigureAwait(false);
                 lockTaken = true;
-                gateSw.Stop();
 
                 // 获取锁后再次检查连接状态（等待期间可能变化）
                 if (!IsConnected || !_isRunning)
@@ -932,11 +928,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var pendingRequest = new PendingModbusRequest
                 {
                     Completion = tcs,
-                    CreatedAtUtc = DateTime.UtcNow,
-                    GateWaitMs = gateSw.ElapsedMilliseconds,
                 };
                 _pendingRequests[transactionId.Value] = pendingRequest;
-                pendingRequest.PendingAtCreate = _pendingRequests.Count;
 
                 ModbusResponse? response = null;
 
@@ -948,17 +941,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 {
                     await SendRawDataAsync(request).ConfigureAwait(false);
                     sendSw.Stop();
-                    if (_pendingRequests.TryGetValue(transactionId.Value, out var currentReq))
-                    {
-                        currentReq.SendCompleted = true;
-                        currentReq.SendElapsedMs = sendSw.ElapsedMilliseconds;
-                    }
                 }
                 catch (Exception ex)
                 {
                     sendSw.Stop();
                     _logger.LogError(
-                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, SendElapsedMs={SendElapsedMs}, ExceptionType={ExceptionType}, Error={Error}",
+                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, ExceptionType={ExceptionType}, Error={Error}",
                         transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds, ex.GetType().Name, ex.Message);
                     return null;
                 }
@@ -996,11 +984,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 {
                     totalSw.Stop();
                     _logger.LogError(
-                        "[Modbus诊断][读取超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, PendingAtCreate={PendingAtCreate}, SendCompleted={SendCompleted}, SendElapsedMs={SendElapsedMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                        "[Modbus诊断][读取超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
                         transactionId.Value, functionCode, unitId, startAddress,
                         totalSw.ElapsedMilliseconds, timeoutMs,
-                        pendingRequest.PendingAtCreate,
-                        pendingRequest.SendCompleted, pendingRequest.SendElapsedMs,
                         _isConnected, _isRunning);
                     Notify(NotificationType.Warning, "Modbus读取超时", "ExecuteReadOperation");
                 }
@@ -1048,13 +1034,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
             try
             {
-                // Phase E2: 记录门禁等待耗时（用于评估锁竞争导致的控制信号响应延迟）
-                var gateSw = Stopwatch.StartNew();
-
                 // Phase E1: 完整生命周期串行化 — 在锁内创建 TID/Pending、发送、等待响应
                 await _requestLock.WaitAsync(ct).ConfigureAwait(false);
                 lockTaken = true;
-                gateSw.Stop();
 
                 // 获取锁后再次检查连接状态
                 if (!IsConnected || !_isRunning)
@@ -1069,11 +1051,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var pendingRequest = new PendingModbusRequest
                 {
                     Completion = tcs,
-                    CreatedAtUtc = DateTime.UtcNow,
-                    GateWaitMs = gateSw.ElapsedMilliseconds,
                 };
                 _pendingRequests[transactionId.Value] = pendingRequest;
-                pendingRequest.PendingAtCreate = _pendingRequests.Count;
 
                 ModbusResponse? response = null;
 
@@ -1108,17 +1087,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 {
                     await SendRawDataAsync(request).ConfigureAwait(false);
                     sendSw.Stop();
-                    if (_pendingRequests.TryGetValue(transactionId.Value, out var currentReq))
-                    {
-                        currentReq.SendCompleted = true;
-                        currentReq.SendElapsedMs = sendSw.ElapsedMilliseconds;
-                    }
                 }
                 catch (Exception ex)
                 {
                     sendSw.Stop();
                     _logger.LogError(
-                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, SendElapsedMs={SendElapsedMs}, ExceptionType={ExceptionType}, Error={Error}",
+                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, ExceptionType={ExceptionType}, Error={Error}",
                         transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds, ex.GetType().Name, ex.Message);
                     return null;
                 }
@@ -1146,8 +1120,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                                 if (totalSw.ElapsedMilliseconds >= 100)
                                 {
                                     _logger.LogWarning(
-                                        "[Modbus性能][慢请求] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, ElapsedMs={ElapsedMs}, PendingAtCreate={PendingAtCreate}, PendingCount={PendingCount}, IsConnected={IsConnected}, IsRunning={IsRunning}",
-                                        transactionId.Value, operation, functionCode, unitId, startAddress, data.Length, totalSw.ElapsedMilliseconds, pendingRequest.PendingAtCreate, _pendingRequests.Count, _isConnected, _isRunning);
+                                        "[Modbus性能][慢请求] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, ElapsedMs={ElapsedMs}, PendingCount={PendingCount}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                                        transactionId.Value, operation, functionCode, unitId, startAddress, data.Length, totalSw.ElapsedMilliseconds, _pendingRequests.Count, _isConnected, _isRunning);
                                 }
                                 else
                                 {
@@ -1171,11 +1145,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 {
                     totalSw.Stop();
                     _logger.LogError(
-                        "[Modbus诊断][写入超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, PendingAtCreate={PendingAtCreate}, SendCompleted={SendCompleted}, SendElapsedMs={SendElapsedMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                        "[Modbus诊断][写入超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
                         transactionId.Value, functionCode, unitId, startAddress,
                         totalSw.ElapsedMilliseconds, timeoutMs,
-                        pendingRequest.PendingAtCreate,
-                        pendingRequest.SendCompleted, pendingRequest.SendElapsedMs,
                         _isConnected, _isRunning);
                     Notify(NotificationType.Warning, "Modbus写入超时", "ExecuteWriteOperation");
                 }
@@ -1606,13 +1578,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
             try
             {
-                // Phase E2: 记录门禁等待耗时
-                var gateSw = Stopwatch.StartNew();
-
                 // Phase E1: 完整生命周期串行化 — Custom 也必须入 Gate
                 await _requestLock.WaitAsync(ct).ConfigureAwait(false);
                 lockTaken = true;
-                gateSw.Stop();
 
                 // 获取锁后再次检查连接状态
                 if (!IsConnected || !_isRunning)
@@ -1630,11 +1598,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var pendingRequest = new PendingModbusRequest
                 {
                     Completion = tcs,
-                    CreatedAtUtc = DateTime.UtcNow,
-                    GateWaitMs = gateSw.ElapsedMilliseconds,
                 };
                 _pendingRequests[transactionId.Value] = pendingRequest;
-                pendingRequest.PendingAtCreate = _pendingRequests.Count;
 
                 await SendRawDataAsync(customRequestFrame).ConfigureAwait(false);
 

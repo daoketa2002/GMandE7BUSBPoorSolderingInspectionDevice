@@ -141,11 +141,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                       .Enrich.FromLogContext()
                       .Enrich.With<SourceContextShortNameEnricher>()
                       .WriteTo.Debug(
-                          outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] [Caller={PlcCaller}] {Message:lj}{NewLine}{Exception}")
+                          outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}")
                       .WriteTo.File("logs/app-.log",
                           rollingInterval: RollingInterval.Day,
                           retainedFileCountLimit: 7,
-                          outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] [Caller={PlcCaller}] {Message:lj}{NewLine}{Exception}");
+                          outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}");
               });
 
 

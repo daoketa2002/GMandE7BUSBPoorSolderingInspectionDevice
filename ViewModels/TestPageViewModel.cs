@@ -18,6 +18,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.RegularExpressions;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
@@ -103,9 +104,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>是否已向引擎发起检测（防止 DT120=1 重复触发多次 RunInspectionAsync）</summary>
     private bool _inspectionStarted;
 
-    /// <summary>启动失败后是否已清除 DT120（防止重复触发失败日志刷屏）</summary>
-    private bool _startupCleared;
-
     /// <summary>是否正在处理检测完成收口（防止重复保存、重复清 PLC）。</summary>
     private bool _inspectionCompletionInProgress;
 
@@ -161,6 +159,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>当前已加载方案的业务版本，保存检测记录时写入 CSV。</summary>
     private int _currentPlanVersion = 1;
 
+    /// <summary>方案加载版本号。机种或方案变更后递增，用于丢弃晚到的异步加载结果。</summary>
+    private int _planLoadVersion;
+
+    /// <summary>当前方案列表或检测项目仍在加载，加载期间不能显示为可启动。</summary>
+    private bool _isPlanLoading;
+
     /// <summary>
     /// Starting 流程的取消令牌源。Stop/Reset/EmergencyStop 可取消 Starting 以立即执行自身流程。</summary>
     private CancellationTokenSource? _startingCts;
@@ -201,6 +205,34 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         /// <summary>当前忙（如正在复位），拒绝启动</summary>
         RejectBusy
     }
+
+    /// <summary>启动拒绝的业务分类，用于统一操作员提示和文件日志诊断。</summary>
+    private enum StartRejectReason
+    {
+        None,
+        MissingModel,
+        MissingSerialNumber,
+        InvalidPlan,
+        NoTestItems,
+        MissingOperator,
+        PlcOffline,
+        DmmOffline,
+        ResetNotReleased,
+        StopNotReleased,
+        EmergencyStopActive,
+        Busy,
+        AwaitingReset,
+        DuplicateStart,
+        PlanLoading,
+        Unknown
+    }
+
+    /// <summary>同一次启动请求共用的拒绝结果：操作员文本不含技术地址，诊断文本保留完整快照。</summary>
+    private sealed record InspectionStartValidationResult(
+        bool CanStart,
+        string OperatorMessage,
+        string DiagnosticMessage,
+        StartRejectReason Reason);
 
     #endregion
 
@@ -265,12 +297,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     partial void OnSchemeNameChanged(string value)
     {
+        int loadVersion = Interlocked.Increment(ref _planLoadVersion);
+
         if (string.IsNullOrWhiteSpace(value))
         {
             SelectedPlanName = null;
             IsSchemeNameInvalid = false;
             TestItems.Clear();
             AddLog("方案名称已清空，检测项目列表已清空");
+            _isPlanLoading = false;
+            RefreshReadyOrCanStartState();
             return;
         }
 
@@ -281,7 +317,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             SelectedPlanName = matched;
             IsSchemeNameInvalid = false;
-            _ = LoadPlanItemsAsync();
+            _isPlanLoading = true;
+            RefreshReadyOrCanStartState();
+            _ = LoadPlanItemsAsync(loadVersion, ModelName, value);
         }
         else
         {
@@ -289,6 +327,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ValidateCurrentSchemeName();
             TestItems.Clear();
             AddLog($"⚠️ 方案 [{value}] 不在当前机种 [{ModelName}] 的方案列表中，检测列表已清空");
+            _isPlanLoading = false;
+            RefreshReadyOrCanStartState();
         }
     }
 
@@ -429,6 +469,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     public bool IsFakeMode => _plcDevice is FakeInspectionHardware;
     /// <summary>半实物联调入口模式：非 Fake 且 SemiPhysicalDebug=true</summary>
     public bool IsSemiPhysicalDebugMode => !IsFakeMode && _configuration.GetValue<bool>("Hardware:SemiPhysicalDebug");
+    /// <summary>Fake 和半实物联调保留技术地址；真实模式只显示操作员可理解的文字。</summary>
+    private bool ShowTechnicalDetails => IsFakeMode || IsSemiPhysicalDebugMode;
     /// <summary>调试面板可见（Fake 或半实物）</summary>
     public bool IsDebugControlPanelVisible => IsFakeMode || IsSemiPhysicalDebugMode;
     /// <summary>真实模式复位可见（非 Fake 且非半实物）</summary>
@@ -441,13 +483,34 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private bool CanManualStartInspection()
     {
-        return !string.IsNullOrWhiteSpace(ModelName)
-               && !string.IsNullOrWhiteSpace(SerialNumber)
-               && !IsSchemeNameInvalid
-               && !string.IsNullOrWhiteSpace(SchemeName)
-               && !string.IsNullOrWhiteSpace(OperatorName)
-               && IsPlcConnected
-               && IsDmmConnected;
+        return InspectionStartValidator.Validate(BuildStartValidationRequest()).IsValid;
+    }
+
+    /// <summary>
+    /// 建立运行页唯一的启动条件快照，状态灯与正式启动复核均使用该快照，避免显示和实际校验不一致。
+    /// </summary>
+    private InspectionStartValidationRequest BuildStartValidationRequest(bool allowCurrentStartingAction = false)
+    {
+        return new InspectionStartValidationRequest
+        {
+            UiState = UiState,
+            ModelName = ModelName,
+            SerialNumber = SerialNumber,
+            SchemeName = SchemeName,
+            OperatorName = OperatorName,
+            IsSchemeNameInvalid = IsSchemeNameInvalid,
+            IsPlcConnected = IsPlcConnected,
+            IsDmmConnected = IsDmmConnected,
+            IsPlanLoading = _isPlanLoading,
+            // 正式启动复核在取得 Starting 门禁后执行；该门禁本身不应反向拒绝本次启动。
+            IsControlActionInProgress = _currentControlAction != InspectionControlAction.None
+                                       && !(allowCurrentStartingAction
+                                            && _currentControlAction == InspectionControlAction.Starting),
+            IsInspectionEngineRunning = _inspectionEngine?.IsRunning == true,
+            PlcInputs = _lastPlcInputs,
+            Config = _inspectionEngine?.Config ?? new InspectionConfig(),
+            UiItemCount = TestItems.Count
+        };
     }
 
     /// <summary>
@@ -641,73 +704,70 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         RefreshReadyOrCanStartState();
 
-        // 当条件不足但 PLC 已请求启动时，拒绝启动并提示原因
-        bool plcStartRequested = IsPlcStartRequested;
-        if (plcStartRequested && !CanManualStartInspection() && !_startupCleared)
-        {
-            RejectStartCondition(
-                !string.IsNullOrWhiteSpace(ModelName) && !string.IsNullOrWhiteSpace(SerialNumber),
-                !IsSchemeNameInvalid && !string.IsNullOrWhiteSpace(SchemeName),
-                !string.IsNullOrWhiteSpace(OperatorName),
-                IsPlcConnected && IsDmmConnected);
-        }
     }
 
     /// <summary>
-    /// PLC DT120=1 但启动条件不满足时，拒绝启动并记录 Warning 日志。
-    /// 无论复核是否通过都清除 DT120，防止重复触发。
+    /// 构建启动复核结果。该方法只读取当前快照，不弹窗、不写 PLC。
     /// </summary>
-    private void RejectStartCondition(bool hasProductInfo, bool hasValidPlan,
-        bool hasOperator, bool allDevicesReady)
+    private InspectionStartValidationResult BuildStartValidationResult(bool allowCurrentStartingAction = false)
     {
-        _startupCleared = true; // 标记已处理，避免重复刷屏
+        var validation = InspectionStartValidator.Validate(
+            BuildStartValidationRequest(allowCurrentStartingAction));
+        if (validation.IsValid)
+            return new(true, string.Empty, "启动条件校验通过", StartRejectReason.None);
 
-        // 写 Warning 审计日志记录拒绝原因
-        if (!hasProductInfo)
-        {
-            string reason = !string.IsNullOrWhiteSpace(ModelName)
-                ? "未输入序列号"
-                : "未输入机种名称";
-            _logger.LogWarning("[启动复核][拒绝] {Reason}，已清除 DT120", reason);
-            AddLog($"❌ 启动拒绝：{reason}。请检查机种名称和序列号。");
-            _ = _notificationService.ShowWarningAsync(
-                $"PLC已请求启动，但{reason}，无法启动。\n请检查机种名称和序列号。", "启动拒绝");
-        }
-        else if (!hasValidPlan)
-        {
-            _logger.LogWarning("[启动复核][拒绝] 机种与方案不匹配，已清除 DT120");
-            AddLog("❌ 启动拒绝：机种与方案不匹配。请重新选择方案。");
-            _ = _notificationService.ShowWarningAsync(
-                "PLC已请求启动，但当前方案无效或不属于当前机种，无法启动。\n请重新选择方案。", "启动拒绝");
-        }
-        else if (!hasOperator)
-        {
-            _logger.LogWarning("[启动复核][拒绝] 未指定作业员，已清除 DT120");
-            AddLog("❌ 启动拒绝：未指定作业员。");
-            _ = _notificationService.ShowWarningAsync(
-                "PLC已请求启动，但未指定作业员，无法启动。", "启动拒绝");
-        }
-        else if (!allDevicesReady)
-        {
-            var notReady = GetNotReadyDevices();
-            _logger.LogWarning("[启动复核][拒绝] 设备未就绪: {Devices}，已清除 DT120",
-                string.Join(", ", notReady));
-            AddLog($"❌ 启动拒绝：设备未就绪 -> {string.Join(", ", notReady)}");
-            _ = _notificationService.ShowWarningAsync(
-                $"PLC已请求启动，但以下设备未就绪：\n{string.Join("\n", notReady)}\n请检查设备连接。", "启动拒绝");
-        }
-
-        // 清除 DT120，防止重复触发
-        _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+        var (reason, operatorMessage) = GetStartRejectMessage();
+        string diagnosticMessage =
+            $"Reason={reason}, ValidatorMessage={validation.ErrorMessage}, UiState={UiState}, " +
+            $"ControlAction={_currentControlAction}, PlcConnected={IsPlcConnected}, " +
+            $"DmmConnected={IsDmmConnected}, PlanLoading={_isPlanLoading}, " +
+            $"EngineRunning={_inspectionEngine?.IsRunning == true}, PlcInputs={_lastPlcInputs}";
+        return new(false, operatorMessage, diagnosticMessage, reason);
     }
 
-    /// <summary>检查影响检测启动的未就绪设备。扫描仪不作为启动强依赖。</summary>
-    private List<string> GetNotReadyDevices()
+    /// <summary>为启动过程中的通信失败构造统一拒绝结果，操作员提示不暴露 PLC 地址。</summary>
+    private static InspectionStartValidationResult CreateStartFailureResult(string operatorMessage, string diagnosticMessage)
+        => new(false, operatorMessage, diagnosticMessage, StartRejectReason.Unknown);
+
+    /// <summary>将当前快照映射为操作员可执行的启动拒绝提示。</summary>
+    private (StartRejectReason Reason, string OperatorMessage) GetStartRejectMessage()
     {
-        var notReady = new List<string>();
-        if (!IsPlcConnected) notReady.Add("PLC未连接");
-        if (!IsDmmConnected) notReady.Add("万用表未连接");
-        return notReady;
+        if (_isPlanLoading) return (StartRejectReason.PlanLoading, "当前方案仍在加载，请等待加载完成后再启动。");
+        if (string.IsNullOrWhiteSpace(ModelName)) return (StartRejectReason.MissingModel, "请扫码或手动输入机种名称。");
+        if (string.IsNullOrWhiteSpace(SerialNumber)) return (StartRejectReason.MissingSerialNumber, "请扫码或手动输入序列号。");
+        if (string.IsNullOrWhiteSpace(SchemeName) || IsSchemeNameInvalid) return (StartRejectReason.InvalidPlan, "请选择当前机种的有效检测方案。");
+        if (TestItems.Count == 0) return (StartRejectReason.NoTestItems, "当前方案没有检测项目，请检查方案设置。");
+        if (string.IsNullOrWhiteSpace(OperatorName)) return (StartRejectReason.MissingOperator, "请重新选择作业员。");
+        if (!IsPlcConnected) return (StartRejectReason.PlcOffline, "PLC 未连接，请检查 PLC 电源、网线和系统设置。");
+        if (!IsDmmConnected) return (StartRejectReason.DmmOffline, "万用表未连接，请检查万用表电源、网线和系统设置。");
+        if (_lastPlcInputs?.IsResetRequested == true) return (StartRejectReason.ResetNotReleased, "请松开或检查复位按钮。");
+        if (_lastPlcInputs?.IsStopRequested == true) return (StartRejectReason.StopNotReleased, "请松开停止按钮或先执行复位。");
+        if (_lastPlcInputs?.IsEmergencyStop == true || UiState == TestUIState.EmergencyStop) return (StartRejectReason.EmergencyStopActive, "请解除急停并完成复位后再启动。");
+        if (UiState == TestUIState.AwaitingReset) return (StartRejectReason.AwaitingReset, "上一轮检测尚未复位，请先复位。");
+        if (_inspectionEngine?.IsRunning == true || UiState == TestUIState.Testing) return (StartRejectReason.DuplicateStart, "检测已在运行中，无需重复启动。");
+        if (_currentControlAction != InspectionControlAction.None || UiState == TestUIState.Resetting) return (StartRejectReason.Busy, "系统正在处理其他动作，请等待当前操作完成。");
+        return (StartRejectReason.Unknown, "当前条件不满足，无法启动检测，请检查运行状态。");
+    }
+
+    /// <summary>唯一的启动拒绝出口：日志、弹窗和按场景需要清除的启动请求在此处一致执行。</summary>
+    private async Task RejectStartAsync(
+        InspectionStartValidationResult result,
+        InspectionActionSource source,
+        bool clearStartRequest = true)
+    {
+        _logger.LogWarning(
+            "[启动复核][拒绝] Source={Source}, Reason={Reason}, ClearStartRequest={ClearStartRequest}, DiagnosticMessage={DiagnosticMessage}",
+            source,
+            result.Reason,
+            clearStartRequest,
+            result.DiagnosticMessage);
+        AddLog($"启动拒绝：{result.OperatorMessage}");
+        await _notificationService.ShowWarningAsync(result.OperatorMessage, "启动拒绝");
+        if (clearStartRequest)
+        {
+            await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+            _logger.LogWarning("[启动复核][拒绝] 已安全清除启动请求，来源={Source}", source);
+        }
     }
 
     #endregion
@@ -755,7 +815,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _lastDuplicateCheckKey = null;
         }
 
-        _ = HandleModelNameChangedAsync(value);
+        int loadVersion = Interlocked.Increment(ref _planLoadVersion);
+        _isPlanLoading = true;
+        TestItems.Clear();
+        RefreshReadyOrCanStartState();
+        _ = HandleModelNameChangedAsync(value, loadVersion);
         ScheduleDuplicateRecordCheck();
     }
 
@@ -767,11 +831,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         ScheduleDuplicateRecordCheck();
+        RefreshReadyOrCanStartState();
     }
 
-    private async Task HandleModelNameChangedAsync(string newMachineType)
+    private async Task HandleModelNameChangedAsync(string newMachineType, int loadVersion)
     {
-        await RefreshPlanNameOptionsAsync(newMachineType);
+        bool isCurrent = await RefreshPlanNameOptionsAsync(newMachineType, loadVersion);
+        if (!isCurrent)
+            return;
+
         ValidateCurrentSchemeName();
 
         if (IsSchemeNameInvalid)
@@ -779,6 +847,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             TestItems.Clear();
             AddLog($"⚠️ 机种已切换为 [{newMachineType}]，方案 [{SchemeName}] 不属于该机种，检测列表已清空，请重新选择方案");
         }
+
+        RefreshReadyOrCanStartState();
     }
 
     private void ScheduleDuplicateRecordCheck()
@@ -890,17 +960,38 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     public ObservableCollection<TestItemModel> TestItems { get; } = new();
 
-    private async Task LoadPlanItemsAsync()
+    private async Task LoadPlanItemsAsync(
+        int? expectedLoadVersion = null,
+        string? expectedMachineType = null,
+        string? expectedSchemeName = null)
     {
         TestItems.Clear();
 
         if (string.IsNullOrWhiteSpace(ModelName) || string.IsNullOrWhiteSpace(SchemeName))
         {
             AddLog("⚠️ 未指定机种或方案，检测列表为空");
+            CompletePlanLoading(expectedLoadVersion);
             return;
         }
 
-        var allPlans = await _planStorageService.LoadAllPlansAsync();
+        List<PlanModel> allPlans;
+        try
+        {
+            allPlans = await _planStorageService.LoadAllPlansAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "加载检测方案失败");
+            if (IsCurrentPlanLoad(expectedLoadVersion, expectedMachineType, expectedSchemeName))
+            {
+                AddLog("⚠️ 检测方案加载失败，请检查方案设置后重试");
+                CompletePlanLoading(expectedLoadVersion);
+            }
+            return;
+        }
+
+        if (!IsCurrentPlanLoad(expectedLoadVersion, expectedMachineType, expectedSchemeName))
+            return;
 
         // 精确匹配机种和方案名（替换旧 allPlans.FirstOrDefault() 错误用法）
         var currentPlan = allPlans.FirstOrDefault(p =>
@@ -910,12 +1001,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (currentPlan == null)
         {
             AddLog($"⚠️ 未找到匹配方案: 机种={ModelName}, 方案={SchemeName}，检测列表为空");
+            CompletePlanLoading(expectedLoadVersion);
             return;
         }
 
         if (currentPlan.Items.Count == 0)
         {
             AddLog($"⚠️ 方案 [{currentPlan.PlanName}] 无检测项目，检测列表为空");
+            CompletePlanLoading(expectedLoadVersion);
             return;
         }
 
@@ -984,6 +1077,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 Judgment = string.Empty
             });
         }
+
+        CompletePlanLoading(expectedLoadVersion);
     }
 
     private static string FormatLowerLimit(PlanItem item)
@@ -1151,7 +1246,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         ClearTestItemsForRestart();
         IsPlcStartRequested = false;
         _inspectionStarted = false;
-        _startupCleared = false;
         ForceRefreshReadyOrCanStartState();
         AddLog("✅ 准备就绪，可进行下一次检测");
     }
@@ -1246,8 +1340,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         try
         {
             PlcOperationResult<PlcControlSignals>? snapshot;
-            using (new PlcCallerScope(_logger, "ResetFlow"))
-                snapshot = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
+            snapshot = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
             if (snapshot == null || !snapshot.IsSuccess || snapshot.Value == null)
             {
                 _logger.LogWarning("[复位流程][验证] 读取 PLC 控制信号快照失败：{Message}", snapshot?.Message ?? "返回结果为 null");
@@ -1321,7 +1414,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             _inspectionStarted = false;
-            _startupCleared = true;
             IsPlcStartRequested = false;
         });
 
@@ -1477,10 +1569,33 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         Application.Current.Dispatcher.Invoke(() =>
         {
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            LogMessages.Add($"[{timestamp}] {message}");
+            LogMessages.Add($"[{timestamp}] {ToOperatorText(message, ShowTechnicalDetails)}");
 
             while (LogMessages.Count > 500)
                 LogMessages.RemoveAt(0);
+        });
+    }
+
+    /// <summary>真实模式隐藏 PLC 内部地址；调试模式保留原始文字，便于联调定位。</summary>
+    private static string ToOperatorText(string message, bool showTechnicalDetails)
+    {
+        if (showTechnicalDetails || string.IsNullOrWhiteSpace(message))
+            return message;
+
+        return Regex.Replace(message, @"DT\d+", match => match.Value switch
+        {
+            "DT120" => "启动请求信号",
+            "DT121" => "复位请求信号",
+            "DT122" => "停止请求信号",
+            "DT123" => "急停信号",
+            "DT234" => "启动允许信号",
+            "DT302" => "继电器动作完成信号",
+            "DT303" => "报警解除信号",
+            "DT304" or "DT305" => "检测结果信号",
+            "DT306" => "终止信号",
+            _ when int.TryParse(match.Value.AsSpan(2), out int address)
+                   && address is >= 130 and <= 185 => "引脚控制输出",
+            _ => "设备内部信号"
         });
     }
 
@@ -1587,10 +1702,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var pollingCt = _plcPollingOperationCts.Token;
 
             PlcOperationResult<PlcControlSignals>? pollResult;
-            using (new PlcCallerScope(_logger, "UiPolling"))
-            {
-                pollResult = await _plcDevice.ReadControlSignalsAsync(pollingCt).ConfigureAwait(false);
-            }
+            pollResult = await _plcDevice.ReadControlSignalsAsync(pollingCt).ConfigureAwait(false);
             if (pollResult == null
                 || !pollResult.IsSuccess
                 || pollResult.Value == null)
@@ -1883,39 +1995,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
 
             case StartRequestDecision.RejectNeedReset:
-                _logger.LogWarning("[启动请求][拒绝] 当前状态需要先复位，来源={Source}", source);
-                _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-                _startupCleared = true;
-                AddLog($"启动拒绝：当前状态需要先复位，来源={source}");
-                if (source == InspectionActionSource.DebugPanel || source == InspectionActionSource.RealModeButton)
-                {
-                    _ = _notificationService.ShowWarningAsync("当前状态需要先复位，无法启动检测", "启动拒绝");
-                }
+                await RejectStartAsync(BuildStartValidationResult(), source);
                 return;
 
             case StartRequestDecision.RejectEmergencyStop:
-                _logger.LogWarning("[启动请求][拒绝] 当前处于急停状态，来源={Source}", source);
-                _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-                _startupCleared = true;
-                AddLog($"启动拒绝：当前处于急停状态，请先解除急停并复位，来源={source}");
-                if (source == InspectionActionSource.DebugPanel || source == InspectionActionSource.RealModeButton)
-                {
-                    _ = _notificationService.ShowWarningAsync("当前处于急停状态，请先解除急停并复位", "启动拒绝");
-                }
+                await RejectStartAsync(BuildStartValidationResult(), source);
                 return;
 
             case StartRequestDecision.RejectBusy:
-                _logger.LogWarning("[启动请求][拒绝] 当前忙（ControlAction={Action}），来源={Source}", _currentControlAction, source);
-                _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-                _startupCleared = true;
-                string busyMessage = UiState == TestUIState.ResetFailed
-                    ? "上次复位未完成，请重新执行复位后再启动检测"
-                    : "当前系统忙，请稍后重试";
-                AddLog($"启动拒绝：{busyMessage}，来源={source}");
-                if (source == InspectionActionSource.DebugPanel || source == InspectionActionSource.RealModeButton)
-                {
-                    _ = _notificationService.ShowWarningAsync(busyMessage, "启动拒绝");
-                }
+                await RejectStartAsync(BuildStartValidationResult(), source);
                 return;
 
             case StartRequestDecision.ContinueValidation:
@@ -1925,9 +2013,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // ── 继续完整启动校验 ──
         if (!await TryEnterControlActionAsync(InspectionControlAction.Starting))
         {
-            _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-            _startupCleared = true;
-            AddLog("启动请求已拒绝：当前已有运行控制动作正在执行。");
+            await RejectStartAsync(BuildStartValidationResult(), source);
             return;
         }
 
@@ -1937,14 +2023,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var startingToken = _startingCts.Token;
 
             // 启动复核
-            string? rejectReason = ValidateStartConditions();
-            if (rejectReason != null)
+            var validationResult = BuildStartValidationResult(allowCurrentStartingAction: true);
+            if (!validationResult.CanStart)
             {
-                _logger.LogWarning("[启动复核][拒绝] {Reason}", rejectReason);
-                _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-                _startupCleared = true;
-                AddLog($"启动拒绝：{rejectReason}");
-                _ = _notificationService.ShowWarningAsync(rejectReason, "启动拒绝");
+                await RejectStartAsync(validationResult, source);
                 return;
             }
 
@@ -1953,11 +2035,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             bool dmmPingOk = await _multimeterDevice.PingAsync(CancellationToken.None).ConfigureAwait(false);
             if (!dmmPingOk)
             {
-                _logger.LogWarning("[启动复核][拒绝] 万用表通信验证失败，已清除 DT120");
-                await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
-                _startupCleared = true;
-                AddLog("启动失败：万用表无法通信，请检查网络连接后重试");
-                _ = _notificationService.ShowWarningAsync("万用表无法通信，请检查网络连接后重试。", "启动拒绝");
+                await RejectStartAsync(CreateStartFailureResult("万用表无法通信，请检查网络连接后重试。",
+                    "万用表通信验证失败。"), source);
                 return;
             }
 
@@ -1966,11 +2045,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var pcReadyResult = await _plcDevice.WritePcReadyAsync(CancellationToken.None).ConfigureAwait(false);
             if (!pcReadyResult.IsSuccess)
             {
-                _logger.LogWarning("[启动复核][拒绝] 写 DT234=1 失败：{Message}，已清除 DT120", pcReadyResult.Message);
-                _ = _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-                _startupCleared = true;
-                AddLog($"启动失败：写 DT234=1 失败 - {pcReadyResult.Message}");
-                _ = _notificationService.ShowWarningAsync($"写 DT234 失败：{pcReadyResult.Message}", "启动拒绝");
+                await RejectStartAsync(CreateStartFailureResult("启动允许信号发送失败，请检查 PLC 通信状态后重试。",
+                    $"写 DT234=1 失败：{pcReadyResult.Message}"), source);
                 return;
             }
 
@@ -2203,7 +2279,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 System.Windows.Threading.DispatcherPriority.Background);
 
             _inspectionStarted = false;
-            _startupCleared = true;
             _startSignalHandled = true;
             _isShowingEmergencyDialog = false;
             _emergencyDialogAcknowledged = false;
@@ -2336,7 +2411,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                         UiState, _currentControlAction, _inspectionEngine.CurrentState, engineStage, engineIsRunning);
                     await CompleteStopSignalHandshakeAsync("StopAndWaitTimeout", CancellationToken.None).ConfigureAwait(false);
                     _inspectionStarted = false;
-                    _startupCleared = true;
                     IsPlcStartRequested = false;
                     SetUiState(TestUIState.AwaitingReset);
                     AddLog("停止处理中超时：请执行复位完成设备收口。");
@@ -2349,7 +2423,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             bool stopSignalReleased = await CompleteStopSignalHandshakeAsync("NormalStopFlow", CancellationToken.None).ConfigureAwait(false);
 
             _inspectionStarted = false;
-            _startupCleared = true;
             IsPlcStartRequested = false;
             SetUiState(TestUIState.AwaitingReset);
             if (stopSignalReleased)
@@ -2440,7 +2513,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             _inspectionEngine.ClearResetState();
             _inspectionStarted = false;
-            _startupCleared = true;
             IsPlcStartRequested = false;
             SetUiState(TestUIState.EmergencyStop);
         }
@@ -2522,8 +2594,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 AddLog("急停解除中：正在清除 DT123/DT303 并读回确认...");
 
                 PlcOperationResult? emergencyResult;
-                using (new PlcCallerScope(_logger, "EmergencyStopFlow"))
-                    emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(ct).ConfigureAwait(false);
+                emergencyResult = await _plcDevice.ClearEmergencyStopRequestAsync(ct).ConfigureAwait(false);
                 if (emergencyResult == null || !emergencyResult.IsSuccess)
                 {
                     _logger.LogWarning("[急停解除][失败] 清 DT123 失败，第 {Attempt}/{MaxRetries} 次：{Message}",
@@ -2586,32 +2657,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         return false;
     }
 
-    /// <summary>启动前复核，委托给 InspectionStartValidator</summary>
-    private string? ValidateStartConditions()
-    {
-        var request = new InspectionStartValidationRequest
-        {
-            UiState = UiState,
-            ModelName = ModelName,
-            SerialNumber = SerialNumber,
-            SchemeName = SchemeName,
-            OperatorName = OperatorName,
-            IsSchemeNameInvalid = IsSchemeNameInvalid,
-            IsPlcConnected = IsPlcConnected,
-            IsDmmConnected = IsDmmConnected,
-            PlcInputs = _lastPlcInputs,
-            Config = _inspectionEngine?.Config ?? new InspectionConfig(),
-            UiItemCount = TestItems.Count
-        };
-
-        var result = InspectionStartValidator.Validate(request);
-        if (!result.IsValid)
-        {
-            _logger.LogWarning("[启动复核][拒绝] {Message}", result.ErrorMessage);
-        }
-        return result.ErrorMessage;
-    }
-
     #region 统一调试命令（Fake 和半实物共用）
 
     /// <summary>
@@ -2631,7 +2676,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (UiState == TestUIState.EmergencyStop)
         {
-            await _notificationService.ShowWarningAsync("急停状态中，请先复位后再启动检测。", "启动拒绝");
+            await RejectStartAsync(BuildStartValidationResult(), InspectionActionSource.DebugPanel, clearStartRequest: false);
             return;
         }
 
@@ -2639,7 +2684,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             || string.IsNullOrWhiteSpace(SchemeName) || IsSchemeNameInvalid
             || string.IsNullOrWhiteSpace(OperatorName))
         {
-            await _notificationService.ShowWarningAsync("机种、序列号、方案、作业员必须完整后才能启动。", "启动拒绝");
+            await RejectStartAsync(BuildStartValidationResult(), InspectionActionSource.DebugPanel, clearStartRequest: false);
             return;
         }
 
@@ -2648,17 +2693,32 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (TestItems.Count == 0)
         {
-            await _notificationService.ShowWarningAsync("当前方案没有可检测项目。", "启动拒绝");
+            await RejectStartAsync(BuildStartValidationResult(), InspectionActionSource.DebugPanel, clearStartRequest: false);
+            return;
+        }
+
+        // 写入 DT120 前先复用统一启动校验；已知 PLC 离线时不产生无意义写入。
+        var validationResult = BuildStartValidationResult();
+        if (!validationResult.CanStart)
+        {
+            await RejectStartAsync(validationResult, InspectionActionSource.DebugPanel, clearStartRequest: false);
             return;
         }
 
         _logger.LogWarning("[调试按钮][启动][请求] 上位机写入 DT120=1，等待 PLC 轮询统一消费");
 
         var result = await _plcDevice.RequestStartAsync(CancellationToken.None).ConfigureAwait(false);
-        if (!HandleControlSignalWriteResult(result, "调试面板", "DT120", "启动"))
+        if (!result.IsSuccess)
         {
+            var operatorMessage = !_plcDevice.IsConnected
+                ? "PLC 未连接，请检查 PLC 电源、网线和系统设置后重试。"
+                : "启动请求发送失败，请检查 PLC 通信状态后重试。";
+            await RejectStartAsync(CreateStartFailureResult(operatorMessage,
+                $"写 DT120=1 失败：{result.Message}"), InspectionActionSource.DebugPanel, clearStartRequest: false);
             return;
         }
+
+        AddLog("[调试面板] 启动请求已发送，等待 PLC 轮询统一处理");
     }
 
     /// <summary>
@@ -3216,19 +3276,53 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     #region 方案名称联动逻辑（机种 ↔ 方案）
     
-    private async Task RefreshPlanNameOptionsAsync(string machineType)
+    /// <summary>
+    /// 判断异步方案加载结果是否仍属于当前机种和方案。
+    /// 旧任务只允许自行结束，不能覆盖后来输入的机种或方案。
+    /// </summary>
+    private bool IsCurrentPlanLoad(
+        int? expectedLoadVersion,
+        string? expectedMachineType,
+        string? expectedSchemeName)
     {
-        PlanNameOptions.Clear();
+        return (!expectedLoadVersion.HasValue || expectedLoadVersion.Value == _planLoadVersion)
+               && (expectedMachineType == null
+                   || string.Equals(ModelName, expectedMachineType, StringComparison.OrdinalIgnoreCase))
+               && (expectedSchemeName == null
+                   || string.Equals(SchemeName, expectedSchemeName, StringComparison.OrdinalIgnoreCase));
+    }
 
+    /// <summary>仅由当前加载任务结束时清除加载标志，并立即刷新待机或可启动状态。</summary>
+    private void CompletePlanLoading(int? expectedLoadVersion)
+    {
+        if (expectedLoadVersion.HasValue && expectedLoadVersion.Value != _planLoadVersion)
+            return;
+
+        _isPlanLoading = false;
+        RefreshReadyOrCanStartState();
+    }
+
+    private async Task<bool> RefreshPlanNameOptionsAsync(string machineType, int? expectedLoadVersion = null)
+    {
         if (string.IsNullOrWhiteSpace(machineType))
         {
+            if (!IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
+                return false;
+
+            PlanNameOptions.Clear();
             _logger.LogDebug("机种为空，方案下拉选项已清空");
-            return;
+            CompletePlanLoading(expectedLoadVersion);
+            return true;
         }
 
         try
         {
             var planNames = await _planStorageService.GetPlanNamesByMachineTypeAsync(machineType);
+
+            if (!IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
+                return false;
+
+            PlanNameOptions.Clear();
 
             foreach (var name in planNames)
             {
@@ -3237,10 +3331,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             _logger.LogDebug("方案下拉选项已刷新，机种={MachineType}，共 {Count} 个方案",
                 machineType, PlanNameOptions.Count);
+            CompletePlanLoading(expectedLoadVersion);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "加载机种 {MachineType} 的方案列表失败", machineType);
+            if (IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
+            {
+                PlanNameOptions.Clear();
+                CompletePlanLoading(expectedLoadVersion);
+            }
+            return false;
         }
     }
 

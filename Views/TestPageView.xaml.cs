@@ -34,21 +34,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         private readonly ILogger<TestPageView> _logger;
         private bool _headerSynced = false;
 
-        /// <summary>
-        /// 列宽映射表（对应 DataGrid 列的 DefaultWidth）
-        /// 索引 0~6 对应 XAML 中 DataGrid.Columns 的顺序
-        /// </summary>
-        private static readonly double[] ColumnWidths =
-        {
-            80,   // 0: 序号
-            200,  // 1: 项目名称
-            120,  // 2: 检查方式
-            150,  // 3: 下限 (Ω)
-            150,  // 4: 上限 (Ω)
-            230,  // 5: 检查结果
-            180,  // 6: 判定
-        };
-
         public TestPageView(TestPageViewModel viewModel, ILogger<TestPageView> logger)
         {
             InitializeComponent();

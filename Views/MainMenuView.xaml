@@ -12,42 +12,56 @@
         <!-- Bool转Visibility转换器 -->
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
 
-        <Style TargetType="Button">
-            <Setter Property="Height" Value="50"/>
-            <Setter Property="Margin" Value="10"/>
-            <Setter Property="FontSize" Value="16"/>
+        <!-- 与运行页“终了”按钮保持同一视觉结构：纯色主体加底部深色边。 -->
+        <Style x:Key="MainMenuButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="64"/>
+            <Setter Property="MinWidth" Value="300"/>
+            <Setter Property="MaxWidth" Value="420"/>
+            <Setter Property="Margin" Value="0,7"/>
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontWeight" Value="ExtraBold"/>
+            <Setter Property="Foreground" Value="White"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="8"
+                        <Border x:Name="MainBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="12"
                                 BorderThickness="0">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                            VerticalAlignment="Center"/>
+                            <Border BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,0,0,4"
+                                    CornerRadius="12"
+                                    Background="Transparent">
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"/>
+                            </Border>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="MainBorder" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="MainBorder" Property="Opacity" Value="0.72"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="MainBorder" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Opacity" Value="0.8"/>
-                </Trigger>
-            </Style.Triggers>
         </Style>
     </UserControl.Resources>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <Border Grid.Row="0" 
-                Background="#34495E" 
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="20">
+            <Border Background="#34495E"
                 CornerRadius="8"
-                Margin="20"
+                Margin="0,0,0,16"
                 Padding="20">
             <TextBlock Text="欢迎使用 GM和E78_USB焊接不良检查装置系统" 
                        FontSize="28" 
@@ -56,57 +70,56 @@
                        HorizontalAlignment="Center"/>
         </Border>
 
-        <StackPanel Grid.Row="1" 
-                    x:Name="MainButtonPanel"
-                    VerticalAlignment="Center" 
+            <StackPanel x:Name="MainButtonPanel"
+                    VerticalAlignment="Center"
                     HorizontalAlignment="Center"
-                    Width="350">
+                    MinWidth="300"
+                    MaxWidth="420">
 
             <Button x:Name="RunScreenBtn" 
                     Content="▶ 运行界面"
+                    Style="{StaticResource MainMenuButtonStyle}"
                     Background="#3498DB"
-                    Foreground="White"
-                    FontWeight="Bold"/>
+                    BorderBrush="#2471A3"/>
 
             <Button x:Name="PlanSettingBtn" 
-                    Content="📋 方案设定"
+                    Content="▣ 方案设定"
+                    Style="{StaticResource MainMenuButtonStyle}"
                     Background="#E67E22"
-                    Foreground="White"
-                    FontWeight="Bold"/>
+                    BorderBrush="#B95F0B"/>
 
             <Button x:Name="DataExtractBtn" 
-                    Content="📊 日志数据"
+                    Content="▤ 日志数据"
+                    Style="{StaticResource MainMenuButtonStyle}"
                     Background="#2ECC71"
-                    Foreground="White"
-                    FontWeight="Bold"/>
+                    BorderBrush="#239B56"/>
 
             <!-- PLC通信测试按钮：由系统设定页面的勾选框控制显隐 -->
             <Button x:Name="PlcTestBtn" 
-                    Content="🔧 PLC通信测试"
+                    Content="◼ PLC通信测试"
+                    Style="{StaticResource MainMenuButtonStyle}"
                     Background="#F39C12"
-                    Foreground="White"
-                    FontWeight="Bold"
+                    BorderBrush="#B9770E"
                     Visibility="{Binding IsPlcCommunicationTestVisible, 
                                  Converter={StaticResource BoolToVisibilityConverter}}"/>
 
             <Button x:Name="SystemSettingsBtn" 
                     Content="⚙ 系统设置"
+                    Style="{StaticResource MainMenuButtonStyle}"
                     Background="#7F8C8D"
-                    Foreground="White"
-                    FontWeight="Bold"/>
+                    BorderBrush="#566573"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="2" 
-                    Orientation="Horizontal" 
+            <StackPanel Orientation="Horizontal"
                     HorizontalAlignment="Center"
-                    Margin="20">
+                    Margin="0,16,0,0">
 
             <Button x:Name="ExitBtn" 
-                    Content="❌ 退出系统"
+                    Content="× 退出系统"
+                    Style="{StaticResource MainMenuButtonStyle}"
                     Background="#E74C3C"
-                    Foreground="White"
-                    Width="200"
-                    FontWeight="Bold"/>
+                    BorderBrush="#C0392B"/>
+            </StackPanel>
         </StackPanel>
-    </Grid>
+    </ScrollViewer>
 </UserControl>

@@ -27,7 +27,6 @@
         <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
         <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
         <converters:DeviceConnectionStatusToColorConverter x:Key="DeviceConnectionStatusToColorConverter"/>
-        <converters:TestStatusToColorConverter x:Key="TestStatusToColorConverter"/>
         <converters:BoolInverterConverter x:Key="BoolInverterConverter"/>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
 
@@ -94,17 +93,6 @@
             <Setter Property="AlternatingRowBackground" Value="#F8F9FA"/>
         </Style>
 
-        <Style x:Key="DataGridColumnHeaderStyle" TargetType="DataGridColumnHeader">
-            <Setter Property="Background" Value="#2C3E50"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontSize" Value="16"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-            <Setter Property="Padding" Value="8,4"/>
-            <Setter Property="BorderBrush" Value="#1A252F"/>
-            <Setter Property="BorderThickness" Value="0,0,0,2"/>
-        </Style>
-
         <!-- 调试工具按钮统一样式，减少重复模板 -->
         <Style x:Key="DebugButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="38"/>
@@ -121,6 +109,48 @@
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"/>
                         </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 真实模式的终了和复位共用主操作样式，避免与调试按钮混用。 -->
+        <Style x:Key="MainOperationButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="72"/>
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontWeight" Value="ExtraBold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="buttonSurface"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="12">
+                            <Border x:Name="buttonBase"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,0,0,4"
+                                    CornerRadius="12">
+                                <ContentPresenter x:Name="buttonContent"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </Border>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2"/>
+                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -643,7 +673,7 @@
                     <Grid.RowDefinitions>
                         <!-- 主操作区：终了按钮 -->
                         <RowDefinition Height="Auto"/>
-                        <!-- 非 Fake 操作区：启动(DT120)、复位(DT121) -->
+                        <!-- 真实模式操作区：复位 -->
                         <RowDefinition Height="Auto"/>
                         <!-- 调试工具区（可折叠，仅 Fake 模式） -->
                         <RowDefinition Height="Auto"/>
@@ -654,36 +684,9 @@
                     <!-- ═══════ 主操作区：终了按钮 ═══════ -->
                     <Button Grid.Row="0" Content="终了"
                             Command="{Binding FinishAndReturnCommand}"
-                            Height="72" Margin="0,0,0,10" Cursor="Hand">
-                        <Button.Style>
-                            <Style TargetType="Button">
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border" Background="#E74C3C"
-                                                    CornerRadius="12" BorderThickness="0">
-                                                <Border BorderBrush="#C0392B" BorderThickness="0,0,0,4"
-                                                        CornerRadius="12" Background="Transparent">
-                                                    <TextBlock Text="终了" FontSize="22" FontWeight="ExtraBold"
-                                                               Foreground="White"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center"/>
-                                                </Border>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#C0392B"/>
-                                                </Trigger>
-                                                <Trigger Property="IsPressed" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#A93226"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </Button.Style>
-                    </Button>
+                            Style="{StaticResource MainOperationButtonStyle}"
+                            Background="#E74C3C"
+                            BorderBrush="#C0392B"/>
 
                     <!-- ═══════ 调试工具区：可折叠面板（Fake 或半实物模式） ═══════ -->
                     <Expander Grid.Row="2" IsExpanded="False" Margin="0,0,0,0"
@@ -731,17 +734,14 @@
                         </Border>
                     </Expander>
 
-                    <!-- ═══════ 真实模式操作区：复位(DT121) ═══════ -->
-                    <Border Grid.Row="1" BorderThickness="0" Padding="0,0,0,4"
-                            Visibility="{Binding IsRealModeResetVisible, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <UniformGrid Rows="1" Columns="1" Margin="0,0,0,0">
-                            <Button Content="复位(DT121)"
-                                    Command="{Binding TriggerPlcResetCommand}"
-                                    Style="{StaticResource DebugButtonStyle}"
-                                    Background="#8E44AD"
-                                    ToolTip="上位机写 DT121=1 发起复位"/>
-                        </UniformGrid>
-                    </Border>
+                    <!-- ═══════ 真实模式操作区：复位 ═══════ -->
+                    <Button Grid.Row="1" Content="复位"
+                            Command="{Binding TriggerPlcResetCommand}"
+                            Style="{StaticResource MainOperationButtonStyle}"
+                            Background="#8E44AD"
+                            BorderBrush="#6C3483"
+                            ToolTip="执行设备复位"
+                            Visibility="{Binding IsRealModeResetVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 </Grid>
             </ScrollViewer>
         </Grid>
