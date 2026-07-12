@@ -2,28 +2,27 @@ using System;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters
 {
     /// <summary>
-    /// 连接状态转颜色
-    /// 已连接 → 绿色，连接中 → 中性蓝灰，未连接 → 红色。
+    /// 设备连接三态枚举转颜色：
+    /// Connected → 绿色 (#27AE60)
+    /// Connecting → 蓝色 (#3498DB)
+    /// Disconnected → 红色 (#E74C3C)
     /// </summary>
-    public class BoolToConnectionColorConverter : IValueConverter
+    public class DeviceConnectionStatusToColorConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            if (value is bool isConnected)
+            if (value is DeviceConnectionStatus status)
             {
-                return isConnected ? Color.FromRgb(39, 174, 96) : Color.FromRgb(231, 76, 60);
-            }
-            if (value is string statusText)
-            {
-                return statusText switch
+                return status switch
                 {
-                    "已连接" => Color.FromRgb(39, 174, 96),
-                    "连接中..." => Color.FromRgb(52, 152, 219),
-                    "未连接" => Color.FromRgb(231, 76, 60),
+                    DeviceConnectionStatus.Connected => Color.FromRgb(39, 174, 96),
+                    DeviceConnectionStatus.Connecting => Color.FromRgb(52, 152, 219),
+                    DeviceConnectionStatus.Disconnected => Color.FromRgb(231, 76, 60),
                     _ => Color.FromRgb(189, 195, 199)
                 };
             }

@@ -31,8 +31,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         private const int DEFAULT_PORT = 5025;
         private const int DEFAULT_TIMEOUT_MS = 5000;
-        private const int RECONNECT_DELAY_MS = 3000;
-        private const int MAX_RECONNECT_ATTEMPTS = 5;
         private const int RECEIVE_BUFFER_SIZE = 4096;
 
         #endregion
@@ -43,7 +41,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private TcpClient? _tcpClient;
         private NetworkStream? _networkStream;
         private readonly SemaphoreSlim _commandLock = new(1, 1);
-        private CancellationTokenSource? _reconnectCts;
 
         private string _host = "192.168.1.4";
         private int _port = DEFAULT_PORT;
@@ -51,7 +48,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
-        private volatile int _isReconnecting;
         private volatile bool _receiveBufferPossiblyDirty;
 
         /// <summary>当前测量模式缓存，用于跳过相同模式的重复完整初始化</summary>
@@ -119,7 +115,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// <summary>
         /// 设备是否已连接
         /// </summary>
-        public bool IsConnected => _isConnected && _tcpClient?.Connected == true;
+        public bool IsConnected => _isConnected;
 
         /// <summary>
         /// 连接信息文本（IP:端口）
@@ -234,9 +230,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         public async Task DisconnectAsync()
         {
-            // 兜底：断开前尽力退出远程控制，失败不阻断断开流程
-            await ReleaseToLocalAsync(CancellationToken.None).ConfigureAwait(false);
-
             await _commandLock.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -256,10 +249,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         {
             try
             {
-                _reconnectCts?.Cancel();
-                _reconnectCts?.Dispose();
-                _reconnectCts = null;
-
                 if (_networkStream != null)
                 {
                     await _networkStream.DisposeAsync().ConfigureAwait(false);
@@ -417,7 +406,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// <summary>
         /// 发送 SCPI 设置命令（只写不读）。
         /// 用于 *CLS、CONF:RES、CONF:CONT、SENS:xxx、SAMP:xxx、TRIG:xxx、SYST:LOC 等。
-        /// 自动处理连接丢失和重连。
+        /// 实际 I/O 失败只标记断线；重连由 DeviceConnectionService 统一管理。
         /// </summary>
         /// <param name="command">SCPI 设置命令（不以 ? 结尾）</param>
         /// <param name="ct">取消令牌</param>
@@ -440,9 +429,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 Notify(NotificationType.Error, $"设置命令执行失败: {ex.Message}");
 
                 // 检测连接是否丢失
-                if (ex is IOException or SocketException)
+                if (IsConnectionFailure(ex))
                 {
-                    await HandleConnectionLossAsync().ConfigureAwait(false);
+                    await MarkConnectionLostAsync().ConfigureAwait(false);
                 }
 
                 throw;
@@ -456,7 +445,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// <summary>
         /// 发送 SCPI 查询命令（写后读取响应）。
         /// 用于 *IDN?、READ?、MEAS?、MEAS:CONT?、*OPC?、SYST:ERR?、*TST? 等。
-        /// 自动处理连接丢失和重连。
+        /// 实际 I/O 失败只标记断线；重连由 DeviceConnectionService 统一管理。
         /// </summary>
         /// <param name="command">SCPI 查询命令（以 ? 结尾）</param>
         /// <param name="ct">取消令牌</param>
@@ -480,9 +469,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 Notify(NotificationType.Error, $"查询命令执行失败: {ex.Message}");
 
                 // 检测连接是否丢失
-                if (ex is IOException or SocketException)
+                if (IsConnectionFailure(ex))
                 {
-                    await HandleConnectionLossAsync().ConfigureAwait(false);
+                    await MarkConnectionLostAsync().ConfigureAwait(false);
                 }
 
                 throw;
@@ -933,112 +922,94 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 轻量级通信验证：发送 *IDN? 并检查是否有非空响应。
-        /// 使用同一把 _commandLock 串行化查询，避免 *IDN? 响应迟到后污染后续 *OPC? / READ?。
-        /// 带独立短超时（500ms），避免长时间阻塞启动复核。
+        /// 通过 *IDN? 主动确认 DMM 的真实通信状态。健康探针与业务查询共用命令锁，
+        /// 但只立即尝试取锁；业务测量繁忙时返回 SkippedBusy，不判定设备掉线。
         /// </summary>
-        public async Task<bool> PingAsync(CancellationToken ct = default)
+        public async Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
         {
             if (!IsConnected)
-            {
-                _logger.LogDebug("[万用表Ping] 连接标志为 false，跳过通信验证");
-                return false;
-            }
+                return DeviceHealthCheckResult.Unhealthy("万用表连接标志为断开");
 
+            using var timeoutCts = new CancellationTokenSource(1000);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            bool lockTaken = false;
             try
             {
-                // 使用独立短超时，防止网络故障时长时间阻塞
-                using var timeoutCts = new CancellationTokenSource(500);
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+                lockTaken = await _commandLock.WaitAsync(0, linkedCts.Token).ConfigureAwait(false);
+                if (!lockTaken)
+                    return DeviceHealthCheckResult.SkippedBusy("DMM 正在执行业务命令，本轮健康检查跳过");
 
-                await _commandLock.WaitAsync(linkedCts.Token).ConfigureAwait(false);
-                var sw = Stopwatch.StartNew();
-                try
+                var response = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(response))
                 {
-                    await DrainReceiveBufferAsync(linkedCts.Token).ConfigureAwait(false);
-                    var response = await SendQueryInternalAsync("*IDN?", linkedCts.Token).ConfigureAwait(false);
+                    await MarkConnectionLostAsync().ConfigureAwait(false);
+                    return DeviceHealthCheckResult.Unhealthy("DMM *IDN? 未返回有效响应");
+                }
 
-                    bool success = !string.IsNullOrWhiteSpace(response);
-                    sw.Stop();
-                    _logger.LogWarning(
-                        "[DMM性能][Ping] Command=*IDN?, ElapsedMs={ElapsedMs}, Success={Success}, Response={Response}",
-                        sw.ElapsedMilliseconds, success, response);
-                    return success;
-                }
-                finally
-                {
-                    _commandLock.Release();
-                }
+                return DeviceHealthCheckResult.Healthy("DMM *IDN? 响应正常");
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("[健康检查][DMM] *IDN? 超时，确认设备不可通信");
+                await MarkConnectionLostAsync().ConfigureAwait(false);
+                return DeviceHealthCheckResult.Unhealthy("DMM 健康检查超时");
             }
             catch (OperationCanceledException)
             {
-                _receiveBufferPossiblyDirty = true;
-                _logger.LogWarning("[万用表Ping] 超时（500ms），万用表不可通信");
-                return false;
+                throw;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[万用表Ping] 通信异常，万用表不可通信");
-                return false;
-            }
-        }
-
-        #endregion
-
-        #region 断线重连
-
-        private async Task HandleConnectionLossAsync()
-        {
-            if (Interlocked.CompareExchange(ref _isReconnecting, 1, 0) == 1)
-            {
-                _logger.LogDebug("重连已在进行中，跳过");
-                return;
-            }
-
-            try
-            {
-                _isConnected = false;
-                ResetDmmModeCache(); // 连接丢失，缓存不可信
-                ConnectionStateChanged?.Invoke(this, false);
-                Notify(NotificationType.Warning, "万用表连接丢失，开始重连...");
-
-                await CleanupConnectionAsync().ConfigureAwait(false);
-
-                _reconnectCts = new CancellationTokenSource();
-                int attempts = 0;
-
-                while (!_isDisposed && attempts < MAX_RECONNECT_ATTEMPTS)
-                {
-                    attempts++;
-                    _logger.LogInformation("万用表重连尝试 {Attempt}/{Max}", attempts, MAX_RECONNECT_ATTEMPTS);
-
-                    try
-                    {
-                        if (await ConnectInternalAsync(_host, _port, _timeoutMs, _reconnectCts.Token).ConfigureAwait(false))
-                        {
-                            _logger.LogInformation("万用表重连成功！");
-                            Notify(NotificationType.ConnectionRestored, "万用表已恢复连接");
-                            return;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "万用表重连失败 ({Attempt}/{Max})", attempts, MAX_RECONNECT_ATTEMPTS);
-                    }
-
-                    if (attempts < MAX_RECONNECT_ATTEMPTS)
-                    {
-                        await Task.Delay(RECONNECT_DELAY_MS, _reconnectCts.Token).ConfigureAwait(false);
-                    }
-                }
-
-                Notify(NotificationType.Critical, "万用表重连失败，已达最大尝试次数");
+                _logger.LogWarning(ex, "[健康检查][DMM] 通信异常，确认设备不可通信");
+                await MarkConnectionLostAsync().ConfigureAwait(false);
+                return DeviceHealthCheckResult.Unhealthy("DMM 健康检查通信失败", ex);
             }
             finally
             {
-                Interlocked.Exchange(ref _isReconnecting, 0);
+                if (lockTaken)
+                    _commandLock.Release();
             }
         }
+
+        /// <summary>保留旧的启动复核入口，统一复用新的健康检查结果。</summary>
+        public async Task<bool> PingAsync(CancellationToken ct = default)
+            => (await CheckHealthAsync(ct).ConfigureAwait(false)).IsHealthy;
+
+        #endregion
+
+        #region 断线处理
+
+        /// <summary>
+        /// 调用方已持有命令锁时的断线收尾：不重连、不再获取命令锁。
+        /// </summary>
+        private async Task MarkConnectionLostAsync()
+        {
+            _isConnected = false;
+            ResetDmmModeCache();
+            await CleanupConnectionAsync().ConfigureAwait(false);
+            ConnectionStateChanged?.Invoke(this, false);
+            Notify(NotificationType.Warning, "万用表通信丢失，等待连接服务重连");
+        }
+
+        /// <summary>
+        /// 未持有命令锁的健康检查失败收尾；只发布断线，不在驱动内重连。
+        /// </summary>
+        private async Task MarkConnectionLostFromUnlockedContextAsync()
+        {
+            await _commandLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await MarkConnectionLostAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        private static bool IsConnectionFailure(Exception ex)
+            => ex is IOException or SocketException or ObjectDisposedException or InvalidOperationException;
 
         #endregion
 
@@ -1068,9 +1039,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             if (_isDisposed) return;
             _isDisposed = true;
 
-            _reconnectCts?.Cancel();
-            _reconnectCts?.Dispose();
-
             _tcpClient?.Close();
             _tcpClient?.Dispose();
             _networkStream?.Dispose();
@@ -1085,7 +1053,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             _isDisposed = true;
 
             await DisconnectAsync().ConfigureAwait(false);
-            _reconnectCts?.Dispose();
             _commandLock?.Dispose();
 
             GC.SuppressFinalize(this);

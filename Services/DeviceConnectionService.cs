@@ -11,6 +11,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.DeviceConnections;
 using Microsoft.Extensions.Logging;
 using System.Windows;
@@ -46,6 +47,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private readonly SemaphoreSlim _dmmLock = new(1, 1);
         private readonly SemaphoreSlim _scannerLock = new(1, 1);
 
+        // 独立无状态临时测试器
+        private readonly IPlcConnectionTester _plcConnectionTester;
+        private readonly IDmmConnectionTester _dmmConnectionTester;
+
         // 线程安全状态存储
         private readonly object _stateSyncRoot = new();
         private readonly Dictionary<string, DeviceState> _states = new()
@@ -70,13 +75,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         #region 重试参数（原 DeviceConnectionRetryOptions，内联为常量）
 
         private const int ReconnectBaseDelayMs = 2000;
-        private const int ReconnectMaxDelayMs = 30000;
-        private const int MaxReconnectAttempts = 12;
-        private const int MonitorIntervalMs = 5000;
-        private const int InitialReconnectIntervalMs = 3000;
-        private const int BackoffReconnectIntervalMs = 5000;
-        private const int MaxReconnectIntervalMs = 30000;
-        private const int CleanDisconnectDelayMs = 300;
+        private const int ReconnectMaxDelayMs = 8000;
+        private const int MaxReconnectAttempts = 5;
+        private const int MonitorIntervalMs = 2000;
+        private const int CleanDisconnectDelayMs = 100;
+        private const int HealthFailureThreshold = 2;
+
+        // 分段重连退避：前 5 次 2s，6~12 次 5s，之后 10s
+        private const int ReconnectBackoffFastMs = 2000;
+        private const int ReconnectBackoffSlowMs = 5000;
+        private const int ReconnectBackoffMaxMs = 10000;
+        private const int ReconnectBackoffFastThreshold = 5;
 
         #endregion
 
@@ -90,6 +99,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public string PlcStatusText => GetStatusText(DeviceTypeNames.Plc);
         public string DmmStatusText => GetStatusText(DeviceTypeNames.Dmm);
         public string ScannerStatusText => GetStatusText(DeviceTypeNames.Scanner);
+        public DeviceConnectionStatus PlcStatus => GetStatus(DeviceTypeNames.Plc);
+        public DeviceConnectionStatus DmmStatus => GetStatus(DeviceTypeNames.Dmm);
+        public DeviceConnectionStatus ScannerStatus => GetStatus(DeviceTypeNames.Scanner);
 
         #endregion
 
@@ -111,7 +123,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             IMultimeterDevice dmmDevice,
             IScannerDevice scannerDevice,
             IScannerBarcodeService scannerBarcodeService,
-            IDeviceSettingsService settingsService)
+            IDeviceSettingsService settingsService,
+            IPlcConnectionTester plcConnectionTester,
+            IDmmConnectionTester dmmConnectionTester)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
@@ -119,6 +133,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _scannerDevice = scannerDevice ?? throw new ArgumentNullException(nameof(scannerDevice));
             _scannerBarcodeService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _plcConnectionTester = plcConnectionTester ?? throw new ArgumentNullException(nameof(plcConnectionTester));
+            _dmmConnectionTester = dmmConnectionTester ?? throw new ArgumentNullException(nameof(dmmConnectionTester));
 
             SubscribeToHardwareEvents();
 
@@ -218,21 +234,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             _logger.LogWarning("[用户操作][设备连接][{DeviceType}] 用户手动重连设备", deviceType);
 
+            var device = GetDevice(deviceType);
             var settings = _settingsService.LoadSettings();
             ApplyDeviceSettings(settings);
-
-            SetConnecting(deviceType);
-            var device = GetDevice(deviceType);
-            await DisconnectDeviceInternalAsync(device, deviceType).ConfigureAwait(false);
-            await ConnectAndPublishAsync(device, deviceType, _connectionCts?.Token ?? CancellationToken.None).ConfigureAwait(false);
-
-            if (deviceType == DeviceTypeNames.Scanner && IsScannerConnected)
-            {
-                await InitializeScannerBarcodeServiceAsync().ConfigureAwait(false);
-            }
-
-            _logger.LogInformation("[设备连接][{DeviceType}] 手动重连完成，结果: {Result}",
-                deviceType, IsConnected(deviceType) ? "成功" : "失败");
+            await ExecuteReconnectAsync(
+                    deviceType,
+                    device,
+                    "手动重连",
+                    _connectionCts?.Token ?? CancellationToken.None)
+                .ConfigureAwait(false);
         }
 
         public async Task ConnectDeviceAsync(string deviceType)
@@ -254,7 +264,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             var settings = _settingsService.LoadSettings();
             ApplyDeviceSettings(settings);
 
-            SetConnecting(deviceType);
+            PublishConnecting(deviceType);
             var device = GetDevice(deviceType);
             await ConnectAndPublishAsync(device, deviceType, _connectionCts?.Token ?? CancellationToken.None).ConfigureAwait(false);
 
@@ -276,6 +286,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             var device = GetDevice(deviceType);
             await DisconnectDeviceInternalAsync(device, deviceType).ConfigureAwait(false);
             await PublishStateChangeAsync(deviceType, false).ConfigureAwait(false);
+        }
+
+        public async Task<DeviceReconnectSummary> ApplySettingsAndReconnectAsync(bool reconnectPlc, bool reconnectDmm, bool reconnectScanner)
+        {
+            var settings = _settingsService.LoadSettings();
+
+            if (!reconnectPlc && !reconnectDmm && !reconnectScanner)
+            {
+                return DeviceReconnectSummary.NoChanges(
+                    IsPlcConnected,
+                    IsDmmConnected,
+                    IsScannerConnected,
+                    PlcStatusText,
+                    DmmStatusText,
+                    ScannerStatusText);
+            }
+
+            _logger.LogWarning("[设备连接][配置变更] 正在应用新配置并重连：PLC={Plc}, DMM={Dmm}, Scanner={Scanner}",
+                reconnectPlc, reconnectDmm, reconnectScanner);
+
+            var plcTask = reconnectPlc
+                ? ApplyConfigAndReconnectDeviceAsync(DeviceTypeNames.Plc, settings)
+                : Task.FromResult(DeviceReconnectResult.NotRequested(DeviceTypeNames.Plc, IsPlcConnected, PlcStatusText));
+            var dmmTask = reconnectDmm
+                ? ApplyConfigAndReconnectDeviceAsync(DeviceTypeNames.Dmm, settings)
+                : Task.FromResult(DeviceReconnectResult.NotRequested(DeviceTypeNames.Dmm, IsDmmConnected, DmmStatusText));
+            var scannerTask = reconnectScanner
+                ? ApplyConfigAndReconnectDeviceAsync(DeviceTypeNames.Scanner, settings)
+                : Task.FromResult(DeviceReconnectResult.NotRequested(DeviceTypeNames.Scanner, IsScannerConnected, ScannerStatusText));
+
+            await Task.WhenAll(plcTask, dmmTask, scannerTask).ConfigureAwait(false);
+            return new DeviceReconnectSummary(
+                await plcTask.ConfigureAwait(false),
+                await dmmTask.ConfigureAwait(false),
+                await scannerTask.ConfigureAwait(false));
         }
 
         #endregion
@@ -333,9 +378,70 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 scanner.PortName, scanner.BaudRate);
         }
 
+        private async Task<DeviceReconnectResult> ApplyConfigAndReconnectDeviceAsync(string deviceType, DeviceSettings settings)
+        {
+            switch (deviceType)
+            {
+                case DeviceTypeNames.Plc:
+                    ApplyPlcConfig(settings);
+                    break;
+                case DeviceTypeNames.Dmm:
+                    ApplyDmmConfig(settings);
+                    break;
+                case DeviceTypeNames.Scanner:
+                    ApplyScannerConfig(settings);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(deviceType), deviceType, "未知设备类型");
+            }
+
+            var device = GetDevice(deviceType);
+            var connected = await ExecuteReconnectAsync(
+                    deviceType,
+                    device,
+                    "配置重连",
+                    _connectionCts?.Token ?? CancellationToken.None)
+                .ConfigureAwait(false);
+
+            return new DeviceReconnectResult(
+                deviceType,
+                Requested: true,
+                IsConnected: connected,
+                StatusText: GetStatusText(deviceType));
+        }
+
         #endregion
 
         #region 连接执行（原 DeviceConnectionExecutor 逻辑）
+
+        private async Task<bool> ExecuteReconnectAsync(
+            string deviceType,
+            ICommunicationDevice device,
+            string reason,
+            CancellationToken ct)
+        {
+            SetReconnectInProgress(deviceType, true);
+            try
+            {
+                PublishConnecting(deviceType);
+                _logger.LogWarning("[{Reason}][{DeviceType}] 开始", reason, deviceType);
+
+                await DisconnectDeviceInternalAsync(device, deviceType).ConfigureAwait(false);
+                await ConnectAndPublishAsync(device, deviceType, ct, maxAttempts: 1).ConfigureAwait(false);
+
+                if (deviceType == DeviceTypeNames.Scanner && IsScannerConnected)
+                    await InitializeScannerBarcodeServiceAsync().ConfigureAwait(false);
+
+                var connected = IsConnected(deviceType);
+                _logger.LogInformation("[{Reason}][{DeviceType}] 结果: {Result}",
+                    reason, deviceType, connected ? "成功" : "失败");
+                return connected;
+            }
+            finally
+            {
+                SetReconnectInProgress(deviceType, false);
+            }
+        }
 
         /// <summary>
         /// 带指数退避重试连接指定设备。
@@ -479,50 +585,94 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             }
         }
 
-        private void SetConnecting(string deviceType)
+        private DeviceConnectionStatus GetStatus(string deviceType)
+        {
+            lock (_stateSyncRoot)
+                return _states[deviceType].Status;
+        }
+
+        private bool IsReconnectInProgress(string deviceType)
+        {
+            lock (_stateSyncRoot)
+                return _states[deviceType].IsReconnectInProgress;
+        }
+
+        private void SetReconnectInProgress(string deviceType, bool value)
+        {
+            lock (_stateSyncRoot)
+                _states[deviceType].IsReconnectInProgress = value;
+        }
+
+        private DeviceConnectionStateChangedEventArgs? SetConnecting(string deviceType)
         {
             lock (_stateSyncRoot)
             {
-                _states[deviceType].StatusText = "连接中...";
+                var state = _states[deviceType];
+                if (state.Status == DeviceConnectionStatus.Connecting)
+                    return null;
+                state.IsConnected = false;
+                state.Status = DeviceConnectionStatus.Connecting;
+                state.StatusText = "连接中...";
+                _areAllDevicesReady = _states[DeviceTypeNames.Plc].IsConnected
+                    && _states[DeviceTypeNames.Dmm].IsConnected
+                    && _states[DeviceTypeNames.Scanner].IsConnected;
+                return new DeviceConnectionStateChangedEventArgs(deviceType, false, state.StatusText, state.Status);
             }
+        }
+
+        private void PublishConnecting(string deviceType)
+        {
+            var args = SetConnecting(deviceType);
+            if (args is not null)
+                PublishOnUiThread(deviceType, args);
+            CheckAllDevicesReady();
         }
 
         /// <summary>
         /// 更新设备连接状态，原子计算全部设备就绪缓存。
         /// </summary>
-        private DeviceConnectionStateChangedEventArgs UpdateConnectionState(string deviceType, bool isConnected)
+        private DeviceConnectionStateChangedEventArgs? UpdateConnectionState(string deviceType, bool isConnected)
         {
             lock (_stateSyncRoot)
             {
                 var state = _states[deviceType];
+                var newStatus = isConnected ? DeviceConnectionStatus.Connected : DeviceConnectionStatus.Disconnected;
+                if (state.Status == newStatus && state.IsConnected == isConnected)
+                    return null;
                 state.IsConnected = isConnected;
+                state.Status = newStatus;
                 state.StatusText = isConnected ? "已连接" : "未连接";
 
                 if (isConnected)
-                    state.ConsecutiveFailures = 0;
-                else
-                    state.ConsecutiveFailures++;
+                {
+                    // 设备重新连接成功后，健康检查和自动重连历史都不再影响下一轮策略。
+                    state.ConsecutiveHealthFailures = 0;
+                    state.ConsecutiveReconnectFailures = 0;
+                }
 
                 // 同一锁内原子计算全部设备就绪状态，避免快照不一致
                 _areAllDevicesReady = _states[DeviceTypeNames.Plc].IsConnected
                     && _states[DeviceTypeNames.Dmm].IsConnected
                     && _states[DeviceTypeNames.Scanner].IsConnected;
 
-                return new DeviceConnectionStateChangedEventArgs(deviceType, isConnected, state.StatusText);
+                return new DeviceConnectionStateChangedEventArgs(deviceType, isConnected, state.StatusText, state.Status);
             }
         }
 
         /// <summary>
-        /// 检查设备重连冷却时间，避免过频繁重连。
+        /// 检查设备重连冷却时间，使用分段退避：
+        /// 前 5 次失败每 2s 允许一次，之后每 5s 允许一次，最大 10s。
         /// </summary>
         private bool ShouldAttemptReconnect(string deviceType, DateTime now)
         {
             lock (_stateSyncRoot)
             {
                 var state = _states[deviceType];
-                var cooldownMs = Math.Min(
-                    InitialReconnectIntervalMs + state.ConsecutiveFailures * BackoffReconnectIntervalMs,
-                    MaxReconnectIntervalMs);
+                var cooldownMs = state.ConsecutiveReconnectFailures <= ReconnectBackoffFastThreshold
+                    ? ReconnectBackoffFastMs
+                    : Math.Min(
+                        ReconnectBackoffSlowMs + (state.ConsecutiveReconnectFailures - ReconnectBackoffFastThreshold) * 1000,
+                        ReconnectBackoffMaxMs);
 
                 if ((now - state.LastReconnectAttempt).TotalMilliseconds < cooldownMs)
                     return false;
@@ -535,9 +685,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private sealed class DeviceState
         {
             public bool IsConnected { get; set; }
+            public DeviceConnectionStatus Status { get; set; } = DeviceConnectionStatus.Disconnected;
             public string StatusText { get; set; } = "未连接";
-            public int ConsecutiveFailures { get; set; }
+            public int ConsecutiveHealthFailures { get; set; }
+            public int ConsecutiveReconnectFailures { get; set; }
             public DateTime LastReconnectAttempt { get; set; } = DateTime.MinValue;
+            public bool IsReconnectInProgress { get; set; }
         }
 
         #endregion
@@ -581,45 +734,140 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         private async Task MonitorLoopAsync(CancellationToken ct)
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
-                while (!ct.IsCancellationRequested)
+                try
                 {
                     await Task.Delay(MonitorIntervalMs, ct).ConfigureAwait(false);
 
                     await Task.WhenAll(
-                        CheckAndReconnectAsync(DeviceTypeNames.Plc, _plcDevice, ct),
-                        CheckAndReconnectAsync(DeviceTypeNames.Dmm, _dmmDevice, ct),
-                        CheckAndReconnectAsync(DeviceTypeNames.Scanner, _scannerDevice, ct)
+                        MonitorDeviceSafelyAsync(DeviceTypeNames.Plc, _plcDevice, ct),
+                        MonitorDeviceSafelyAsync(DeviceTypeNames.Dmm, _dmmDevice, ct),
+                        MonitorDeviceSafelyAsync(DeviceTypeNames.Scanner, _scannerDevice, ct)
                     ).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _logger.LogDebug("[设备连接] 后台监控被取消");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[设备连接] 单轮监控异常，下一轮继续");
+                }
             }
-            catch (OperationCanceledException)
+        }
+
+        private async Task MonitorDeviceSafelyAsync(string deviceType, ICommunicationDevice device, CancellationToken ct)
+        {
+            try
             {
-                _logger.LogDebug("[设备连接] 后台监控被取消");
+                if (IsReconnectInProgress(deviceType) || GetStatus(deviceType) == DeviceConnectionStatus.Connecting)
+                    return;
+
+                if (GetStatus(deviceType) == DeviceConnectionStatus.Connected)
+                {
+                    var health = await device.CheckHealthAsync(ct).ConfigureAwait(false);
+                    if (health.Status == GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceHealthCheckStatus.Healthy)
+                    {
+                        ResetHealthFailures(deviceType);
+                        return;
+                    }
+
+                    if (health.Status is GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceHealthCheckStatus.SkippedBusy
+                        or GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceHealthCheckStatus.Disabled)
+                    {
+                        // SkippedBusy/Disabled 不计入失败次数
+                        if (health.Status == GMandE7BUSBPoorSolderingInspectionDevice.Models.DeviceHealthCheckStatus.SkippedBusy)
+                            _logger.LogDebug("[健康检查][{DeviceType}] 跳过（业务繁忙）", deviceType);
+                        return;
+                    }
+
+                    var failures = IncrementHealthFailures(deviceType);
+                    if (failures == 1)
+                        _logger.LogWarning("[健康检查][{DeviceType}] 首次失败: {Message}", deviceType, health.Message);
+                    else
+                        _logger.LogDebug("[健康检查][{DeviceType}] 第 {Failures} 次失败/{Threshold}: {Message}",
+                            deviceType, failures, HealthFailureThreshold, health.Message);
+                    if (failures < HealthFailureThreshold)
+                        return;
+
+                    try
+                    {
+                        if (device.IsConnected)
+                            await device.DisconnectAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[健康检查][{DeviceType}] 清理失效连接时异常", deviceType);
+                    }
+
+                    await PublishStateChangeAsync(deviceType, false).ConfigureAwait(false);
+                    _logger.LogWarning("[健康检查][{DeviceType}] 已确认设备断线", deviceType);
+                    return;
+                }
+
+                if (!ShouldAttemptReconnect(deviceType, DateTime.Now))
+                    return;
+
+                PublishConnecting(deviceType);
+                _logger.LogInformation("[自动重连][{DeviceType}] 开始（重连失败次数={Failures}）", deviceType, GetReconnectFailureCount(deviceType));
+
+                var connected = await ConnectWithRetryAsync(device, deviceType, ct, maxAttempts: 1).ConfigureAwait(false);
+                await PublishStateChangeAsync(deviceType, connected).ConfigureAwait(false);
+
+                if (connected)
+                {
+                    _logger.LogInformation("[自动重连][{DeviceType}] 成功", deviceType);
+                    if (deviceType == DeviceTypeNames.Scanner)
+                        await InitializeScannerBarcodeServiceAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    var failures = IncrementReconnectFailures(deviceType);
+                    _logger.LogDebug("[自动重连][{DeviceType}] 失败，重连失败次数={Failures}，等待下一轮",
+                        deviceType,
+                        failures);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[设备连接] 后台监控异常");
+                _logger.LogError(ex, "[设备连接][{DeviceType}] 本轮监控异常，已隔离", deviceType);
             }
+        }
+
+        private void ResetHealthFailures(string deviceType)
+        {
+            lock (_stateSyncRoot)
+                _states[deviceType].ConsecutiveHealthFailures = 0;
+        }
+
+        private int IncrementHealthFailures(string deviceType)
+        {
+            lock (_stateSyncRoot)
+                return ++_states[deviceType].ConsecutiveHealthFailures;
+        }
+
+        private int IncrementReconnectFailures(string deviceType)
+        {
+            lock (_stateSyncRoot)
+                return ++_states[deviceType].ConsecutiveReconnectFailures;
+        }
+
+        private int GetReconnectFailureCount(string deviceType)
+        {
+            lock (_stateSyncRoot)
+                return _states[deviceType].ConsecutiveReconnectFailures;
         }
 
         private async Task CheckAndReconnectAsync(string deviceType, ICommunicationDevice device, CancellationToken ct)
         {
-            if (device.IsConnected) return;
-
-            if (!ShouldAttemptReconnect(deviceType, DateTime.Now)) return;
-
-            SetConnecting(deviceType);
-            _logger.LogWarning("[设备连接][{DeviceType}] 后台监控检测到设备未连接，开始重连", deviceType);
-
-            var connected = await ConnectWithRetryAsync(device, deviceType, ct, maxAttempts: 1).ConfigureAwait(false);
-            await PublishStateChangeAsync(deviceType, connected).ConfigureAwait(false);
-
-            if (connected && deviceType == DeviceTypeNames.Scanner)
-            {
-                await InitializeScannerBarcodeServiceAsync().ConfigureAwait(false);
-            }
+            // 保留私有兼容入口，实际逻辑统一由单设备安全监控执行。
+            await MonitorDeviceSafelyAsync(deviceType, device, ct).ConfigureAwait(false);
         }
 
         #endregion
@@ -639,6 +887,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private Task PublishStateChangeAsync(string deviceType, bool connected)
         {
             var args = UpdateConnectionState(deviceType, connected);
+
+            if (args is null)
+            {
+                _logger.LogDebug(
+                    "[设备连接][{DeviceType}] 状态未变化，跳过重复状态事件",
+                    deviceType);
+                return Task.CompletedTask;
+            }
+
             PublishOnUiThread(deviceType, args);
             CheckAllDevicesReady();
             return Task.CompletedTask;
@@ -665,9 +922,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _ => throw new ArgumentOutOfRangeException(nameof(deviceType), deviceType, "未知设备类型")
         };
 
-        private void PublishOnUiThread(string deviceType, DeviceConnectionStateChangedEventArgs args)
+        private void PublishOnUiThread(
+            string deviceType,
+            DeviceConnectionStateChangedEventArgs? args)
         {
-            Application.Current?.Dispatcher.BeginInvoke(() =>
+            if (args is null)
+            {
+                _logger.LogError(
+                    "[设备连接][{DeviceType}][防御] 阻止发布空连接状态事件参数",
+                    deviceType);
+                return;
+            }
+
+            void Publish()
             {
                 switch (deviceType)
                 {
@@ -680,8 +947,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     case DeviceTypeNames.Scanner:
                         ScannerConnectionStateChanged?.Invoke(this, args);
                         break;
+                    default:
+                        _logger.LogWarning(
+                            "[设备连接] 未知设备类型，连接状态事件未发布: {DeviceType}",
+                            deviceType);
+                        break;
                 }
-            });
+            }
+
+            var dispatcher = Application.Current?.Dispatcher;
+
+            if (dispatcher is null || dispatcher.CheckAccess())
+            {
+                Publish();
+                return;
+            }
+
+            dispatcher.BeginInvoke((Action)Publish);
         }
 
         private void CheckAllDevicesReady()
@@ -696,37 +978,51 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         #region 硬件事件订阅与转发
 
+        private void HandleHardwareConnectionStateChanged(
+            string deviceType,
+            bool connected)
+        {
+            if (!connected
+                && (IsReconnectInProgress(deviceType)
+                    || GetStatus(deviceType) == DeviceConnectionStatus.Connecting))
+            {
+                _logger.LogDebug(
+                    "[设备连接][{DeviceType}] 重连中收到驱动 false 事件，已忽略",
+                    deviceType);
+                return;
+            }
+
+            var args = UpdateConnectionState(deviceType, connected);
+
+            if (args is null)
+            {
+                _logger.LogDebug(
+                    "[设备连接][{DeviceType}] 驱动重复报告状态 Connected={Connected}，跳过事件发布",
+                    deviceType,
+                    connected);
+                return;
+            }
+
+            PublishOnUiThread(deviceType, args);
+            CheckAllDevicesReady();
+        }
+
         private void SubscribeToHardwareEvents()
         {
-            _plcDevice.ConnectionStateChanged += (sender, connected) =>
-            {
-                Application.Current?.Dispatcher.BeginInvoke(() =>
-                {
-                    var args = UpdateConnectionState(DeviceTypeNames.Plc, connected);
-                    PlcConnectionStateChanged?.Invoke(this, args);
-                    CheckAllDevicesReady();
-                });
-            };
+            _plcDevice.ConnectionStateChanged += (_, connected) =>
+                HandleHardwareConnectionStateChanged(
+                    DeviceTypeNames.Plc,
+                    connected);
 
-            _dmmDevice.ConnectionStateChanged += (sender, connected) =>
-            {
-                Application.Current?.Dispatcher.BeginInvoke(() =>
-                {
-                    var args = UpdateConnectionState(DeviceTypeNames.Dmm, connected);
-                    DmmConnectionStateChanged?.Invoke(this, args);
-                    CheckAllDevicesReady();
-                });
-            };
+            _dmmDevice.ConnectionStateChanged += (_, connected) =>
+                HandleHardwareConnectionStateChanged(
+                    DeviceTypeNames.Dmm,
+                    connected);
 
-            _scannerDevice.ConnectionStateChanged += (sender, connected) =>
-            {
-                Application.Current?.Dispatcher.BeginInvoke(() =>
-                {
-                    var args = UpdateConnectionState(DeviceTypeNames.Scanner, connected);
-                    ScannerConnectionStateChanged?.Invoke(this, args);
-                    CheckAllDevicesReady();
-                });
-            };
+            _scannerDevice.ConnectionStateChanged += (_, connected) =>
+                HandleHardwareConnectionStateChanged(
+                    DeviceTypeNames.Scanner,
+                    connected);
 
             _scannerBarcodeService.BarcodeParsed += (sender, e) =>
             {
@@ -735,6 +1031,80 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     BarcodeScanned?.Invoke(this, e);
                 });
             };
+        }
+
+        #endregion
+
+        #region 临时测试（复用现有设备锁）
+
+        /// <summary>
+        /// 测试输入 PLC 配置是否可达。
+        /// 等待当前 PLC 生产连接/重连结束后，获取 _plcLock 执行独立临时测试。
+        /// 锁内严禁调用 ConnectWithRetryAsync / DisconnectDeviceInternalAsync /
+        /// ExecuteReconnectAsync / ApplyConfigAndReconnectDeviceAsync，否则造成死锁。
+        /// 测试结束后释放锁，后台下一轮自动重连继续。
+        /// </summary>
+        public async Task<bool> TestPlcConfigurationAsync(
+            FP0HCommunicationConfig config,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(config);
+
+            await _plcLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                _logger.LogInformation(
+                    "[临时测试][PLC] 获得设备互斥锁，开始测试 Host={Host} Port={Port} UnitId={UnitId}",
+                    config.IpAddress,
+                    config.Port,
+                    config.SlaveId);
+
+                return await _plcConnectionTester.TestAsync(
+                        config.IpAddress,
+                        config.Port,
+                        checked((byte)config.SlaveId),
+                        8000,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _plcLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// 测试输入 DMM 配置是否可达。
+        /// 等待当前 DMM 生产连接/重连结束后，获取 _dmmLock 执行独立临时测试。
+        /// 锁内严禁调用 ConnectWithRetryAsync / DisconnectDeviceInternalAsync /
+        /// ExecuteReconnectAsync / ApplyConfigAndReconnectDeviceAsync，否则造成死锁。
+        /// 测试结束后释放锁，后台下一轮自动重连继续。
+        /// </summary>
+        public async Task<string?> TestDmmConfigurationAsync(
+            GDM9060CommunicationConfig config,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(config);
+
+            await _dmmLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                _logger.LogInformation(
+                    "[临时测试][DMM] 获得设备互斥锁，开始测试 Host={Host} Port={Port}",
+                    config.IpAddress,
+                    config.Port);
+
+                return await _dmmConnectionTester.TestAsync(
+                        config.IpAddress,
+                        config.Port,
+                        8000,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _dmmLock.Release();
+            }
         }
 
         #endregion

@@ -26,7 +26,7 @@
     <UserControl.Resources>
         <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
         <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
-        <converters:BoolToConnectionColorConverter x:Key="BoolToConnectionColorConverter"/>
+        <converters:DeviceConnectionStatusToColorConverter x:Key="DeviceConnectionStatusToColorConverter"/>
         <converters:TestStatusToColorConverter x:Key="TestStatusToColorConverter"/>
         <converters:BoolInverterConverter x:Key="BoolInverterConverter"/>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
@@ -233,7 +233,7 @@
                         <Button Style="{StaticResource ConnectionButtonStyle}"
                                 Command="{Binding ReconnectPlcCommand}" Margin="6">
                             <Button.Background>
-                                <SolidColorBrush Color="{Binding IsPlcConnected, Converter={StaticResource BoolToConnectionColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
                             <StackPanel>
                                 <TextBlock Text="PLC" FontSize="14" HorizontalAlignment="Center"/>
@@ -244,7 +244,7 @@
                         <Button Style="{StaticResource ConnectionButtonStyle}"
                                 Command="{Binding ReconnectScannerCommand}" Margin="6">
                             <Button.Background>
-                                <SolidColorBrush Color="{Binding IsScannerConnected, Converter={StaticResource BoolToConnectionColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
                             <StackPanel>
                                 <TextBlock Text="扫描仪" FontSize="14" HorizontalAlignment="Center"/>
@@ -255,7 +255,7 @@
                         <Button Style="{StaticResource ConnectionButtonStyle}"
                                 Command="{Binding ReconnectDmmCommand}" Margin="6">
                             <Button.Background>
-                                <SolidColorBrush Color="{Binding IsDmmConnected, Converter={StaticResource BoolToConnectionColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
                             <StackPanel>
                                 <TextBlock Text="万用表" FontSize="14" HorizontalAlignment="Center"/>

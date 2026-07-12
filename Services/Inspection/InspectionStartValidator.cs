@@ -105,10 +105,19 @@ public static class InspectionStartValidator
             if (string.Equals(tp.PinLeft, tp.PinRight, StringComparison.OrdinalIgnoreCase))
                 return Fail($"第 {i + 1} 项 [{tp.Name}] 左右引脚相同({tp.PinLeft})，无法启动");
 
-            bool leftIsPositive = string.Equals(tp.PinLeftPolarity, PinPolarityConstants.Positive, StringComparison.OrdinalIgnoreCase);
-            bool rightIsNegative = string.Equals(tp.PinRightPolarity, PinPolarityConstants.Negative, StringComparison.OrdinalIgnoreCase);
-            if (!leftIsPositive || !rightIsNegative)
-                return Fail($"第 {i + 1} 项 [{tp.Name}] 极性必须左正右负，当前左={tp.PinLeftPolarity} 右={tp.PinRightPolarity}");
+            bool leftPolarityIsValid = string.Equals(tp.PinLeftPolarity, PinPolarityConstants.Positive, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tp.PinLeftPolarity, PinPolarityConstants.Negative, StringComparison.OrdinalIgnoreCase);
+            if (!leftPolarityIsValid)
+                return Fail($"第 {i + 1} 项 [{tp.Name}] 左极性无效：{tp.PinLeftPolarity}");
+
+            bool rightPolarityIsValid = string.Equals(tp.PinRightPolarity, PinPolarityConstants.Positive, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tp.PinRightPolarity, PinPolarityConstants.Negative, StringComparison.OrdinalIgnoreCase);
+            if (!rightPolarityIsValid)
+                return Fail($"第 {i + 1} 项 [{tp.Name}] 右极性无效：{tp.PinRightPolarity}");
+
+            // PLC 接线允许左右互换，但两个引脚必须保持一正一负。
+            if (string.Equals(tp.PinLeftPolarity, tp.PinRightPolarity, StringComparison.OrdinalIgnoreCase))
+                return Fail($"第 {i + 1} 项 [{tp.Name}] 左右引脚必须一正一负，当前左={tp.PinLeftPolarity} 右={tp.PinRightPolarity}");
 
             if (string.Equals(tp.CheckMode, CheckModeConstants.Resistance, StringComparison.OrdinalIgnoreCase))
             {

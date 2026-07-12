@@ -2,14 +2,13 @@
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
-using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
-using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.DeviceConnections;
 using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using System;
@@ -37,7 +36,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly IServiceProvider _serviceProvider;
         private readonly ILoggerFactory _loggerFactory;
         private readonly IDeviceConnectionManager _deviceManager;
-        private readonly IModbusTcpClient _modbusClient;
 
         private readonly CsvStorageSettings _csvStorageSettings;
         private readonly CsvStoragePathManager _csvPathManager;
@@ -190,8 +188,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             IConfiguration configuration,
             IServiceProvider serviceProvider,
             ILoggerFactory loggerFactory,
-            IDeviceConnectionManager deviceManager,
-            IModbusTcpClient modbusClient)
+            IDeviceConnectionManager deviceManager)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
@@ -202,7 +199,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
-            _modbusClient = modbusClient ?? throw new ArgumentNullException(nameof(modbusClient));
+
             _logger = Log.ForContext<SystemSettingsViewModel>();
 
             LoadExistingSettings();
@@ -245,6 +242,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             try
             {
+                // 保存前从磁盘读取快照，避免 UI 双向绑定已原地修改对象而丢失旧值。
+                var previousSettings = _settingsService.LoadSettings();
                 var errors = ValidateAllConfigs();
                 if (errors.Count > 0)
                 {
@@ -256,9 +255,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 var deviceSettings = new DeviceSettings
                 {
-                    FP0HCommunication = Fp0hConfig,
-                    ScannerSerialCommunication = ScannerConfig,
-                    GDM9060Communication = Gdm9060Config,
+                    FP0HCommunication = ClonePlcConfig(Fp0hConfig),
+                    ScannerSerialCommunication = CloneScannerConfig(ScannerConfig),
+                    GDM9060Communication = CloneDmmConfig(Gdm9060Config),
                     IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled,
                     ContinueTestingAfterNg = ContinueTestingAfterNg,
                     SaveNgInspectionResult = ContinueTestingAfterNg && SaveNgInspectionResult
@@ -267,16 +266,114 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _settingsService.SaveSettings(deviceSettings);
                 await SaveCsvStoragePathAsync();
 
+                bool plcChanged = HasPlcConnectionChanged(previousSettings.FP0HCommunication, Fp0hConfig);
+                bool dmmChanged = HasDmmConnectionChanged(previousSettings.GDM9060Communication, Gdm9060Config);
+                bool scannerChanged = HasScannerConnectionChanged(previousSettings.ScannerSerialCommunication, ScannerConfig);
+                var reconnectSummary = await _deviceManager
+                    .ApplySettingsAndReconnectAsync(plcChanged, dmmChanged, scannerChanged)
+                    .ConfigureAwait(true);
+
                 _logger.Warning(
                     "[系统设置][审计] 单项 NG 后继续测试={ContinueTestingAfterNg}, 单项 NG 后继续保存={SaveNgInspectionResult}",
                     ContinueTestingAfterNg, SaveNgInspectionResult);
-                await _notificationService.ShowInfoAsync("所有配置已保存成功！存储路径修改立即生效，无需重启。");
+                await _notificationService.ShowInfoAsync(BuildSaveResultMessage(reconnectSummary));
             }
             catch (Exception ex)
             {
                 _logger.Error(ex, "保存配置失败");
                 await _notificationService.ShowErrorAsync($"保存配置失败：{ex.Message}");
             }
+        }
+
+        private static bool HasPlcConnectionChanged(FP0HCommunicationConfig? before, FP0HCommunicationConfig after)
+            => before is null || before.IpAddress != after.IpAddress || before.Port != after.Port
+                || before.SlaveId != after.SlaveId || before.ReceiveTimeoutMs != after.ReceiveTimeoutMs
+                || before.SendTimeoutMs != after.SendTimeoutMs;
+
+        private static bool HasDmmConnectionChanged(GDM9060CommunicationConfig? before, GDM9060CommunicationConfig after)
+            => before is null || before.IpAddress != after.IpAddress || before.Port != after.Port
+                || before.ReceiveTimeoutMs != after.ReceiveTimeoutMs || before.SendTimeoutMs != after.SendTimeoutMs;
+
+        private static bool HasScannerConnectionChanged(ScannerSerialCommunicationConfig? before, ScannerSerialCommunicationConfig after)
+            => before is null || before.SerialNumber != after.SerialNumber || before.BaudRate != after.BaudRate;
+
+        private static bool IsSameScannerConnection(ScannerSerialCommunicationConfig? saved, ScannerSerialCommunicationConfig input)
+            => saved is not null
+                && string.Equals(saved.SerialNumber, input.SerialNumber, StringComparison.OrdinalIgnoreCase)
+                && saved.BaudRate == input.BaudRate;
+
+        private static bool IsSamePlcConnectionTarget(FP0HCommunicationConfig? saved, FP0HCommunicationConfig input)
+            => saved is not null
+                && string.Equals(saved.IpAddress, input.IpAddress, StringComparison.OrdinalIgnoreCase)
+                && saved.Port == input.Port
+                && saved.SlaveId == input.SlaveId;
+
+        private static bool IsSameDmmConnectionTarget(GDM9060CommunicationConfig? saved, GDM9060CommunicationConfig input)
+            => saved is not null
+                && string.Equals(saved.IpAddress, input.IpAddress, StringComparison.OrdinalIgnoreCase)
+                && saved.Port == input.Port;
+
+        private static FP0HCommunicationConfig ClonePlcConfig(FP0HCommunicationConfig source)
+            => new()
+            {
+                IpAddress = source.IpAddress,
+                Port = source.Port,
+                SlaveId = source.SlaveId,
+                ReceiveTimeoutMs = source.ReceiveTimeoutMs,
+                SendTimeoutMs = source.SendTimeoutMs,
+                ReconnectDelayMs = source.ReconnectDelayMs,
+                MaxReconnectAttempts = source.MaxReconnectAttempts,
+                HealthCheckMode = source.HealthCheckMode,
+                HealthCheckIntervalSeconds = source.HealthCheckIntervalSeconds,
+                LastDataTimeoutSeconds = source.LastDataTimeoutSeconds
+            };
+
+        private static GDM9060CommunicationConfig CloneDmmConfig(GDM9060CommunicationConfig source)
+            => new()
+            {
+                IpAddress = source.IpAddress,
+                Port = source.Port,
+                ReceiveTimeoutMs = source.ReceiveTimeoutMs,
+                SendTimeoutMs = source.SendTimeoutMs,
+                HealthCheckMode = source.HealthCheckMode,
+                HealthCheckIntervalSeconds = source.HealthCheckIntervalSeconds,
+                LastDataTimeoutSeconds = source.LastDataTimeoutSeconds,
+                ContinuityThresholdOhm = source.ContinuityThresholdOhm
+            };
+
+        private static ScannerSerialCommunicationConfig CloneScannerConfig(ScannerSerialCommunicationConfig source)
+            => new()
+            {
+                SerialNumber = source.SerialNumber,
+                BaudRate = source.BaudRate,
+                Parity = source.Parity,
+                DataBits = source.DataBits,
+                StopBits = source.StopBits,
+                FlowControl = source.FlowControl,
+                HealthCheckMode = source.HealthCheckMode,
+                HealthCheckIntervalSeconds = source.HealthCheckIntervalSeconds,
+                LastDataTimeoutSeconds = source.LastDataTimeoutSeconds
+            };
+
+        private static string BuildSaveResultMessage(DeviceReconnectSummary summary)
+        {
+            if (!summary.HasRequestedReconnect)
+                return "所有配置已保存成功！连接参数未变化。";
+
+            var lines = new List<string> { "配置保存成功。", "连接参数已变更，生产设备重连结果：" };
+            foreach (var result in summary.Results.Where(x => x.Requested))
+            {
+                var deviceName = result.DeviceType switch
+                {
+                    DeviceTypeNames.Plc => "PLC",
+                    DeviceTypeNames.Dmm => "DMM",
+                    DeviceTypeNames.Scanner => "Scanner",
+                    _ => result.DeviceType
+                };
+                lines.Add($"{deviceName}：{(result.IsConnected ? "重连成功" : "重连失败")}（{result.StatusText}）");
+            }
+
+            return string.Join(Environment.NewLine, lines);
         }
 
         /// <summary>返回主菜单</summary>
@@ -360,8 +457,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 测试FP0H PLC连接。
-        /// 生产已连接时直接返回成功，不干扰持久连接。
-        /// 未连接时委托 IModbusTcpClient.TestConnectionAsync 创建独立连接测试，不经过生产单例。
+        /// 输入目标与已保存生产目标相同且生产已连接时，不创建第二条 Modbus 连接。
+        /// 其余情况通过 IDeviceConnectionManager.TestPlcConfigurationAsync 使用独立临时测试器，
+        /// 复用 _plcLock 与生产重连互斥。
         /// </summary>
         [RelayCommand]
         private async Task TestPlcConnectionAsync()
@@ -371,14 +469,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             // 取消之前的清除任务
             CancelTestClear(ref _plcTestClearCts);
-
-            // ⭐ 生产已连接则直接返回成功
-            if (_deviceManager.IsPlcConnected)
-            {
-                SetPlcTestResult(true, "PLC已连接（生产连接正常）");
-                ScheduleTestResultClear(ref _plcTestClearCts, ClearPlcTestResult);
-                return;
-            }
 
             IsTestingPlc = true;
             PlcTestButtonText = "⏳ 测试中...";
@@ -399,21 +489,50 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     SetPlcTestResult(false, $"端口号超出范围: {Fp0hConfig.Port}（应为1~65535）");
                     return;
                 }
+                if (!Common.Validators.InputValidationHelper.IsValidModbusSlaveId(Fp0hConfig.SlaveId))
+                {
+                    SetPlcTestResult(false,
+                        $"PLC Modbus从站ID {Fp0hConfig.SlaveId} 超出范围（应为 {Common.Validators.InputValidationHelper.ModbusSlaveIdMin}~{Common.Validators.InputValidationHelper.ModbusSlaveIdMax}）");
+                    return;
+                }
 
-                // 委托给 IModbusTcpClient.TestConnectionAsync，复用已验证的 Modbus TCP 握手逻辑
-                bool success = await _modbusClient.TestConnectionAsync(
-                    Fp0hConfig.IpAddress, Fp0hConfig.Port,
-                    TEST_CONNECTION_TIMEOUT_MS).ConfigureAwait(true);
+                var savedSettings = _settingsService.LoadSettings();
+                if (IsSamePlcConnectionTarget(savedSettings.FP0HCommunication, Fp0hConfig)
+                    && _deviceManager.IsPlcConnected)
+                {
+                    SetPlcTestResult(true,
+                        $"当前生产连接正常 — FP0H @ {Fp0hConfig.IpAddress}:{Fp0hConfig.Port}, UnitId={Fp0hConfig.SlaveId}（当前配置已生效）");
+
+                    _logger.Warning(
+                        "[临时测试][PLC] 跳过第二连接，当前输入目标与生产配置相同且生产连接正常 Host={Host} Port={Port} UnitId={UnitId}",
+                        Fp0hConfig.IpAddress,
+                        Fp0hConfig.Port,
+                        Fp0hConfig.SlaveId);
+
+                    return;
+                }
+
+                // 通过 DeviceConnectionManager 使用独立临时测试器，复用 _plcLock
+                using var cts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
+
+                bool success = await _deviceManager
+                    .TestPlcConfigurationAsync(
+                        ClonePlcConfig(Fp0hConfig),
+                        cts.Token)
+                    .ConfigureAwait(true);
 
                 if (success)
                 {
-                    SetPlcTestResult(true, $"连接成功 — FP0H @ {Fp0hConfig.IpAddress}:{Fp0hConfig.Port}");
-                    _logger.Information("PLC测试连接成功: {Host}:{Port}", Fp0hConfig.IpAddress, Fp0hConfig.Port);
+                    SetPlcTestResult(true,
+                        $"输入配置测试成功 — FP0H @ {Fp0hConfig.IpAddress}:{Fp0hConfig.Port}, UnitId={Fp0hConfig.SlaveId}\n当前生产设备仍按已保存配置运行；保存后才会应用此配置。");
+                    _logger.Warning("[临时测试][PLC] 成功 Host={Host} Port={Port} UnitId={UnitId}",
+                        Fp0hConfig.IpAddress, Fp0hConfig.Port, Fp0hConfig.SlaveId);
                 }
                 else
                 {
-                    SetPlcTestResult(false, $"连接失败: {Fp0hConfig.IpAddress}:{Fp0hConfig.Port} 不可达或未响应Modbus");
-                    _logger.Warning("PLC测试连接失败: {Host}:{Port}", Fp0hConfig.IpAddress, Fp0hConfig.Port);
+                    SetPlcTestResult(false, $"连接失败: {Fp0hConfig.IpAddress}:{Fp0hConfig.Port}, UnitId={Fp0hConfig.SlaveId} 不可达或未响应Modbus");
+                    _logger.Warning("[临时测试][PLC] 失败 Host={Host} Port={Port} UnitId={UnitId}",
+                        Fp0hConfig.IpAddress, Fp0hConfig.Port, Fp0hConfig.SlaveId);
                 }
             }
             catch (OperationCanceledException)
@@ -454,8 +573,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 测试扫描枪连接。
-        /// 生产已连时直接返回成功（避免Windows COM口独占导致的假阴性）。
-        /// 未连接时创建临时HoneywellH1900Scanner实例测试串口通信，用完即释放。
+        /// 输入配置与已保存生产配置相同且生产连接正常时，仅说明端口被生产实例占用。
+        /// 其他场景创建临时 HoneywellH1900Scanner 实例测试当前输入串口，用完即释放。
         /// </summary>
         [RelayCommand]
         private async Task TestScannerConnectionAsync()
@@ -463,14 +582,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (IsTestingScanner) return;
 
             CancelTestClear(ref _scannerTestClearCts);
-
-            // ⭐ 生产已连接则直接返回成功
-            if (_deviceManager.IsScannerConnected)
-            {
-                SetScannerTestResult(true, "扫描枪已连接（生产连接正常）");
-                ScheduleTestResultClear(ref _scannerTestClearCts, ClearScannerTestResult);
-                return;
-            }
 
             IsTestingScanner = true;
             ScannerTestButtonText = "⏳ 测试中...";
@@ -489,6 +600,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
+                var savedSettings = _settingsService.LoadSettings();
+                if (IsSameScannerConnection(savedSettings.ScannerSerialCommunication, ScannerConfig)
+                    && _deviceManager.IsScannerConnected)
+                {
+                    SetScannerTestResult(true,
+                        $"当前生产连接正常 — {ScannerConfig.SerialNumber} @ {ScannerConfig.BaudRate}bps（该端口正由程序使用）");
+                    _logger.Warning("[临时测试][Scanner] 跳过临时打开，生产端口占用 Port={Port} BaudRate={BaudRate}",
+                        ScannerConfig.SerialNumber, ScannerConfig.BaudRate);
+                    return;
+                }
+
                 // 创建临时扫描枪驱动实例
                 var scannerLogger = _loggerFactory.CreateLogger<HoneywellH1900Scanner>();
                 tempScanner = new HoneywellH1900Scanner(scannerLogger);
@@ -501,14 +623,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 if (success)
                 {
                     SetScannerTestResult(true,
-                        $"连接成功 — {ScannerConfig.SerialNumber} 已打开 @ {ScannerConfig.BaudRate}bps");
-                    _logger.Information("扫描枪测试连接成功: {Port}", ScannerConfig.SerialNumber);
+                        $"串口打开成功 — {ScannerConfig.SerialNumber} @ {ScannerConfig.BaudRate}bps");
+                    _logger.Warning("[临时测试][Scanner] 成功 Port={Port} BaudRate={BaudRate}",
+                        ScannerConfig.SerialNumber, ScannerConfig.BaudRate);
                 }
                 else
                 {
                     SetScannerTestResult(false,
                         $"连接失败: 无法打开 {ScannerConfig.SerialNumber}，请检查端口是否存在或被占用");
-                    _logger.Warning("扫描枪测试连接失败: {Port}", ScannerConfig.SerialNumber);
+                    _logger.Warning("[临时测试][Scanner] 失败 Port={Port} BaudRate={BaudRate}",
+                        ScannerConfig.SerialNumber, ScannerConfig.BaudRate);
                 }
             }
             catch (UnauthorizedAccessException)
@@ -563,7 +687,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>
         /// 测试GDM-9060万用表连接。
-        /// 生产已连时直接返回成功。未连接时创建临时GwInstekGDM9060Driver实例测试TCP+SCPI通信。
+        /// 输入目标与已保存生产目标相同且生产已连接时，不创建第二条 TCP/SCPI 会话。
+        /// 其余情况通过 IDeviceConnectionManager.TestDmmConfigurationAsync 使用独立临时测试器，
+        /// 不复用生产 GwInstekGDM9060Driver 实例。
         /// </summary>
         [RelayCommand]
         private async Task TestDmmConnectionAsync()
@@ -572,21 +698,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             CancelTestClear(ref _dmmTestClearCts);
 
-            // ⭐ 生产已连接则直接返回成功
-            if (_deviceManager.IsDmmConnected)
-            {
-                SetDmmTestResult(true, "万用表已连接（生产连接正常）");
-                ScheduleTestResultClear(ref _dmmTestClearCts, ClearDmmTestResult);
-                return;
-            }
-
             IsTestingDmm = true;
             DmmTestButtonText = "⏳ 测试中...";
             DmmTestStatus = "Gray";
             DmmTestMessage = $"正在连接 {Gdm9060Config.IpAddress}:{Gdm9060Config.Port} ...";
             _logger.Information("万用表测试连接开始: {Host}:{Port}", Gdm9060Config.IpAddress, Gdm9060Config.Port);
 
-            GwInstekGDM9060Driver? tempDmm = null;
             try
             {
                 // 参数校验
@@ -601,66 +718,57 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // 创建临时万用表驱动实例
-                var dmmLogger = _loggerFactory.CreateLogger<GwInstekGDM9060Driver>();
-                tempDmm = new GwInstekGDM9060Driver(dmmLogger);
-                tempDmm.Host = Gdm9060Config.IpAddress;
-                tempDmm.Port = Gdm9060Config.Port;
-                tempDmm.TimeoutMs = Gdm9060Config.ReceiveTimeoutMs;
-
-                using var cts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
-                bool success = await tempDmm.ConnectAsync(cts.Token).ConfigureAwait(true);
-
-                if (success)
+                var savedSettings = _settingsService.LoadSettings();
+                if (IsSameDmmConnectionTarget(savedSettings.GDM9060Communication, Gdm9060Config)
+                    && _deviceManager.IsDmmConnected)
                 {
-                    // 尝试获取设备标识信息
-                    string deviceInfo = "GDM-9060";
-                    try
-                    {
-                        var idn = await tempDmm.GetDeviceIdentifierAsync(CancellationToken.None).ConfigureAwait(false);
-                        if (!string.IsNullOrWhiteSpace(idn))
-                        {
-                            deviceInfo = idn;
-                        }
-                    }
-                    catch
-                    {
-                        // 获取标识失败不影响测试结果
-                    }
+                    SetDmmTestResult(true,
+                        $"当前生产连接正常 — GDM-9060 @ {Gdm9060Config.IpAddress}:{Gdm9060Config.Port}（当前配置已生效）");
 
-                    SetDmmTestResult(true, $"连接成功 — {deviceInfo}");
-                    _logger.Information("万用表测试连接成功: {Host}:{Port}, IDN={Idn}",
-                        Gdm9060Config.IpAddress, Gdm9060Config.Port, deviceInfo);
+                    _logger.Warning(
+                        "[临时测试][DMM] 跳过第二连接，当前输入目标与生产配置相同且生产连接正常 Host={Host} Port={Port}",
+                        Gdm9060Config.IpAddress,
+                        Gdm9060Config.Port);
+
+                    return;
+                }
+
+                // 通过 DeviceConnectionManager 使用独立临时测试器，复用 _dmmLock
+                using var cts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
+
+                var idn = await _deviceManager
+                    .TestDmmConfigurationAsync(
+                        CloneDmmConfig(Gdm9060Config),
+                        cts.Token)
+                    .ConfigureAwait(true);
+
+                if (!string.IsNullOrWhiteSpace(idn))
+                {
+                    SetDmmTestResult(true,
+                        $"输入配置测试成功 — {idn}\n当前生产设备仍按已保存配置运行；保存后才会应用此配置。");
+                    _logger.Warning("[临时测试][DMM] 成功 Host={Host} Port={Port} IDN={Idn}",
+                        Gdm9060Config.IpAddress, Gdm9060Config.Port, idn);
                 }
                 else
                 {
                     SetDmmTestResult(false,
                         $"连接失败: {Gdm9060Config.IpAddress}:{Gdm9060Config.Port} 不可达或未响应SCPI");
-                    _logger.Warning("万用表测试连接失败: {Host}:{Port}",
+                    _logger.Warning("[临时测试][DMM] 失败 Host={Host} Port={Port}",
                         Gdm9060Config.IpAddress, Gdm9060Config.Port);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                SetDmmTestResult(false, "连接超时：设备无响应");
+                _logger.Warning("DMM测试连接超时");
             }
             catch (Exception ex)
             {
                 SetDmmTestResult(false, $"连接失败: {ex.Message}");
-                _logger.Error(ex, "万用表测试连接异常");
+                _logger.Error(ex, "DMM测试连接异常");
             }
             finally
             {
-                // 确保断开并释放
-                if (tempDmm != null)
-                {
-                    try
-                    {
-                        await tempDmm.DisconnectAsync().ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.Debug(ex, "断开测试万用表连接时异常（可忽略）");
-                    }
-                    tempDmm.Dispose();
-                }
-
                 IsTestingDmm = false;
                 DmmTestButtonText = "🔍 测试连接";
                 ScheduleTestResultClear(ref _dmmTestClearCts, ClearDmmTestResult);
@@ -795,11 +903,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var deviceSettings = _settingsService.LoadSettings();
 
                 if (deviceSettings.FP0HCommunication != null)
-                    Fp0hConfig = deviceSettings.FP0HCommunication;
+                    Fp0hConfig = ClonePlcConfig(deviceSettings.FP0HCommunication);
                 if (deviceSettings.ScannerSerialCommunication != null)
-                    ScannerConfig = deviceSettings.ScannerSerialCommunication;
+                    ScannerConfig = CloneScannerConfig(deviceSettings.ScannerSerialCommunication);
                 if (deviceSettings.GDM9060Communication != null)
-                    Gdm9060Config = deviceSettings.GDM9060Communication;
+                    Gdm9060Config = CloneDmmConfig(deviceSettings.GDM9060Communication);
 
                 IsPlcCommunicationTestEnabled = deviceSettings.IsPlcCommunicationTestEnabled;
                 ContinueTestingAfterNg = deviceSettings.ContinueTestingAfterNg;

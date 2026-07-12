@@ -45,10 +45,4 @@ public interface IModbusTcpClient
 
     /// <summary>发送自定义 Modbus TCP 请求帧并等待匹配事务 ID 的响应</summary>
     Task<ModbusResponse?> SendCustomRequestAsync(byte[] requestFrame, CancellationToken ct = default, int timeoutMs = 1000);
-
-    /// <summary>
-    /// 独立测试连接（不修改内部状态，用于设定页"测试连接"按钮）。
-    /// 创建临时 TcpClient，发送 Modbus 读保持寄存器指令，验证收到有效响应后释放。
-    /// </summary>
-    Task<bool> TestConnectionAsync(string host, int port, int timeoutMs, CancellationToken ct = default);
 }

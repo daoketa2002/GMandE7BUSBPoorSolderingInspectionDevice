@@ -5,12 +5,22 @@
 //       重连和状态监控，各 ViewModel 通过订阅事件获取状态
 // ============================================================
 
+using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
+    /// <summary>设备连接的最小展示状态。</summary>
+    public enum DeviceConnectionStatus
+    {
+        Disconnected,
+        Connecting,
+        Connected
+    }
+
     /// <summary>
     /// 全局设备连接管理器接口
     /// 管理 PLC、万用表、扫描枪的自动连接和状态监控
@@ -43,6 +53,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 
         /// <summary>扫描枪连接状态文本</summary>
         string ScannerStatusText { get; }
+
+        /// <summary>供运行页展示的三态连接状态。</summary>
+        DeviceConnectionStatus PlcStatus { get; }
+        DeviceConnectionStatus DmmStatus { get; }
+        DeviceConnectionStatus ScannerStatus { get; }
 
         #endregion
 
@@ -78,6 +93,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// </summary>
         /// <param name="deviceType">设备类型："PLC" / "DMM" / "Scanner"</param>
         Task DisconnectDeviceAsync(string deviceType);
+
+        /// <summary>保存配置后，将新参数注入生产设备，并仅重连连接参数发生变化的设备。</summary>
+        Task<DeviceReconnectSummary> ApplySettingsAndReconnectAsync(bool reconnectPlc, bool reconnectDmm, bool reconnectScanner);
+
+        #endregion
+
+        #region 临时测试
+
+        /// <summary>
+        /// 测试输入 PLC 配置是否可达（使用独立临时测试器）。
+        /// 等待当前 PLC 生产连接/重连结束后，获取 _plcLock 执行测试。
+        /// 不修改生产连接状态，不发布生产连接事件。
+        /// </summary>
+        Task<bool> TestPlcConfigurationAsync(
+            FP0HCommunicationConfig config,
+            CancellationToken ct = default);
+
+        /// <summary>
+        /// 测试输入 DMM 配置是否可达（使用独立临时测试器）。
+        /// 等待当前 DMM 生产连接/重连结束后，获取 _dmmLock 执行测试。
+        /// 不修改生产连接状态，不发布生产连接事件。
+        /// </summary>
+        Task<string?> TestDmmConfigurationAsync(
+            GDM9060CommunicationConfig config,
+            CancellationToken ct = default);
 
         #endregion
 
@@ -115,11 +155,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// <summary>状态文本描述</summary>
         public string StatusText { get; }
 
-        public DeviceConnectionStateChangedEventArgs(string deviceType, bool isConnected, string statusText)
+        /// <summary>连接状态，供 UI 区分连接中与未连接。</summary>
+        public DeviceConnectionStatus Status { get; }
+
+        public DeviceConnectionStateChangedEventArgs(string deviceType, bool isConnected, string statusText,
+            DeviceConnectionStatus status = DeviceConnectionStatus.Disconnected)
         {
             DeviceType = deviceType;
             IsConnected = isConnected;
             StatusText = statusText;
+            Status = status;
         }
     }
 }

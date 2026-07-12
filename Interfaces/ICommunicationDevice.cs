@@ -10,6 +10,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
 {
@@ -24,6 +25,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
         /// 设备是否已连接
         /// </summary>
         bool IsConnected { get; }
+
+        /// <summary>执行一次主动健康检查，不以本地连接标志代替实际通信。</summary>
+        Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default);
 
         /// <summary>
         /// 异步连接设备

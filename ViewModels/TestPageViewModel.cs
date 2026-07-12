@@ -342,6 +342,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [ObservableProperty]
     private string _dmmStatusText = "断开";
 
+    /// <summary>PLC 三态连接状态（供枚举绑定）</summary>
+    [ObservableProperty]
+    private DeviceConnectionStatus _plcConnectionStatus = DeviceConnectionStatus.Disconnected;
+
+    /// <summary>万用表三态连接状态（供枚举绑定）</summary>
+    [ObservableProperty]
+    private DeviceConnectionStatus _dmmConnectionStatus = DeviceConnectionStatus.Disconnected;
+
+    /// <summary>扫描枪三态连接状态（供枚举绑定）</summary>
+    [ObservableProperty]
+    private DeviceConnectionStatus _scannerConnectionStatus = DeviceConnectionStatus.Disconnected;
+
     /// <summary>PLC 启动请求状态（DT120 值），供 UI 显示"等待 PLC 启动"</summary>
     [ObservableProperty]
     private bool _isPlcStartRequested = false;
@@ -366,16 +378,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task ReconnectPlcAsync()
     {
-        PlcStatusText = "连接中...";
         await _deviceManager.ReconnectDeviceAsync("PLC");
     }
 
     [RelayCommand]
     private async Task ReconnectScannerAsync()
     {
-        ScannerStatusText = "连接中...";
-        IsScannerConnected = false;
-
         AddLog("🔄 正在尝试重新连接扫描仪...");
 
         try
@@ -402,7 +410,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task ReconnectDmmAsync()
     {
-        DmmStatusText = "连接中...";
         await _deviceManager.ReconnectDeviceAsync("DMM");
     }
 
@@ -1243,7 +1250,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 snapshot = await _plcDevice.ReadControlSignalsAsync(ct).ConfigureAwait(false);
             if (snapshot == null || !snapshot.IsSuccess || snapshot.Value == null)
             {
-                _logger.LogWarning("[复位流程][验证] 读取 PLC 控制信号快照失败：{Message}", snapshot.Message);
+                _logger.LogWarning("[复位流程][验证] 读取 PLC 控制信号快照失败：{Message}", snapshot?.Message ?? "返回结果为 null");
                 return ResetCompletionValidationResult.PlcReadFailed;
             }
 
@@ -1441,8 +1448,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             StopPlcPolling();
             await ClearAllRunSignalsAsync(CancellationToken.None);
-            await _multimeterDevice.ReleaseToLocalAsync();
-            _logger.LogInformation("[万用表收尾] 终止按钮触发，万用表已退出远程控制");
+            await ReleaseDmmToLocalBestEffortAsync("终止按钮");
 
             ResetToReadyState();
             await _navigationService.NavigateToAsync<MainMenuView>();
@@ -1585,7 +1591,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 pollResult = await _plcDevice.ReadControlSignalsAsync(pollingCt).ConfigureAwait(false);
             }
-            if (pollResult == null || !pollResult.IsSuccess)
+            if (pollResult == null
+                || !pollResult.IsSuccess
+                || pollResult.Value == null)
             {
                 if (pollResult?.IsCancelled == true)
                 {
@@ -1593,7 +1601,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 }
                 else
                 {
-                    _logger.LogWarning("[PLC轮询][诊断] 读取控制信号失败：{Message}", pollResult?.Message ?? "null");
+                    _logger.LogWarning("[PLC轮询][诊断] 读取控制信号失败：{Message}", pollResult?.Message ?? "返回结果或 Value 为 null");
                 }
                 return;
             }
@@ -2519,7 +2527,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 if (emergencyResult == null || !emergencyResult.IsSuccess)
                 {
                     _logger.LogWarning("[急停解除][失败] 清 DT123 失败，第 {Attempt}/{MaxRetries} 次：{Message}",
-                        attempt, maxRetries, emergencyResult.Message);
+                        attempt, maxRetries, emergencyResult?.Message ?? "返回结果为 null");
                 }
 
                 var alarmResult = await _plcDevice.ClearAlarmReleasedAsync(ct).ConfigureAwait(false);
@@ -2886,34 +2894,106 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _logger.LogInformation("[运行页收尾] 已退订硬件和检测引擎事件，避免旧页面重复响应完成事件");
     }
 
-    private void OnPlcConnectionStateChanged(object? sender, DeviceConnectionStateChangedEventArgs e)
+    private void OnPlcConnectionStateChanged(
+        object? sender,
+        DeviceConnectionStateChangedEventArgs? e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        if (e is null)
+        {
+            _logger.LogError(
+                "[设备状态][PLC][防御] 收到空连接状态事件参数，已忽略");
+            return;
+        }
+
+        void ApplyState()
         {
             IsPlcConnected = e.IsConnected;
             PlcStatusText = e.StatusText;
+            PlcConnectionStatus = e.Status;
             UpdateUIState();
-        });
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher is null)
+        {
+            _logger.LogWarning(
+                "[设备状态][PLC] Dispatcher 不可用，跳过 UI 状态更新");
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+            ApplyState();
+        else
+            dispatcher.BeginInvoke((Action)ApplyState);
     }
 
-    private void OnDmmConnectionStateChanged(object? sender, DeviceConnectionStateChangedEventArgs e)
+    private void OnDmmConnectionStateChanged(
+        object? sender,
+        DeviceConnectionStateChangedEventArgs? e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        if (e is null)
+        {
+            _logger.LogError(
+                "[设备状态][DMM][防御] 收到空连接状态事件参数，已忽略");
+            return;
+        }
+
+        void ApplyState()
         {
             IsDmmConnected = e.IsConnected;
             DmmStatusText = e.StatusText;
+            DmmConnectionStatus = e.Status;
             UpdateUIState();
-        });
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher is null)
+        {
+            _logger.LogWarning(
+                "[设备状态][DMM] Dispatcher 不可用，跳过 UI 状态更新");
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+            ApplyState();
+        else
+            dispatcher.BeginInvoke((Action)ApplyState);
     }
 
-    private void OnScannerConnectionStateChanged(object? sender, DeviceConnectionStateChangedEventArgs e)
+    private void OnScannerConnectionStateChanged(
+        object? sender,
+        DeviceConnectionStateChangedEventArgs? e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        if (e is null)
+        {
+            _logger.LogError(
+                "[设备状态][Scanner][防御] 收到空连接状态事件参数，已忽略");
+            return;
+        }
+
+        void ApplyState()
         {
             IsScannerConnected = e.IsConnected;
             ScannerStatusText = e.StatusText;
+            ScannerConnectionStatus = e.Status;
             UpdateUIState();
-        });
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher is null)
+        {
+            _logger.LogWarning(
+                "[设备状态][Scanner] Dispatcher 不可用，跳过 UI 状态更新");
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+            ApplyState();
+        else
+            dispatcher.BeginInvoke((Action)ApplyState);
     }
 
     private void OnScannerBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
@@ -2986,10 +3066,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     private static string FormatMeasurementResult(MeasurementResult measurement, TestPointConfig testPoint)
     {
-        // DisplayTextOverride 优先：异常值直接显示 "NG"，避免超长数字进入格式化
-        if (!string.IsNullOrWhiteSpace(measurement.DisplayTextOverride))
-            return measurement.DisplayTextOverride;
-
         if (!measurement.IsValid)
             return "测量失败";
 
@@ -2997,11 +3073,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (testPoint.CheckMode == CheckModeConstants.Continuity)
         {
+            // 导通模式下超量程已经按 OPEN 判定，显示也必须与业务判定一致。
             if (!string.IsNullOrWhiteSpace(testPoint.ActualContinuityState))
                 return testPoint.ActualContinuityState;
 
             return InspectionMeasurementEvaluator.ResolveContinuityState(value, testPoint.ContinuityThresholdOhm);
         }
+
+        // 电阻模式保留超量程、NaN 等异常显示文本，避免超长数字进入格式化。
+        if (!string.IsNullOrWhiteSpace(measurement.DisplayTextOverride))
+            return measurement.DisplayTextOverride;
 
         return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";
     }
@@ -3097,9 +3178,29 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // 正常离开运行页（非终了场景）：清运行信号
         await ClearAllRunSignalsAsync(CancellationToken.None).ConfigureAwait(false);
 
-        // 离开运行页：万用表退出远程控制
-        await _multimeterDevice.ReleaseToLocalAsync().ConfigureAwait(false);
-        _logger.LogInformation("[万用表收尾] 离开运行界面，万用表已退出远程控制");
+        // 离开页面时不允许 DMM 收尾阻塞 PLC 清理或导航。
+        await ReleaseDmmToLocalBestEffortAsync("离开运行界面").ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 尽力把万用表切回本地控制；设备离线或命令锁繁忙时只记录告警，不阻塞控制流程。
+    /// </summary>
+    private async Task ReleaseDmmToLocalBestEffortAsync(string source)
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        try
+        {
+            await _multimeterDevice.ReleaseToLocalAsync(timeoutCts.Token).ConfigureAwait(false);
+            _logger.LogInformation("[万用表收尾] {Source}：已请求退出远程控制", source);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning("[万用表收尾] {Source}：ReleaseToLocal 超时，已忽略并继续控制流程", source);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[万用表收尾] {Source}：ReleaseToLocal 失败，已忽略并继续控制流程", source);
+        }
     }
 
     public Task<bool> CanNavigateFromAsync()
@@ -3178,10 +3279,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         IsPlcConnected = _deviceManager.IsPlcConnected;
         PlcStatusText = _deviceManager.PlcStatusText;
+        PlcConnectionStatus = _deviceManager.PlcStatus;
         IsDmmConnected = _deviceManager.IsDmmConnected;
         DmmStatusText = _deviceManager.DmmStatusText;
+        DmmConnectionStatus = _deviceManager.DmmStatus;
         IsScannerConnected = _deviceManager.IsScannerConnected;
         ScannerStatusText = _deviceManager.ScannerStatusText;
+        ScannerConnectionStatus = _deviceManager.ScannerStatus;
         UpdateUIState();
     }
 

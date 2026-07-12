@@ -163,6 +163,27 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public bool IsConnected => _isConnected && _serialPort?.IsOpen == true;
 
+        /// <summary>串口设备不发送未知心跳，仅检查当前串口是否仍可用。</summary>
+        public Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
+        {
+            if (!IsConnected)
+                return Task.FromResult(DeviceHealthCheckResult.Unhealthy("扫描枪串口未打开"));
+
+            try
+            {
+                _ = _serialPort!.BytesToRead;
+                return Task.FromResult(DeviceHealthCheckResult.Healthy("扫描枪串口已打开"));
+            }
+            catch (IOException ex)
+            {
+                return Task.FromResult(DeviceHealthCheckResult.Unhealthy("扫描枪串口读取失败", ex));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Task.FromResult(DeviceHealthCheckResult.Unhealthy("扫描枪串口已失效", ex));
+            }
+        }
+
         #endregion
 
         #region 构造函数

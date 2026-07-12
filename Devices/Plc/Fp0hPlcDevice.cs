@@ -4,6 +4,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Plc;
@@ -41,6 +42,18 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     private const int ReadInputsRegisterCount = 10; // 一次读 DT120~129 共10个寄存器
 
     public bool IsConnected => _modbusClient.IsConnected;
+
+    /// <summary>通过无副作用的控制信号读取确认 PLC 实际仍可通信。</summary>
+    public async Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
+    {
+        if (!IsConnected)
+            return DeviceHealthCheckResult.Unhealthy("PLC 当前未连接");
+
+        var result = await ReadControlSignalsAsync(ct).ConfigureAwait(false);
+        return result.IsSuccess
+            ? DeviceHealthCheckResult.Healthy("PLC 控制信号读取成功")
+            : DeviceHealthCheckResult.Unhealthy(result.Message ?? "PLC 健康读取失败");
+    }
 
     public event EventHandler<bool>? ConnectionStateChanged;
     public event EventHandler<PlcNotification>? NotificationReceived;

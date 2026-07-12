@@ -268,6 +268,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             // 6. 设备连接管理器（统一管理 PLC、万用表、扫描枪的连接/重连/状态发布）
             services.AddSingleton<IDeviceConnectionManager, DeviceConnectionService>();
 
+            // 7. 独立无状态临时测试器
+            services.AddSingleton<IPlcConnectionTester, PlcConnectionTester>();
+            services.AddSingleton<IDmmConnectionTester, DmmConnectionTester>();
+
             // ⭐⭐⭐ ====== 硬件驱动服务注册结束 ====== ⭐⭐⭐
 
             // === ViewModels ===

@@ -267,13 +267,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     ConnectionStateChanged?.Invoke(true);
                     DetailedConnectionStateChanged?.Invoke(ConnectionState.Connected);
 
-                    // 验证通过后才启动心跳检测
-                    if (HealthCheckMode != HealthCheckMode.Disabled)
-                    {
-                        _heartbeatCts = new CancellationTokenSource();
-                        _healthCheckTask = Task.Run(() => StartHealthCheckLoop(_heartbeatCts.Token), _heartbeatCts.Token);
-                    }
-
                     _logger.LogInformation($"Modbus TCP客户端已连接到 {Host}:{Port}");
                     Notify(NotificationType.Success, $"已连接到 {Host}:{Port}", "Start");
                 }
@@ -354,81 +347,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <returns>表示异步连接操作的任务</returns>
         private async Task ConnectToServerAsync()
         {
-            int retryDelayMs = ReconnectDelayMs;
             int connectTimeoutMs = ConnectTimeoutMsDefault ?? 3000;
-            int attempts = 0;
-            int maxRetries = MaxReconnectAttempts;
-
-            // 🔥 关键：确保开始新连接前清理旧资源
             CleanupConnection();
 
-            while (_isRunning && attempts < maxRetries)
+            TcpClient? tempTcpClient = null;
+            try
             {
-                TcpClient? tempTcpClient = null;
-                try
-                {
-                    _logger.LogInformation($"尝试连接到 {Host}:{Port} (尝试 {attempts + 1}/{maxRetries})");
-
-                    tempTcpClient = new TcpClient();
-                    tempTcpClient.ReceiveTimeout = ReceiveTimeoutMs;
-                    tempTcpClient.SendTimeout = SendTimeoutMs;
-
-                    // 🔥 关键：添加超时控制
-                    var connectTask = tempTcpClient.ConnectAsync(Host, Port);
-                    var timeoutTask = Task.Delay(connectTimeoutMs);
-
-                    var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
-
-                    if (completedTask == connectTask)
-                    {
-                        await connectTask.ConfigureAwait(false);
-                        _tcpClient = tempTcpClient;
-                        _networkStream = _tcpClient.GetStream();
-
-                        _logger.LogInformation("TCP连接建立成功（实际耗时 < {0}ms）", connectTimeoutMs);
-                        return;
-                    }
-
-                    // 连接超时
-                    tempTcpClient?.Close();
-                    tempTcpClient?.Dispose();
-                    tempTcpClient = null;
-
-                    throw new TimeoutException($"连接超时（{connectTimeoutMs}ms）");
-                }
-                catch (Exception ex)
-                {
-                    tempTcpClient?.Close();
-                    tempTcpClient?.Dispose();
-
-                    attempts++;
-
-                    var errorMsg = ex is TimeoutException ? "连接超时" : "连接失败";
-                    _logger.LogWarning(ex, $"{errorMsg} (尝试 {attempts}/{maxRetries})");
-
-                    if (!_isRunning)
-                    {
-                        _logger.LogInformation("服务已停止，取消重连");
-                        CleanupConnection();
-                        throw; // 服务停止，抛出异常
-                    }
-
-                    if (attempts < maxRetries)
-                    {
-                        _logger.LogInformation($"等待 {retryDelayMs}ms 后重试...");
-                        await Task.Delay(retryDelayMs).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        // 🔥 关键：所有重试都失败时，清理资源
-                        CleanupConnection();
-                        throw new InvalidOperationException($"连接失败，已达到最大重试次数 ({maxRetries})");
-                    }
-                }
+                _logger.LogInformation("尝试连接到 {Host}:{Port}", Host, Port);
+                tempTcpClient = new TcpClient { ReceiveTimeout = ReceiveTimeoutMs, SendTimeout = SendTimeoutMs };
+                using var timeoutCts = new CancellationTokenSource(connectTimeoutMs);
+                await tempTcpClient.ConnectAsync(Host, Port, timeoutCts.Token).ConfigureAwait(false);
+                _tcpClient = tempTcpClient;
+                _networkStream = _tcpClient.GetStream();
+                _logger.LogInformation("TCP连接建立成功");
             }
-
-            CleanupConnection();
-            throw new InvalidOperationException($"连接失败，已达到最大重试次数 ({maxRetries})");
+            catch
+            {
+                tempTcpClient?.Dispose();
+                CleanupConnection();
+                throw;
+            }
         }
 
         /// <summary>
@@ -468,12 +406,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         {
                             // 连接已关闭
                             _logger.LogInformation("TCP连接已关闭，停止读取循环");
+                            MarkDisconnected();
                             break;
                         }
                     }
                     catch (ObjectDisposedException)
                     {
                         _logger.LogDebug("网络流已被释放");
+                        if (!ct.IsCancellationRequested && _isRunning) MarkDisconnected();
                         break;
                     }
                 }
@@ -487,8 +427,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 _logger.LogError(ex, "读取Modbus数据失败");
                 if (!ct.IsCancellationRequested && _isRunning)
                 {
-                    Notify(NotificationType.Error, "数据读取异常，尝试重连", "ReadData");
-                    await HandleConnectionLossAsync().ConfigureAwait(false);
+                    Notify(NotificationType.Warning, "数据读取异常，已标记断线", "ReadData");
+                    MarkDisconnected();
                 }
             }
 
@@ -744,18 +684,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         {
             Interlocked.Exchange(ref _lastDataReceivedTicks, DateTime.UtcNow.Ticks);
 
-            int pendingBefore = _pendingRequests.Count;
-
             // 首先尝试通过事务ID找到对应的等待任务
             if (_pendingRequests.TryRemove(response.TransactionId, out var pendingReq))
             {
                 // 设置结果
                 pendingReq.Completion.TrySetResult(response);
-
-                // DIAG-TEMP: 正常匹配响应，仅 Debug。
-                _logger.LogDebug(
-                    "[Modbus诊断][响应到达] TID={TID}, FC={FC}, Matched=true, PendingCountBefore={PendingBefore}, PendingCountAfter={PendingAfter}",
-                    response.TransactionId, response.FunctionCode, pendingBefore, _pendingRequests.Count);
                 return;
             }
 
@@ -830,105 +763,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             Notify(NotificationType.Warning, "所有操作被强制中断", "InterruptAllOperations");
         }
 
-        /// <summary>
-        /// 处理连接丢失，尝试重连
-        /// </summary>
-        /// <returns>表示异步重连操作的任务</returns>
-        private async Task HandleConnectionLossAsync()
+        /// <summary>真实通信失败后只发布断线；自动重连统一由 DeviceConnectionService 负责。</summary>
+        private void MarkDisconnected()
         {
-            if (!_isRunning) return; // 如果服务已停止，不再重连
-
-            // 防止重复重连 - 使用int 0/1模拟bool
-            if (Interlocked.CompareExchange(ref _isReconnecting, 1, 0) == 1)
+            var wasConnected = _isConnected;
+            InterruptAllOperations();
+            CleanupConnection();
+            if (wasConnected)
             {
-                _logger.LogDebug("重连已在进行中，跳过");
-                return;
-            }
-
-            await _syncLock.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                _logger.LogInformation("开始处理连接丢失");
-
-                // 关键修复：明确设置内部连接状态为 false，并触发事件
-                if (_isConnected)
-                {
-                    _isConnected = false;
-                    ConnectionStateChanged?.Invoke(false);
-                    DetailedConnectionStateChanged?.Invoke(ConnectionState.Disconnected);
-                }
-
-                // 中断所有待处理的响应
-                InterruptAllOperations();
-
-                // 清理连接资源
-                CleanupConnection();
-
-                int retryDelayMs = ReconnectDelayMs;
-                int attempts = 0;
-                int maxRetries = MaxReconnectAttempts;
-
-                // 重连循环
-                while (_isRunning && attempts < maxRetries)
-                {
-                    try
-                    {
-                        _logger.LogInformation($"尝试重连 ({attempts + 1}/{maxRetries})...");
-                        DetailedConnectionStateChanged?.Invoke(ConnectionState.Reconnecting);
-
-                        await ConnectToServerAsync().ConfigureAwait(false);
-
-                        // TCP 重连成功后先恢复内部临时通信状态，供 Modbus 验证读指令使用。
-                        // 验证通过前不发布已连接事件，避免运行界面出现假性绿色已连接。
-                        _isConnected = true;
-
-                        // 重连成功，启动数据接收循环
-                        _readLoopCts?.Cancel();
-                        _readLoopCts?.Dispose();
-                        _readLoopCts = new CancellationTokenSource();
-                        _ = Task.Run(() => ReadDataAsync(_readLoopCts.Token), _readLoopCts.Token);
-
-                        await VerifyDeviceRespondsAsync().ConfigureAwait(false);
-
-                        // 只有 PLC 通过 Modbus 应答验证后，才发布重连成功。
-                        ConnectionStateChanged?.Invoke(true);
-                        DetailedConnectionStateChanged?.Invoke(ConnectionState.Connected);
-
-                        _logger.LogInformation("重连成功");
-                        Notify(NotificationType.Success, "重连成功", "Reconnect");
-                        return; // 成功连接后退出重连循环
-                    }
-                    catch (Exception ex)
-                    {
-                        attempts++;
-                        _isConnected = false;
-                        CleanupConnection();
-                        _logger.LogWarning(ex, "重连失败 ({Attempts}/{MaxRetries})，等待 {RetryDelayMs}ms", attempts, maxRetries, retryDelayMs);
-
-                        if (!_isRunning)
-                        {
-                            _logger.LogError("服务已停止，连接失败");
-                            Notify(NotificationType.Critical, "服务已停止，连接失败", "Reconnect");
-                            return;
-                        }
-
-                        if (attempts < maxRetries)
-                        {
-                            await Task.Delay(retryDelayMs).ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            _logger.LogError("重连失败，已达到最大重试次数");
-                            Notify(NotificationType.Critical, "重连失败，已达到最大重试次数", "Reconnect");
-                            CleanupConnection();
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _isReconnecting, 0); // 重置为 false (0)
-                _syncLock.Release();
+                ConnectionStateChanged?.Invoke(false);
+                DetailedConnectionStateChanged?.Invoke(ConnectionState.Disconnected);
             }
         }
 
@@ -1094,17 +938,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 _pendingRequests[transactionId.Value] = pendingRequest;
                 pendingRequest.PendingAtCreate = _pendingRequests.Count;
 
-                _logger.LogDebug(
-                    "[Modbus诊断][请求创建] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, GateWaitMs={GateWaitMs}, PendingCount={PendingCount}",
-                    transactionId.Value, operation, functionCode, unitId, startAddress, quantity, gateSw.ElapsedMilliseconds, _pendingRequests.Count);
-
                 ModbusResponse? response = null;
 
                 byte[] request = CreateModbusTcpRequest(functionCode, unitId, startAddress, quantity, transactionId.Value);
-
-                _logger.LogDebug(
-                    "[Modbus诊断][发送开始] TID={TID}, FC={FC}, StartAddress={StartAddress}, PendingCount={PendingCount}",
-                    transactionId.Value, functionCode, startAddress, _pendingRequests.Count);
 
                 // 发送阶段（由 _sendLock 保护，与 _requestLock 独立）
                 var sendSw = Stopwatch.StartNew();
@@ -1117,9 +953,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         currentReq.SendCompleted = true;
                         currentReq.SendElapsedMs = sendSw.ElapsedMilliseconds;
                     }
-                    _logger.LogDebug(
-                        "[Modbus诊断][发送完成] TID={TID}, FC={FC}, StartAddress={StartAddress}, SendElapsedMs={SendElapsedMs}, PendingCount={PendingCount}",
-                        transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds, _pendingRequests.Count);
                 }
                 catch (Exception ex)
                 {
@@ -1155,9 +988,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                             }
                             else
                             {
-                                _logger.LogDebug(
-                                    "[Modbus诊断][请求完成] TID={TID}, Operation={Operation}, FC={FC}, StartAddress={StartAddress}, TotalElapsedMs={TotalElapsedMs}, PendingCount={PendingCount}",
-                                    transactionId.Value, operation, functionCode, startAddress, totalSw.ElapsedMilliseconds, _pendingRequests.Count);
                             }
                         }
                     }
@@ -1245,10 +1075,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 _pendingRequests[transactionId.Value] = pendingRequest;
                 pendingRequest.PendingAtCreate = _pendingRequests.Count;
 
-                _logger.LogDebug(
-                    "[Modbus诊断][请求创建] TID={TID}, Operation={Operation}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, Quantity={Quantity}, GateWaitMs={GateWaitMs}, PendingCount={PendingCount}",
-                    transactionId.Value, operation, functionCode, unitId, startAddress, data.Length, gateSw.ElapsedMilliseconds, _pendingRequests.Count);
-
                 ModbusResponse? response = null;
 
                 // 根据功能码创建相应的写入请求
@@ -1276,10 +1102,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                     throw new ArgumentException($"不支持的功能码: {functionCode}", nameof(functionCode));
                 }
 
-                _logger.LogDebug(
-                    "[Modbus诊断][发送开始] TID={TID}, FC={FC}, StartAddress={StartAddress}, PendingCount={PendingCount}",
-                    transactionId.Value, functionCode, startAddress, _pendingRequests.Count);
-
                 // 发送阶段
                 var sendSw = Stopwatch.StartNew();
                 try
@@ -1291,9 +1113,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         currentReq.SendCompleted = true;
                         currentReq.SendElapsedMs = sendSw.ElapsedMilliseconds;
                     }
-                    _logger.LogDebug(
-                        "[Modbus诊断][发送完成] TID={TID}, FC={FC}, StartAddress={StartAddress}, SendElapsedMs={SendElapsedMs}, PendingCount={PendingCount}",
-                        transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds, _pendingRequests.Count);
                 }
                 catch (Exception ex)
                 {
@@ -1332,9 +1151,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                                 }
                                 else
                                 {
-                                    _logger.LogDebug(
-                                        "[Modbus诊断][请求完成] TID={TID}, Operation={Operation}, FC={FC}, StartAddress={StartAddress}, TotalElapsedMs={TotalElapsedMs}, PendingCount={PendingCount}",
-                                        transactionId.Value, operation, functionCode, startAddress, totalSw.ElapsedMilliseconds, _pendingRequests.Count);
                                 }
                                 // 正常写成功不触发通知（避免噪声），异常由上层业务日志记录
                             }
@@ -1403,6 +1219,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 await _networkStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
                 await _networkStream.FlushAsync().ConfigureAwait(false);
             }
+            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+            {
+                _logger.LogWarning(ex, "PLC 写入发生连接级异常，已标记断线");
+                MarkDisconnected();
+                throw;
+            }
             finally
             {
                 _sendLock.Release();
@@ -1422,13 +1244,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             try
             {
                 _logger.LogDebug("执行心跳检测");
-
-                // 避免重复执行重连
-                if (_isReconnecting == 1) // 检查重连状态
-                {
-                    _logger.LogDebug("重连正在进行中，跳过心跳检测");
-                    return;
-                }
 
                 switch (HealthCheckMode)
                 {
@@ -1468,8 +1283,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             if (response == null || response.IsError)
             {
                 _logger.LogWarning("Modbus心跳检测失败");
-                Notify(NotificationType.Warning, "心跳失败，尝试重连", "HealthCheck");
-                await HandleConnectionLossAsync().ConfigureAwait(false);
+                Notify(NotificationType.Warning, "心跳失败，已标记断线", "HealthCheck");
+                MarkDisconnected();
             }
         }
 
@@ -1488,15 +1303,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             if (elapsedSeconds > timeoutSeconds)
             {
                 _logger.LogWarning("超过 {TimeoutSeconds}s 未收到Modbus数据", timeoutSeconds);
-                Notify(NotificationType.Warning, $"无数据超时({elapsedSeconds}s)，尝试重连", "HealthCheck");
-                // 使用ContinueWith确保异常被记录
-                _ = HandleConnectionLossAsync().ContinueWith(t =>
-                {
-                    if (t.IsFaulted)
-                    {
-                        _logger.LogError(t.Exception, "重连操作异常");
-                    }
-                }, TaskScheduler.Default);
+                Notify(NotificationType.Warning, $"无数据超时({elapsedSeconds}s)，已标记断线", "HealthCheck");
+                MarkDisconnected();
             }
         }
 
@@ -1510,8 +1318,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             if (response == null || response.IsError)
             {
                 _logger.LogWarning("Modbus状态查询失败");
-                Notify(NotificationType.Warning, "状态异常，尝试重连", "HealthCheck");
-                await HandleConnectionLossAsync().ConfigureAwait(false);
+                Notify(NotificationType.Warning, "状态异常，已标记断线", "HealthCheck");
+                MarkDisconnected();
             }
         }
 
@@ -1774,6 +1582,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         #endregion
 
         #region 扩展
+
         /// <summary>
         /// 发送自定义 Modbus TCP 请求帧（必须包含有效 MBAP 头），并等待匹配事务ID的响应
         /// </summary>
@@ -1857,110 +1666,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                 if (lockTaken)
                     _requestLock.Release();
-            }
-        }
-
-        /// <summary>
-        /// 测试连接：使用指定参数尝试连接PLC并发送Modbus读保持寄存器指令验证通信。
-        /// 此方法创建临时TCP连接，不修改服务内部状态，不影响现有持久连接。
-        /// 用于系统设定页面的"测试连接"功能。
-        /// </summary>
-        /// <param name="host">PLC IP地址</param>
-        /// <param name="port">Modbus TCP端口号</param>
-        /// <param name="timeoutMs">连接和读取总超时（毫秒）</param>
-        /// <param name="ct">取消令牌</param>
-        /// <returns>连接成功且收到有效Modbus响应返回 true，否则 false</returns>
-        public async Task<bool> TestConnectionAsync(string host, int port, int timeoutMs, CancellationToken ct = default)
-        {
-            _logger.LogDebug("PLC 测试连接: Host={Host}, Port={Port}, Timeout={Timeout}ms", host, port, timeoutMs);
-
-            using var tcpClient = new TcpClient();
-            try
-            {
-                using var timeoutCts = new CancellationTokenSource(timeoutMs);
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-
-                // 第一步：建立TCP连接
-                var connectTask = tcpClient.ConnectAsync(host, port);
-                var timeoutTask = Task.Delay(timeoutMs / 2, linkedCts.Token); // 连接最多用一半超时
-                var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
-
-                if (completedTask != connectTask)
-                {
-                    _logger.LogWarning("PLC 测试连接超时: 无法连接到 {Host}:{Port}", host, port);
-                    return false;
-                }
-
-                await connectTask.ConfigureAwait(false);
-                _logger.LogDebug("PLC TCP连接建立成功，发送Modbus测试指令");
-
-                using var stream = tcpClient.GetStream();
-                stream.ReadTimeout = timeoutMs / 2;
-                stream.WriteTimeout = timeoutMs / 2;
-
-                // 第二步：发送读保持寄存器请求（从站ID=1，起始地址0，数量1）
-                var request = ModbusTcpMessageHelper.CreateReadHoldingRegistersRequest(
-                    transactionId: 1,
-                    unitId: 1,
-                    startAddress: 0,
-                    quantity: 1);
-
-                await stream.WriteAsync(request, linkedCts.Token).ConfigureAwait(false);
-                await stream.FlushAsync(linkedCts.Token).ConfigureAwait(false);
-
-                // 第三步：读取响应（最小有效Modbus TCP响应 = MBAP头6字节 + UnitID1 + FC1 + ByteCount1 = 9字节）
-                var buffer = new byte[256];
-                int totalRead = 0;
-                int bytesRead;
-
-                do
-                {
-                    bytesRead = await stream.ReadAsync(
-                        buffer.AsMemory(totalRead, buffer.Length - totalRead),
-                        linkedCts.Token).ConfigureAwait(false);
-                    totalRead += bytesRead;
-                }
-                while (bytesRead > 0 && totalRead < buffer.Length);
-
-                _logger.LogDebug("PLC 测试连接收到 {Bytes} 字节响应", totalRead);
-
-                // 验证响应：MBAP头+UnitID+功能码至少需要9字节
-                bool isValid = totalRead >= 9;
-                if (isValid)
-                {
-                    // 解析MBAP头中的事务ID和PDU长度做二次验证
-                    byte functionCode = buffer[7];
-                    bool isErrorResponse = (functionCode & 0x80) != 0;
-                    if (isErrorResponse)
-                    {
-                        _logger.LogWarning("PLC 测试连接收到异常响应: FC={FunctionCode}, 错误码={ErrorCode}",
-                            functionCode, totalRead >= 9 ? buffer[8] : (byte)0);
-                        // 收到异常响应也算通信成功，只是PLC拒绝了请求
-                    }
-                }
-
-                _logger.LogInformation("PLC 测试连接结果: {Result}", isValid ? "成功" : "失败（响应不完整）");
-                return isValid;
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogWarning("PLC 测试连接被取消或超时");
-                return false;
-            }
-            catch (SocketException ex)
-            {
-                _logger.LogWarning(ex, "PLC 测试连接 Socket 异常: {Message}", ex.Message);
-                return false;
-            }
-            catch (IOException ex)
-            {
-                _logger.LogWarning(ex, "PLC 测试连接 IO 异常: {Message}", ex.Message);
-                return false;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "PLC 测试连接未预期异常: {Message}", ex.Message);
-                return false;
             }
         }
 

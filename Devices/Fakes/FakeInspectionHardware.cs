@@ -1,6 +1,7 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
@@ -42,6 +43,11 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     }
 
     public bool IsConnected => _isConnected;
+
+    public Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
+        => Task.FromResult(_isConnected
+            ? DeviceHealthCheckResult.Healthy("Fake 硬件在线")
+            : DeviceHealthCheckResult.Unhealthy("Fake 硬件未连接"));
 
     public event EventHandler<bool>? ConnectionStateChanged;
     public event EventHandler<PlcNotification>? NotificationReceived;

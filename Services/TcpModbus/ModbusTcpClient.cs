@@ -155,9 +155,6 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
     public Task<ModbusResponse?> SendCustomRequestAsync(byte[] requestFrame, CancellationToken ct = default, int timeoutMs = 1000)
         => _inner.SendCustomModbusRequestAsync(requestFrame, timeoutMs, ct);
 
-    public Task<bool> TestConnectionAsync(string host, int port, int timeoutMs, CancellationToken ct = default)
-        => _inner.TestConnectionAsync(host, port, timeoutMs, ct);
-
     #endregion
 
     #region 配置应用
@@ -169,12 +166,6 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
         _inner.Port = options.Port;
         _inner.ReceiveTimeoutMs = options.ReceiveTimeoutMs;
         _inner.SendTimeoutMs = options.SendTimeoutMs;
-        _inner.ReconnectDelayMs = options.ReconnectDelayMs;
-        // 重连节奏由 DeviceConnectionService 统一调度；底层只做一次 TCP 尝试，避免外层和内层 12x12 叠加阻塞其他设备恢复。
-        _inner.MaxReconnectAttempts = 1;
-        _inner.HealthCheckMode = options.HealthCheckMode;
-        _inner.HealthCheckIntervalSeconds = options.HealthCheckIntervalSeconds;
-        _inner.LastDataTimeoutSeconds = options.LastDataTimeoutSeconds;
 
         _logger.LogDebug("ModbusTcpClient 配置已应用: {Host}:{Port}, UnitId={UnitId}",
             options.Host, options.Port, options.UnitId);

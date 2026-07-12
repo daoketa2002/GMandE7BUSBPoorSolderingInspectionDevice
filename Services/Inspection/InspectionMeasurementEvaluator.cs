@@ -109,17 +109,22 @@ public static class InspectionMeasurementEvaluator
 
     /// <summary>
     /// 判定单个测量结果是 OK 还是 NG。
-    /// 超量程大数 / +Infinity 直接判 NG，不进入阈值比较。
+    /// 按检测模式解释超量程值：导通模式等价 OPEN，电阻模式保持 NG。
     /// </summary>
     public static string Judge(MeasurementResult measurement, TestPointConfig testPoint)
     {
-        if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
+        // NaN、负无穷和负电阻均为异常测量，保持 NG 与中止语义。
+        if (measurement.ShouldAbortInspection)
             return "NG";
 
         string raw = measurement.RawValue.Trim();
 
         if (testPoint.CheckMode == CheckModeConstants.Resistance)
         {
+            // 电阻模式不把超量程当作普通电阻值参与上下限比较。
+            if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
+                return "NG";
+
             if (raw.Equals("OPEN", StringComparison.OrdinalIgnoreCase)
                 || raw.Equals("SHORT", StringComparison.OrdinalIgnoreCase))
                 return "NG";
@@ -127,6 +132,14 @@ public static class InspectionMeasurementEvaluator
             double lower = testPoint.LowerLimit ?? 0;
             double upper = testPoint.UpperLimit ?? double.MaxValue;
             return measurement.Value >= lower && measurement.Value <= upper ? "OK" : "NG";
+        }
+
+        // 导通模式中，正无穷和超量程均代表实际开路。
+        if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
+        {
+            testPoint.ActualContinuityState = "OPEN";
+            return JudgeContinuityResult(
+                measurement.Value, testPoint.ModeValue, testPoint.ContinuityThresholdOhm);
         }
 
         bool expectShort = string.Equals(testPoint.ModeValue, "SHORT", StringComparison.OrdinalIgnoreCase);
