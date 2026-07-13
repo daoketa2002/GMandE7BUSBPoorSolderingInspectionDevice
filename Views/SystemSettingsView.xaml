@@ -398,33 +398,6 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- ============================================ -->
-                            <!-- PLC 通信测试开关（移到最底部） -->
-                            <!-- ============================================ -->
-                            <Border Background="#F8F9FA"
-                                    CornerRadius="8"
-                                    Padding="20"
-                                    Margin="0,0,0,0">
-                                <StackPanel>
-                                    <CheckBox x:Name="PlcTestCheckBox"
-                                              IsChecked="{Binding IsPlcCommunicationTestEnabled}"
-                                              VerticalAlignment="Center"
-                                              Margin="0,0,0,10">
-                                        <CheckBox.Content>
-                                            <TextBlock Text="开启 PLC 通信测试功能"
-                                                       FontSize="15"
-                                                       FontWeight="SemiBold"
-                                                       Foreground="#2C3E50"/>
-                                        </CheckBox.Content>
-                                    </CheckBox>
-                                    <TextBlock Text="勾选后，主菜单将在「系统设置」按钮上方显示「PLC通信测试」按钮"
-                               FontSize="12"
-                               Foreground="#95A5A6"
-                               Margin="20,0,0,0"
-                               TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </Border>
-
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

@@ -4,14 +4,10 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
-             xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
              mc:Ignorable="d" 
              d:DesignHeight="520" d:DesignWidth="800">
 
     <UserControl.Resources>
-        <!-- Bool转Visibility转换器 -->
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
-
         <!-- 与运行页“终了”按钮保持同一视觉结构：纯色主体加底部深色边。 -->
         <Style x:Key="MainMenuButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="64"/>
@@ -87,21 +83,6 @@
                     Style="{StaticResource MainMenuButtonStyle}"
                     Background="#E67E22"
                     BorderBrush="#B95F0B"/>
-
-            <Button x:Name="DataExtractBtn" 
-                    Content="▤ 日志数据"
-                    Style="{StaticResource MainMenuButtonStyle}"
-                    Background="#2ECC71"
-                    BorderBrush="#239B56"/>
-
-            <!-- PLC通信测试按钮：由系统设定页面的勾选框控制显隐 -->
-            <Button x:Name="PlcTestBtn" 
-                    Content="◼ PLC通信测试"
-                    Style="{StaticResource MainMenuButtonStyle}"
-                    Background="#F39C12"
-                    BorderBrush="#B9770E"
-                    Visibility="{Binding IsPlcCommunicationTestVisible, 
-                                 Converter={StaticResource BoolToVisibilityConverter}}"/>
 
             <Button x:Name="SystemSettingsBtn" 
                     Content="⚙ 系统设置"

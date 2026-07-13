@@ -21,8 +21,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     /// <summary>
     /// 系统设定页面的ViewModel
-    /// 负责三个设备的参数配置展示、保存/恢复默认、PLC通信测试开关
-    /// 以及设备测试连接功能
+    /// 负责三个设备的参数配置展示、保存/恢复默认以及设备测试连接功能
     /// </summary>
     public partial class SystemSettingsViewModel : ObservableObject, INavigationAware
     {
@@ -55,10 +54,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>GDM-9060万用表配置</summary>
         [ObservableProperty]
         private GDM9060CommunicationConfig _gdm9060Config = new GDM9060CommunicationConfig();
-
-        /// <summary>是否开启PLC通信测试功能（勾选后主菜单显示对应按钮）</summary>
-        [ObservableProperty]
-        private bool _isPlcCommunicationTestEnabled = false;
 
         /// <summary>
         /// 单项 NG 后是否继续测试后续项目。
@@ -224,7 +219,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 Fp0hConfig = new FP0HCommunicationConfig();
                 ScannerConfig = new ScannerSerialCommunicationConfig();
                 Gdm9060Config = new GDM9060CommunicationConfig();
-                IsPlcCommunicationTestEnabled = false;
 
                 _logger.Information("所有设备配置已恢复为默认值");
                 await _notificationService.ShowInfoAsync("已恢复默认配置。");
@@ -258,7 +252,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     FP0HCommunication = ClonePlcConfig(Fp0hConfig),
                     ScannerSerialCommunication = CloneScannerConfig(ScannerConfig),
                     GDM9060Communication = CloneDmmConfig(Gdm9060Config),
-                    IsPlcCommunicationTestEnabled = IsPlcCommunicationTestEnabled,
                     ContinueTestingAfterNg = ContinueTestingAfterNg,
                     SaveNgInspectionResult = ContinueTestingAfterNg && SaveNgInspectionResult
                 };
@@ -909,7 +902,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 if (deviceSettings.GDM9060Communication != null)
                     Gdm9060Config = CloneDmmConfig(deviceSettings.GDM9060Communication);
 
-                IsPlcCommunicationTestEnabled = deviceSettings.IsPlcCommunicationTestEnabled;
                 ContinueTestingAfterNg = deviceSettings.ContinueTestingAfterNg;
                 SaveNgInspectionResult = deviceSettings.SaveNgInspectionResult;
                 LoadCsvStoragePath();

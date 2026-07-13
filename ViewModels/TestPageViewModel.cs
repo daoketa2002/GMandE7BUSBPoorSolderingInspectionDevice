@@ -1145,7 +1145,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     ? "正在保存检测记录..."
                     : "当前设置允许保存 NG 检测记录，正在保存...");
 
-                var saved = await SaveLogToDatabaseAsync(machineType, planName, finalResult).ConfigureAwait(false);
+                var saved = await SaveInspectionRecordAsync(machineType, planName, finalResult).ConfigureAwait(false);
                 if (!saved)
                 {
                     await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -1190,7 +1190,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 保存检测记录到 CSV。
     /// ★ 使用当前 ModelName + SchemeName 精确匹配，不再 allPlans.FirstOrDefault()。
     /// </summary>
-    private async Task<bool> SaveLogToDatabaseAsync(string machineType, string planName, string finalResult)
+    private async Task<bool> SaveInspectionRecordAsync(string machineType, string planName, string finalResult)
     {
         try
         {

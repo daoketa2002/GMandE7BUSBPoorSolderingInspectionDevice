@@ -8,9 +8,6 @@ using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Logging;
 using GMandE7BUSBPoorSolderingInspectionDevice.Services;
-#if DEBUG
-using GMandE7BUSBPoorSolderingInspectionDevice.Services.Development;
-#endif
 using GMandE7BUSBPoorSolderingInspectionDevice.Services.Inspection;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
@@ -37,6 +34,7 @@ Console.OutputEncoding = new UTF8Encoding(false);
 
 var tests = new List<(string Name, Action Body)>
 {
+    ("REF-CLEAN formal source contract", TestRefClean01ForbiddenSourceContract),
     ("测试控制台使用 UTF-8 输出编码", TestConsoleOutputEncodingIsUtf8),
     ("Stage D semi-physical logging contract", TestStageDSemiPhysicalLogContract),
     ("阶段 E Fake 日志前缀和模拟返回契约", TestStageEFakeLogContract),
@@ -450,94 +448,7 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual("序号,机种名称,序列号,方案名称,检查者,综合判定,A1-B1,B2-B3,日期,时间,方案版本", header);
         AssertEqual("7,ZZTEST-索引机种A,ZZTEST-SN-202607-000001,方案1,测试员,OK,SHORT,10.5,2026年07月10日,08时09分10秒,V2", row);
     }),
-#if DEBUG
-    ("批量测试数据每个分卷保持固定列数版本和真实测量值", () =>
-    {
-        var root = Path.Combine(Path.GetTempPath(), "gm-e78-zztest-bulk-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var pathManager = CreateCsvPathManager(root, maxRowsPerFile: 50000);
-            var indexService = new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance);
-            var storage = CreateCsvStorageWithIndex(pathManager, indexService);
-            var seeder = new TestDataSeeder(pathManager, storage, indexService, NullLogger<TestDataSeeder>.Instance);
 
-            seeder.SeedBulkMonthAsync("2026-07", "ZZTEST-索引机种A", 1, 4500)
-                .GetAwaiter()
-                .GetResult();
-
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
-            var files = Directory.GetFiles(monthFolder, "ZZTEST-索引机种A_方案1*.csv")
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            AssertEqual(3, files.Count);
-
-            foreach (var file in files)
-            {
-                var lines = File.ReadAllLines(file);
-                var headerColumnCount = lines[0].Split(',').Length;
-                var versions = new HashSet<string>(StringComparer.Ordinal);
-
-                foreach (var line in lines.Skip(1))
-                {
-                    var columns = line.Split(',');
-                    AssertEqual(headerColumnCount, columns.Length);
-                    AssertEqual(true, columns[5] is "OK" or "NG");
-                    AssertEqual(false, columns.Skip(6).Take(headerColumnCount - 9).Any(value => value is "OK" or "NG"));
-                    versions.Add(columns[^1]);
-                }
-
-                AssertEqual(1, versions.Count);
-            }
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, true);
-            }
-        }
-    }),
-    ("开发数据清理只删除 ZZTEST CSV 并重建受影响月份索引", () =>
-    {
-        var root = Path.Combine(Path.GetTempPath(), "gm-e78-dev-clear-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var pathManager = CreateCsvPathManager(root, maxRowsPerFile: 50000);
-            var indexService = new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance);
-            var storage = CreateCsvStorageWithIndex(pathManager, indexService);
-            var seeder = new TestDataSeeder(
-                pathManager,
-                storage,
-                indexService,
-                NullLogger<TestDataSeeder>.Instance);
-
-            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
-            storage.SaveRecordAsync(CreateLogRecord("ZZTEST-索引机种A", "方案1", "ZZTEST-SN-001", timestamp))
-                .GetAwaiter()
-                .GetResult();
-            storage.SaveRecordAsync(CreateLogRecord("生产机种", "生产方案", "SN-001", timestamp.AddSeconds(1)))
-                .GetAwaiter()
-                .GetResult();
-
-            seeder.ClearDevTestDataAsync().GetAwaiter().GetResult();
-
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
-            AssertEqual(false, File.Exists(Path.Combine(monthFolder, "ZZTEST-索引机种A_方案1.csv")));
-            AssertEqual(true, File.Exists(Path.Combine(monthFolder, "生产机种_生产方案.csv")));
-
-            var indexEntries = indexService.ReadMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
-            AssertEqual(1, indexEntries.Count);
-            AssertEqual("生产机种", indexEntries[0].MachineType);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, true);
-            }
-        }
-    }),
-#endif
     ("机种名称和方案名称拒绝下划线", () =>
     {
         AssertEqual("机种名称不能包含下划线“_”，该字符用于测试数据文件名分隔。", NameValidationHelper.ValidateMachineType("测试_机种"));
@@ -545,153 +456,8 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual<string?>(null, NameValidationHelper.ValidateMachineType(" ZZTEST-索引机种A "));
         AssertEqual<string?>(null, NameValidationHelper.ValidatePlanName(" 方案1 "));
     }),
-    ("CSV 表头结构变化自动新分卷且旧记录按 V1 兼容解析", () =>
-    {
-        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-header-roll-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
-            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
 
-            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-OLD", timestamp, planVersion: 1, pins: new[] { "A1-B1" }))
-                .GetAwaiter()
-                .GetResult();
-            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-NEW", timestamp.AddSeconds(1), planVersion: 1, pins: new[] { "B1-B2" }))
-                .GetAwaiter()
-                .GetResult();
 
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
-            var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
-            AssertEqual(2, files.Count);
-
-            var (records, total) = storage.QueryRecordsAsync(
-                    series: "GM",
-                    planName: "P1",
-                    startDate: new DateTime(2026, 7, 1),
-                    endDate: new DateTime(2026, 7, 31),
-                    pageIndex: 1,
-                    pageSize: 10)
-                .GetAwaiter()
-                .GetResult();
-
-            AssertEqual(2, total);
-            AssertEqual(2, records.Count);
-            AssertEqual(1, records.Single(r => r.SerialNumber == "SN-OLD").PlanVersion);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, true);
-            }
-        }
-    }),
-    ("动态列并集从索引命中文件表头计算", (Action)(() =>
-    {
-        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-dynamic-headers-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
-            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
-
-            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-H1", timestamp, planVersion: 1, pins: new[] { "A1-B1", "A2-B2" }))
-                .GetAwaiter()
-                .GetResult();
-            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-H2", timestamp.AddSeconds(1), planVersion: 2, pins: new[] { "B1-B2", "A2-B2" }))
-                .GetAwaiter()
-                .GetResult();
-            storage.SaveRecordAsync(CreateLogRecord("GM", "P2", "SN-H3", timestamp.AddSeconds(2), planVersion: 1, pins: new[] { "Z1-Z2" }))
-                .GetAwaiter()
-                .GetResult();
-
-            var headers = storage.GetDynamicHeadersAsync(
-                    series: "GM",
-                    planName: "P1",
-                    startDate: new DateTime(2026, 7, 1),
-                    endDate: new DateTime(2026, 7, 31))
-                .GetAwaiter()
-                .GetResult();
-
-            AssertEqual("A1-B1,A2-B2,B1-B2", string.Join(",", headers));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, true);
-            }
-        }
-    })),
-    ("索引导出查询返回全部命中记录不受 10000 条限制", (Action)(() =>
-    {
-        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-export-all-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var storage = CreateCsvStorage(root, maxRowsPerFile: 20000);
-            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
-
-            for (int i = 1; i <= 10005; i++)
-            {
-                storage.SaveRecordAsync(CreateLogRecord("GM", "P1", $"SN-EXPORT-{i:00000}", timestamp.AddSeconds(i), planVersion: 1))
-                    .GetAwaiter()
-                    .GetResult();
-            }
-
-            var records = storage.QueryAllRecordsAsync(
-                    series: "GM",
-                    planName: "P1",
-                    startDate: new DateTime(2026, 7, 1),
-                    endDate: new DateTime(2026, 7, 31))
-                .GetAwaiter()
-                .GetResult();
-
-            AssertEqual(10005, records.Count);
-            AssertEqual("SN-EXPORT-10005", records[0].SerialNumber);
-            AssertEqual("SN-EXPORT-00001", records[^1].SerialNumber);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, true);
-            }
-        }
-    })),
-    ("月度索引随正式 CSV 追加并可重建", () =>
-    {
-        var root = Path.Combine(Path.GetTempPath(), "gm-e78-csv-index-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
-            var timestamp = new DateTime(2026, 7, 10, 8, 0, 0);
-
-            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-IDX-1", timestamp, planVersion: 3))
-                .GetAwaiter()
-                .GetResult();
-
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
-            var indexPath = Path.Combine(monthFolder, "record-index.csv");
-            AssertEqual(true, File.Exists(indexPath));
-            var indexLines = File.ReadAllLines(indexPath);
-            AssertEqual("Timestamp,MachineType,SerialNumber,PlanName,PlanVersion,FinalResult,FileName,RowNumber", indexLines[0]);
-            AssertEqual(true, indexLines[1].Contains(",GM,SN-IDX-1,P1,3,OK,GM_P1.csv,1", StringComparison.Ordinal));
-
-            File.Delete(indexPath);
-            var indexService = new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance);
-            indexService.RebuildMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
-
-            indexLines = File.ReadAllLines(indexPath);
-            AssertEqual(2, indexLines.Length);
-            AssertEqual(true, indexLines[1].Contains(",GM,SN-IDX-1,P1,3,OK,GM_P1.csv,1", StringComparison.Ordinal));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, true);
-            }
-        }
-    }),
     ("StoppedBySingleItemNg 状态和停止原因枚举存在", () =>
     {
         // 验证 InspectionState 有 StoppedBySingleItemNg
@@ -1675,6 +1441,48 @@ static TestPointConfig CreateOpenContinuityTestPoint()
     };
 }
 
+
+static void TestRefClean01ForbiddenSourceContract()
+{
+    var sourceRoot = Environment.CurrentDirectory;
+    var sourceFiles = Directory.EnumerateFiles(sourceRoot, "*.*", SearchOption.AllDirectories)
+        .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        .Where(path => !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
+            && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
+            && !path.Contains("\\Tests\\", StringComparison.OrdinalIgnoreCase)
+            && !path.Contains("\\.vs\\", StringComparison.OrdinalIgnoreCase))
+        .ToList();
+
+    var forbiddenNames = new[]
+    {
+        "LogDataView", "LogDataViewModel", "NavigateToDataExtract",
+        "ICsvExportService", "CsvExportService", "DevelopmentDataTool",
+        "TestDataSeeder", "SeedThroughNormalSaveAsync", "SeedBulkMonthAsync",
+        "SeedHistoryAsync", "IsPlcCommunicationTestEnabled",
+        "IsPlcCommunicationTestVisible", "NavigateToPlcCommunicationTest",
+        "RefreshPlcTestButtonVisibility", "AppDbContext", "DatabaseSettings",
+        "DatabaseInitializer", "SqliteTestRecordStorage",
+        "Microsoft.EntityFrameworkCore", "UseSqlite", "AddDbContext",
+        "AddDbContextFactory", "IDbContextFactory", "DbSet<"
+    };
+
+    var hits = new List<string>();
+    foreach (var path in sourceFiles)
+    {
+        var content = File.ReadAllText(path);
+        foreach (var forbiddenName in forbiddenNames)
+        {
+            if (content.Contains(forbiddenName, StringComparison.Ordinal))
+                hits.Add($"{Path.GetRelativePath(sourceRoot, path)} => {forbiddenName}");
+        }
+    }
+
+    AssertEqual(string.Empty, string.Join(Environment.NewLine, hits));
+}
+
 static void AssertEqual<T>(T expected, T actual)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
@@ -1830,7 +1638,6 @@ static CsvTestRecordStorage CreateCsvStorageWithIndex(
 {
     return new CsvTestRecordStorage(
         pathManager,
-        new EmptyPlanStorageService(),
         indexService,
         NullLogger<CsvTestRecordStorage>.Instance);
 }
@@ -2171,19 +1978,6 @@ sealed class TestNavigationService : INavigationService
 sealed class TestServiceProvider : IServiceProvider
 {
     public object? GetService(Type serviceType) => null;
-}
-
-sealed class EmptyPlanStorageService : IPlanStorageService
-{
-    public Task DeletePlanAsync(string machineType, string planName) => Task.CompletedTask;
-
-    public Task<List<string>> GetAllMachineTypesAsync() => Task.FromResult(new List<string>());
-
-    public Task<List<string>> GetPlanNamesByMachineTypeAsync(string machineType) => Task.FromResult(new List<string>());
-
-    public Task<List<PlanModel>> LoadAllPlansAsync() => Task.FromResult(new List<PlanModel>());
-
-    public Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null) => Task.CompletedTask;
 }
 
 /// <summary>

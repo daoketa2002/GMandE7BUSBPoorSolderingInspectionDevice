@@ -4,7 +4,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
 {
     /// <summary>
     /// 系统设备总配置模型
-    /// 包含三个设备的配置以及PLC通信测试开关
+    /// 包含三个设备的通信配置以及检测行为设置
     /// </summary>
     public class DeviceSettings
     {
@@ -22,11 +22,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         /// GDM-9060万用表配置
         /// </summary>
         public GDM9060CommunicationConfig GDM9060Communication { get; set; } = new GDM9060CommunicationConfig();
-
-        /// <summary>
-        /// 是否开启PLC通信测试功能（控制主菜单按钮显隐）
-        /// </summary>
-        public bool IsPlcCommunicationTestEnabled { get; set; } = false;
 
         /// <summary>
         /// 单项 NG 后是否继续测试后续项目。
