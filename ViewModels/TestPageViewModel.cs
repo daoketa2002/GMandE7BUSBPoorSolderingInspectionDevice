@@ -2089,7 +2089,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             startingToken.ThrowIfCancellationRequested();
 
-            bool dmmPingOk = await _multimeterDevice.PingAsync(CancellationToken.None).ConfigureAwait(false);
+            bool dmmPingOk = await _multimeterDevice.PingAsync(startingToken).ConfigureAwait(false);
             if (!dmmPingOk)
             {
                 await RejectStartAsync(CreateStartFailureResult("万用表无法通信，请检查网络连接后重试。",
@@ -2324,7 +2324,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 await fake.WriteInputRegisterAsync(PlcAddressMap.StopSignal, 0, CancellationToken.None);
                 await fake.WriteInputRegisterAsync(PlcAddressMap.EmergencyStopSignal, 0, CancellationToken.None);
-                _logger.LogInformation("[复位流程][Fake] 已清除 DT122(停止) 和 DT123(急停)");
+                _logger.LogInformation("[Fake][控制动作] 复位流程已清除 DT122(停止) 和 DT123(急停)");
             }
 
             ClearTestItemsForRestart();

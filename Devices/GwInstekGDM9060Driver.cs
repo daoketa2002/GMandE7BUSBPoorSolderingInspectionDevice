@@ -32,6 +32,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private const int DEFAULT_PORT = 5025;
         private const int DEFAULT_TIMEOUT_MS = 5000;
         private const int RECEIVE_BUFFER_SIZE = 4096;
+        private const int DrainMaxDurationMs = 250;
+        private const int DrainQuietIntervalMs = 20;
+        private const int DrainRequiredQuietChecks = 3;
 
         #endregion
 
@@ -49,6 +52,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
         private volatile bool _receiveBufferPossiblyDirty;
+
+#if DEBUG
+        /// <summary>
+        /// Debug 验收钩子：下一次业务测量查询先返回身份响应，默认关闭且不会编译进 Release。
+        /// </summary>
+        internal bool DebugInjectIdentityResponseBeforeNextMeasurement { get; set; } = false;
+#endif
 
         /// <summary>当前测量模式缓存，用于跳过相同模式的重复完整初始化</summary>
         private DmmCachedMode _cachedMode = DmmCachedMode.Unknown;
@@ -190,6 +200,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     ReceiveTimeout = timeoutMs,
                     SendTimeout = timeoutMs
                 };
+                _receiveBufferPossiblyDirty = false;
 
                 using var timeoutCts = new CancellationTokenSource(timeoutMs);
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -204,6 +215,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     throw new InvalidOperationException("万用表连接验证失败：未收到 *IDN? 响应");
                 }
 
+                _receiveBufferPossiblyDirty = false;
                 _isConnected = true;
                 ResetDmmModeCache(); // 新连接，设备模式不可确认，缓存置为 Unknown
                 _logger.LogInformation("万用表连接成功！设备信息: {IDN}", idn);
@@ -265,6 +277,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 _logger.LogDebug(ex, "清理连接资源时出现异常（可忽略）");
             }
+            finally
+            {
+                // 连接已经失效，旧 Socket 的接收缓冲区状态不能带入下一次连接。
+                _receiveBufferPossiblyDirty = false;
+            }
         }
 
         #endregion
@@ -275,22 +292,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// SCPI 查询命令（写后读取响应直到 \n 终止或超时）。
         /// 内部方法，不加 _commandLock，由公共方法 SendQueryAsync 调用。
         /// </summary>
-        private async Task<string> SendQueryInternalAsync(string command, CancellationToken ct)
+        private async Task<string> SendQueryInternalAsync(
+            string command,
+            CancellationToken ct,
+            int measurementRetryCount = 0)
         {
             if (_networkStream == null || _tcpClient == null || !_tcpClient.Connected)
             {
                 throw new InvalidOperationException("万用表未连接");
             }
 
+            // 所有调用方都已持有命令锁；污染状态必须在本次查询写入前于同一把锁内清理。
+            await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
+
             // 统一追加 \r\n 终止符
             var cmd = command.EndsWith("\n") ? command : command + "\r\n";
             var cmdBytes = Encoding.ASCII.GetBytes(cmd);
+            bool commandWritten = false;
 
             _logger.LogDebug("SCPI查询命令: {Command}", command);
             try
             {
                 await _networkStream.WriteAsync(cmdBytes, ct).ConfigureAwait(false);
                 await _networkStream.FlushAsync(ct).ConfigureAwait(false);
+                commandWritten = true;
             }
             catch (OperationCanceledException)
             {
@@ -324,7 +349,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             catch (OperationCanceledException ex)
                 when (readTimeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
             {
-                _receiveBufferPossiblyDirty = true;
+                if (commandWritten)
+                {
+                    MarkReceiveBufferPossiblyDirty(command, "读取超时");
+                }
                 var partialResponse = Encoding.ASCII.GetString(memoryStream.ToArray())
                     .TrimEnd('\r', '\n', ' ');
                 if (string.IsNullOrWhiteSpace(partialResponse))
@@ -344,15 +372,70 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             }
             catch (OperationCanceledException)
             {
+                if (commandWritten)
+                {
+                    MarkReceiveBufferPossiblyDirty(command, "读取取消");
+                }
                 _logger.LogInformation("[DMM查询][取消] Command={Command}", command);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (commandWritten)
+                {
+                    MarkReceiveBufferPossiblyDirty(command, $"读取异常:{ex.GetType().Name}");
+                }
                 throw;
             }
 
             var result = Encoding.ASCII.GetString(memoryStream.ToArray()).TrimEnd('\r', '\n', ' ');
-            if (!string.IsNullOrWhiteSpace(result))
+
+#if DEBUG
+            if (IsMeasurementQuery(command)
+                && DebugInjectIdentityResponseBeforeNextMeasurement)
             {
-                _receiveBufferPossiblyDirty = false;
+                // 先消费本次传输响应，再替换为身份响应，避免测试注入制造额外的残留字节。
+                DebugInjectIdentityResponseBeforeNextMeasurement = false;
+                const string injectedResponse = "GWInstek,GDM9060,DEBUG,INJECTED";
+                _logger.LogWarning(
+                    "[DMM调试注入][响应串台] Command={Command}, Response={Response}",
+                    command,
+                    injectedResponse);
+                result = injectedResponse;
             }
+#endif
+
+            if (IsMeasurementQuery(command) && IsIdentityResponse(result))
+            {
+                _logger.LogWarning(
+                    "[DMM响应隔离][检测到串台] Command={Command}, Response={Response}",
+                    command,
+                    result);
+                MarkReceiveBufferPossiblyDirty(command, "测量查询收到设备身份响应");
+
+                if (measurementRetryCount >= 1)
+                {
+                    _logger.LogWarning(
+                        "[DMM响应隔离][重试失败] Command={Command}, Response={Response}",
+                        command,
+                        result);
+                    throw new InvalidOperationException(
+                        $"DMM 测量查询连续收到设备身份响应：Command={command}, Response={result}");
+                }
+
+                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
+                var retryResponse = await SendQueryInternalAsync(
+                    command,
+                    ct,
+                    measurementRetryCount + 1).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "[DMM响应隔离][重试成功] Command={Command}, Response={Response}",
+                    command,
+                    retryResponse);
+                return retryResponse;
+            }
+
+            ValidateQueryResponse(command, result);
 
             _logger.LogDebug("SCPI响应: {Response}", result);
             return result;
@@ -385,16 +468,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// </summary>
         private async Task DrainReceiveBufferAsync(CancellationToken ct)
         {
-            if (_networkStream == null || _tcpClient == null || !_tcpClient.Connected)
+            if (!_receiveBufferPossiblyDirty
+                || _networkStream == null
+                || _tcpClient == null
+                || !_tcpClient.Connected)
                 return;
 
             var buffer = new byte[RECEIVE_BUFFER_SIZE];
             int totalBytes = 0;
-            int quietChecks = _receiveBufferPossiblyDirty ? 5 : 2;
+            int quietChecks = 0;
+            var stopwatch = Stopwatch.StartNew();
 
-            for (int i = 0; i < quietChecks; i++)
+            while (stopwatch.ElapsedMilliseconds < DrainMaxDurationMs)
             {
-                while (_networkStream.DataAvailable)
+                bool receivedData = false;
+                while (_networkStream.DataAvailable
+                    && stopwatch.ElapsedMilliseconds < DrainMaxDurationMs)
                 {
                     int bytesRead = await _networkStream.ReadAsync(buffer, 0, buffer.Length, ct)
                         .ConfigureAwait(false);
@@ -402,19 +491,65 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                         break;
 
                     totalBytes += bytesRead;
-                    i = 0;
+                    receivedData = true;
+                    quietChecks = 0;
                 }
 
-                if (i < quietChecks - 1)
-                    await Task.Delay(20, ct).ConfigureAwait(false);
+                if (stopwatch.ElapsedMilliseconds >= DrainMaxDurationMs)
+                    break;
+
+                if (receivedData)
+                    continue;
+
+                quietChecks++;
+                if (quietChecks >= DrainRequiredQuietChecks)
+                {
+                    _receiveBufferPossiblyDirty = false;
+                    if (totalBytes > 0)
+                    {
+                        _logger.LogWarning(
+                            "[DMM缓冲清理] 已清理迟到响应 {Bytes} 字节，连续 {QuietChecks} 次静默确认稳定",
+                            totalBytes,
+                            quietChecks);
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "[DMM缓冲清理] 未发现残留响应，连续 {QuietChecks} 次静默确认稳定",
+                            quietChecks);
+                    }
+                    return;
+                }
+
+                int remainingMs = DrainMaxDurationMs - (int)stopwatch.ElapsedMilliseconds;
+                if (remainingMs > 0)
+                {
+                    await Task.Delay(Math.Min(DrainQuietIntervalMs, remainingMs), ct)
+                        .ConfigureAwait(false);
+                }
             }
 
-            if (totalBytes > 0)
+            _logger.LogWarning(
+                "[DMM缓冲清理][超时] 已清理 {Bytes} 字节，但在 {MaxDurationMs}ms 内未达到连续 {RequiredQuietChecks} 次静默，保持污染标记",
+                totalBytes,
+                DrainMaxDurationMs,
+                DrainRequiredQuietChecks);
+        }
+
+        /// <summary>
+        /// 模式缓存命中时仍需要在命令锁内清理可能残留的迟到响应。
+        /// </summary>
+        private async Task DrainReceiveBufferForCachedModeAsync(CancellationToken ct)
+        {
+            await _commandLock.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                _logger.LogWarning("[万用表][审计] 已清理 TCP 接收缓冲区残留响应 {Bytes} 字节，避免查询响应串台", totalBytes);
+                await DrainReceiveBufferAsync(ct).ConfigureAwait(false);
             }
-
-            _receiveBufferPossiblyDirty = false;
+            finally
+            {
+                _commandLock.Release();
+            }
         }
 
         #endregion
@@ -599,6 +734,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             // ── 缓存命中：当前已是 Resistance，跳过完整初始化 ──
             if (_cachedMode == DmmCachedMode.Resistance)
             {
+                await DrainReceiveBufferForCachedModeAsync(ct).ConfigureAwait(false);
                 _logger.LogDebug(
                     "[DMM模式][缓存命中] Requested=Resistance, Current=Resistance, Reconfigured=false");
                 return true;
@@ -676,6 +812,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 && _cachedContinuityThresholdOhm.HasValue
                 && Math.Abs(_cachedContinuityThresholdOhm.Value - normalizedThreshold) < 0.001)
             {
+                await DrainReceiveBufferForCachedModeAsync(ct).ConfigureAwait(false);
                 _logger.LogDebug(
                     "[DMM模式][缓存命中] Requested=Continuity, Current=Continuity, ThresholdOhm={ThresholdOhm}, Reconfigured=false",
                     normalizedThreshold);
@@ -1106,6 +1243,77 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         {
             _cachedMode = DmmCachedMode.Unknown;
             _cachedContinuityThresholdOhm = null;
+        }
+
+        /// <summary>
+        /// 根据查询命令校验响应类型，阻止串台文本进入业务测量解析。
+        /// </summary>
+        private static void ValidateQueryResponse(string command, string response)
+        {
+            if (string.IsNullOrWhiteSpace(response))
+                return;
+
+            string normalizedCommand = command.Trim().ToUpperInvariant();
+            string normalizedResponse = response.Trim();
+
+            bool isValid = normalizedCommand switch
+            {
+                "*IDN?" => IsIdentityResponse(normalizedResponse),
+                "*OPC?" => normalizedResponse == "1",
+                "SYST:ERR?" => normalizedResponse.StartsWith("0", StringComparison.Ordinal)
+                    || normalizedResponse.Contains("No error", StringComparison.OrdinalIgnoreCase),
+                "*TST?" => normalizedResponse == "0"
+                    || normalizedResponse.Contains("PASS", StringComparison.OrdinalIgnoreCase),
+                "READ?" or "MEAS:CONT?" or "MEAS?" => IsMeasurementResponse(normalizedResponse),
+                _ => true
+            };
+
+            if (!isValid)
+            {
+                throw new InvalidOperationException(
+                    $"SCPI 响应类型不匹配：Command={command}, Response={response}");
+            }
+        }
+
+        private static bool IsMeasurementQuery(string command)
+            => command.Trim().Equals("READ?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS:CONT?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS?", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsIdentityResponse(string response)
+            => response.Trim().StartsWith("GWInstek", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsMeasurementResponse(string response)
+        {
+            string normalizedResponse = response.Trim();
+            if (normalizedResponse.Equals("OPEN", StringComparison.OrdinalIgnoreCase)
+                || normalizedResponse.Equals("SHORT", StringComparison.OrdinalIgnoreCase)
+                || normalizedResponse.Equals("NaN", StringComparison.OrdinalIgnoreCase)
+                || normalizedResponse.Equals("Infinity", StringComparison.OrdinalIgnoreCase)
+                || normalizedResponse.Equals("+Infinity", StringComparison.OrdinalIgnoreCase)
+                || normalizedResponse.Equals("-Infinity", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return double.TryParse(
+                normalizedResponse,
+                System.Globalization.NumberStyles.Float
+                    | System.Globalization.NumberStyles.AllowThousands,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out _);
+        }
+
+        /// <summary>
+        /// 标记查询已经写入设备但响应未能完整收取，避免把后续任意响应误认为当前查询结果。
+        /// </summary>
+        private void MarkReceiveBufferPossiblyDirty(string command, string reason)
+        {
+            _receiveBufferPossiblyDirty = true;
+            _logger.LogWarning(
+                "[DMM查询][缓冲区污染] Command={Command}, Reason={Reason}",
+                command,
+                reason);
         }
 
         private void Notify(NotificationType type, string message)

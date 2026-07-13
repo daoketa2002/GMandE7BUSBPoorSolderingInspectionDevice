@@ -26,6 +26,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Windows;
+using System.Windows.Threading;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice
 {
@@ -51,6 +52,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             {
                 LoadFluentTheme(app);
                 var host = CreateHostBuilder(args).Build();
+                RegisterGlobalExceptionHandlers(app);
 
                 using (var scope = host.Services.CreateScope())
                 {
@@ -87,6 +89,60 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                               "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 Log.ForContext<Program>().Fatal(ex, "[系统启动] 应用程序启动失败");
             }
+        }
+
+
+        /// <summary>
+        /// 注册进程级异常兜底。只在主入口注册一次，记录异常后保留框架默认终止策略。
+        /// </summary>
+        private static void RegisterGlobalExceptionHandlers(Application app)
+        {
+            app.DispatcherUnhandledException += OnDispatcherUnhandledException;
+            AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+            TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+        }
+
+        /// <summary>记录 UI 线程未处理异常，不将致命异常伪装成已处理。</summary>
+        private static void OnDispatcherUnhandledException(
+            object sender,
+            DispatcherUnhandledExceptionEventArgs e)
+        {
+            Log.ForContext<Program>().Error(
+                e.Exception,
+                "[全局异常][UI线程] Dispatcher 未处理异常");
+            e.Handled = false;
+        }
+
+        /// <summary>记录 AppDomain 未处理异常，保留进程终止信息。</summary>
+        private static void OnAppDomainUnhandledException(
+            object? sender,
+            UnhandledExceptionEventArgs e)
+        {
+            if (e.ExceptionObject is Exception exception)
+            {
+                Log.ForContext<Program>().Fatal(
+                    exception,
+                    "[全局异常][AppDomain] IsTerminating={IsTerminating}",
+                    e.IsTerminating);
+            }
+            else
+            {
+                Log.ForContext<Program>().Fatal(
+                    "[全局异常][AppDomain] IsTerminating={IsTerminating}, ExceptionObject={ExceptionObject}",
+                    e.IsTerminating,
+                    e.ExceptionObject);
+            }
+        }
+
+        /// <summary>记录未观察任务异常并标记已观察，避免后台异常重复升级。</summary>
+        private static void OnUnobservedTaskException(
+            object? sender,
+            UnobservedTaskExceptionEventArgs e)
+        {
+            Log.ForContext<Program>().Error(
+                e.Exception,
+                "[全局异常][未观察Task] 后台任务异常");
+            e.SetObserved();
         }
 
 
