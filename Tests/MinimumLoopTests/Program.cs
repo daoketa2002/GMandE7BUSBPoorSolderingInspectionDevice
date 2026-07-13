@@ -63,6 +63,7 @@ var tests = new List<(string Name, Action Body)>
     ("DMM 阶段 B 异常保留堆栈并收口断线", TestDmmStageBSourceContract),
     ("DMM 模式初始化连接异常会标记断线", TestDmmModeFailureMarksDisconnected),
     ("阶段 C Modbus 日志包含拒绝、堆栈、慢请求和释放上下文", TestStageCModbusLogContract),
+    ("CTRL-FIX-01 复位停止请求门禁与复位高电平轮询契约", TestCtrlFix01SourceContract),
     ("启动拒绝记录来源原因和是否清除启动请求", () =>
     {
         var source = File.ReadAllText(Path.Combine(
@@ -1571,6 +1572,44 @@ static void TestStageCModbusLogContract()
         "[Modbus诊断][自定义请求超时] TID={TID}, FC={FC}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
         StringComparison.Ordinal));
     AssertEqual(true, normalized.Contains("_requestLock.Dispose();", StringComparison.Ordinal));
+}
+
+static void TestCtrlFix01SourceContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"))
+        .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    AssertEqual(true, source.Contains("private bool IsResetRequestInProgress()", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("private bool IsStopRequestInProgress()", StringComparison.Ordinal));
+    AssertMethodCallOrder(source, "TriggerDebugResetAsync", "IsResetRequestInProgress()", "RequestResetAsync");
+    AssertMethodCallOrder(source, "TriggerPlcResetAsync", "IsResetRequestInProgress()", "RequestResetAsync");
+    AssertMethodCallOrder(source, "TriggerDebugStopAsync", "IsStopRequestInProgress()", "RequestStopAsync");
+    AssertEqual(true, source.Contains("if (UiState == TestUIState.ResetFailed)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("_resetSignalHandled = false;", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("if (inputs.IsResetRequested && !_resetSignalHandled)", StringComparison.Ordinal));
+    AssertEqual(false, source.Contains("if (_resetSignalHandled)\n                return;", StringComparison.Ordinal));
+
+    var emergencyStart = source.IndexOf("private async Task TriggerDebugEmergencyStopAsync()", StringComparison.Ordinal);
+    var emergencyEnd = source.IndexOf("#endregion", emergencyStart, StringComparison.Ordinal);
+    var emergencyMethod = source[emergencyStart..emergencyEnd];
+    AssertEqual(false, emergencyMethod.Contains("IsResetRequestInProgress()", StringComparison.Ordinal));
+    AssertEqual(false, emergencyMethod.Contains("IsStopRequestInProgress()", StringComparison.Ordinal));
+}
+
+static void AssertMethodCallOrder(string source, string methodName, string guard, string request)
+{
+    var signature = $"private async Task {methodName}()";
+    var methodStart = source.IndexOf(signature, StringComparison.Ordinal);
+    var methodEnd = source.IndexOf("private async Task", methodStart + signature.Length, StringComparison.Ordinal);
+    if (methodEnd < 0)
+        methodEnd = source.Length;
+
+    var method = source[methodStart..methodEnd];
+    AssertEqual(true, method.Contains(guard, StringComparison.Ordinal));
+    AssertEqual(true, method.IndexOf(guard, StringComparison.Ordinal) < method.IndexOf(request, StringComparison.Ordinal));
 }
 
 static void TestStageDSemiPhysicalLogContract()

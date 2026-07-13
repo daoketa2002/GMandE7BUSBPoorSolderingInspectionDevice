@@ -1817,11 +1817,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // 复位信号处理（优先级最高，急停状态下也能触发）
         // 真实模式下工人按实体按钮 → PLC DT121=1 → 轮询捕获 → 执行复位
         // ════════════════════════════════════════════════════════
-        if (inputs.IsResetRequested)
+        if (inputs.IsResetRequested && !_resetSignalHandled)
         {
-            if (_resetSignalHandled)
-                return;
-
             if (_currentControlAction == InspectionControlAction.EmergencyStopping)
             {
                 _logger.LogWarning("[急停流程] Reset 请求被拒绝，需先解除急停后人工复位，来源=PLC轮询");
@@ -2789,6 +2786,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         LogSemiPhysicalDebugAction("Stop", "DT122", 1);
 
+        if (IsStopRequestInProgress())
+        {
+            _logger.LogWarning("[动作仲裁][忽略] 当前正在停止或等待复位，重复停止请求未写入 DT122，UiState={UiState}, Action={Action}",
+                UiState, _currentControlAction);
+            return;
+        }
+
         _logger.LogInformation("[调试按钮][停止][请求] 上位机写入 DT122=1，等待 PLC 轮询统一消费");
 
         // 暂停 UI 轮询，避免写信号时与 Polling 产生并发 pending
@@ -2814,6 +2818,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private async Task TriggerDebugResetAsync()
     {
         LogSemiPhysicalDebugAction("Reset", "DT121", 1);
+
+        if (IsResetRequestInProgress())
+        {
+            _logger.LogWarning("[动作仲裁][忽略] 复位正在执行，重复复位请求未写入 DT121，UiState={UiState}, Action={Action}",
+                UiState, _currentControlAction);
+            return;
+        }
+
+        if (UiState == TestUIState.ResetFailed)
+        {
+            _resetSignalHandled = false;
+            _logger.LogWarning("[复位重试] 当前为 ResetFailed，已重新武装复位请求处理标志");
+        }
 
         _logger.LogInformation("[调试按钮][复位][请求] 上位机写入 DT121=1，等待 PLC 轮询统一消费");
 
@@ -2887,6 +2904,26 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 判断复位流程是否已经占用控制入口，避免调试按钮再次写入 DT121=1。
+    /// </summary>
+    private bool IsResetRequestInProgress()
+    {
+        return _currentControlAction == InspectionControlAction.Resetting
+               || _isResetting
+               || UiState == TestUIState.Resetting;
+    }
+
+    /// <summary>
+    /// 判断停止请求是否应被当前停止、复位或待复位状态吸收，避免再次写入 DT122=1。
+    /// </summary>
+    private bool IsStopRequestInProgress()
+    {
+        return _currentControlAction is InspectionControlAction.Stopping or InspectionControlAction.Resetting
+               || _isResetting
+               || UiState is TestUIState.Resetting or TestUIState.AwaitingReset or TestUIState.Paused;
+    }
+
+    /// <summary>
     /// 半实物/真实模式复位按钮（写 DT121=1，写后等待 PLC 轮询统一消费）。
     /// 真实模式下工人按实体按钮时由 PLC 轮询触发 ExecuteResetFlowAsync，
     /// 上位机按钮作为备用入口。
@@ -2894,6 +2931,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerPlcResetAsync()
     {
+        if (IsResetRequestInProgress())
+        {
+            _logger.LogWarning("[动作仲裁][忽略] 复位正在执行，重复复位请求未写入 DT121，UiState={UiState}, Action={Action}",
+                UiState, _currentControlAction);
+            return;
+        }
+
+        if (UiState == TestUIState.ResetFailed)
+        {
+            _resetSignalHandled = false;
+            _logger.LogWarning("[复位重试] 当前为 ResetFailed，已重新武装复位请求处理标志");
+        }
+
         var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
 
         if (!HandleControlSignalWriteResult(result, "复位", "DT121", "复位"))
