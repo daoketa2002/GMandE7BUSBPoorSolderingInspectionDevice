@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
@@ -38,7 +39,10 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     private FP0HCommunicationConfig? _config;
     private bool _disposed;
 
-    private const byte DefaultUnitId = 1;
+    /// <summary>当前正式 PLC 读写使用的配置 Unit ID，与临时测试保持一致。</summary>
+    private byte ConfiguredUnitId => _config is null
+        ? throw new InvalidOperationException("PLC 尚未应用通信配置")
+        : checked((byte)_config.SlaveId);
     private const int ReadInputsRegisterCount = 10; // 一次读 DT120~129 共10个寄存器
 
     public bool IsConnected => _modbusClient.IsConnected;
@@ -137,7 +141,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         {
             // 从 DT120 开始读 10 个保持寄存器（覆盖 DT120~DT129）
             var response = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.StartSignal, ReadInputsRegisterCount, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                ConfiguredUnitId, PlcAddressMap.StartSignal, ReadInputsRegisterCount, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult<PlcMachineInputs>.Failure("读取 PLC 输入信号失败: 无响应");
@@ -156,7 +160,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             bool relayCompleted = false;
             bool alarmReleased = false;
             var statusResp = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.RelayActionCompleted, 2, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                ConfiguredUnitId, PlcAddressMap.RelayActionCompleted, 2, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
             if (statusResp?.Data != null && statusResp.Data.Length >= 4)
             {
                 relayCompleted = BinaryPrimitives.ReadUInt16BigEndian(statusResp.Data.AsSpan(0)) == 1;
@@ -252,7 +256,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         {
             // 先写左引脚：Select=1, Polarity=值
             var leftResp = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, leftSelectAddr,
+                ConfiguredUnitId, leftSelectAddr,
                 new[] { (ushort)1, leftPolarityCode }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (leftResp is null)
@@ -262,7 +266,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
 
             // 再写右引脚：Select=1, Polarity=值
             var rightResp = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, rightSelectAddr,
+                ConfiguredUnitId, rightSelectAddr,
                 new[] { (ushort)1, rightPolarityCode }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (rightResp is null)
@@ -291,23 +295,38 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     {
         ushort addr = PlcAddressMap.RelayActionCompleted;
         var deadline = DateTime.UtcNow + timeout;
+        var stopwatch = Stopwatch.StartNew();
 
         while (!ct.IsCancellationRequested)
         {
             if (DateTime.UtcNow >= deadline)
             {
-                _logger.LogWarning("[PLC动作][审计] 等待 DT302=1 超时 ({TimeoutSeconds}s)", timeout.TotalSeconds);
+                stopwatch.Stop();
+                _logger.LogWarning(
+                    "[PLC动作][DT302] 等待继电器动作完成超时，上限={TimeoutMs}ms，实际耗时={ElapsedMs}ms",
+                    (int)timeout.TotalMilliseconds, stopwatch.ElapsedMilliseconds);
                 return PlcOperationResult.Failure($"等待 DT302=1 超时 ({timeout.TotalSeconds}s)");
             }
 
             try
             {
                 var response = await _modbusClient.ReadHoldingRegistersAsync(
-                    DefaultUnitId, addr, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                    ConfiguredUnitId, addr, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
                 if (response?.Data != null && response.Data.Length >= 2
                     && BinaryPrimitives.ReadUInt16BigEndian(response.Data.AsSpan(0)) == 1)
+                {
+                    stopwatch.Stop();
+                    long elapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+                    if (elapsedMilliseconds > 1000)
+                    {
+                        _logger.LogWarning(
+                            "[PLC动作][DT302] 继电器动作完成耗时较长，实际耗时={ElapsedMs}ms",
+                            elapsedMilliseconds);
+                    }
+
                     return PlcOperationResult.Success("DT302=1 继电器动作完成", response);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -370,7 +389,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             ushort productNg = isOk ? (ushort)0 : (ushort)1;
 
             var response = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, PlcAddressMap.ProductOk,
+                ConfiguredUnitId, PlcAddressMap.ProductOk,
                 new[] { productOk, productNg }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
@@ -411,7 +430,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             var response = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, PlcAddressMap.ProductOk,
+                ConfiguredUnitId, PlcAddressMap.ProductOk,
                 new ushort[] { 0, 0 }, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
@@ -445,7 +464,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             // 56 个 0 值寄存器
             ushort[] zeros = new ushort[PlcAddressMap.PinOutputRegisterCount];
             var response = await _modbusClient.WriteMultipleRegistersAsync(
-                DefaultUnitId, PlcAddressMap.PinOutputStart, zeros, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                ConfiguredUnitId, PlcAddressMap.PinOutputStart, zeros, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult.Failure("清空 DT130~DT185 失败：无响应");
@@ -502,7 +521,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             var response = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.StartSignal, 4, ct, ModbusTimeoutConstants.ControlReadMs).ConfigureAwait(false);
+                ConfiguredUnitId, PlcAddressMap.StartSignal, 4, ct, ModbusTimeoutConstants.ControlReadMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult<PlcControlSignals>.Failure("读取控制信号失败: 无响应");
@@ -545,7 +564,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             var response = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.RelayActionCompleted, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                    ConfiguredUnitId, PlcAddressMap.RelayActionCompleted, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult<bool>.Failure("读取 DT302 失败: 无响应");
@@ -576,7 +595,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             var response = await _modbusClient.ReadHoldingRegistersAsync(
-                DefaultUnitId, PlcAddressMap.AlarmReleased, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                ConfiguredUnitId, PlcAddressMap.AlarmReleased, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult<bool>.Failure("读取 DT303 失败: 无响应");
@@ -616,7 +635,7 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         try
         {
             var response = await _modbusClient.WriteSingleRegisterAsync(
-                DefaultUnitId, address, value, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                ConfiguredUnitId, address, value, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
 
             if (response is null)
                 return PlcOperationResult.Failure($"{name}写入失败: 无响应");

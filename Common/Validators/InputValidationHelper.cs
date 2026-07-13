@@ -108,15 +108,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
         #region 引脚名称校验
 
         /// <summary>
-        /// 引脚名正则：大写A或B开头 + 1~2位数字（如 A1、B20）
-        /// </summary>
-        private static readonly Regex PinNameRegex = new(
-            @"^[AB]\d{1,2}$",
-            RegexOptions.Compiled);
-
-        /// <summary>
-        /// 校验单个引脚名称是否合法（如 A1、B20、A10）
-        /// 格式：大写A或B + 1~2位数字
+        /// 校验单个引脚名称是否合法。
+        /// 当前接线表只开放 A1～A12、B1～B12，大小写由调用方在保存前统一标准化。
         /// </summary>
         /// <param name="pinName">引脚名称</param>
         /// <returns>合法返回 true，否则 false</returns>
@@ -124,7 +117,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
         {
             if (string.IsNullOrWhiteSpace(pinName))
                 return false;
-            return PinNameRegex.IsMatch(pinName.Trim());
+
+            string normalized = pinName.Trim().ToUpperInvariant();
+            if (normalized.Length < 2 || (normalized[0] != 'A' && normalized[0] != 'B'))
+                return false;
+
+            return int.TryParse(normalized.AsSpan(1), out int pinNumber)
+                && pinNumber is >= 1 and <= 12;
         }
 
         #endregion
@@ -280,6 +279,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
 
         #endregion
 
+        #region 扫描枪串口参数校验
+
+        /// <summary>扫描枪允许的波特率列表。</summary>
+        public static readonly int[] AllowedScannerBaudRates = { 9600, 19200, 38400, 57600, 115200 };
+
+        public static bool IsValidBaudRate(int value)
+        {
+            foreach (int allowed in AllowedScannerBaudRates)
+            {
+                if (allowed == value)
+                    return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsValidParity(string? value)
+            => value is not null && (value.Equals("None", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("Odd", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("Even", StringComparison.OrdinalIgnoreCase));
+
+        public static bool IsValidDataBits(int value) => value is >= 5 and <= 8;
+
+        public static bool IsValidStopBits(string? value)
+            => value is "1" or "1.5" or "2";
+
+        public static bool IsValidFlowControl(string? value)
+            => value is not null && (value.Equals("None", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("XOnXOff", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("RequestToSend", StringComparison.OrdinalIgnoreCase));
+
+        #endregion
+
         #region 超时值范围
 
         /// <summary>
@@ -298,60 +330,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
 
         #endregion
 
-        #region 心跳间隔范围
-
-        /// <summary>
-        /// 心跳检测间隔（秒）有效范围
-        /// </summary>
-        public const int HealthCheckIntervalMinSec = 1;
-        public const int HealthCheckIntervalMaxSec = 3600; // 1小时
-
-        /// <summary>
-        /// 校验心跳间隔秒数是否在合理范围内
-        /// </summary>
-        public static bool IsValidHealthCheckInterval(int seconds)
-        {
-            return seconds >= HealthCheckIntervalMinSec && seconds <= HealthCheckIntervalMaxSec;
-        }
-
-        #endregion
-
-        #region 重连延迟范围
-
-        /// <summary>
-        /// 重连延迟（毫秒）有效范围
-        /// </summary>
-        public const int ReconnectDelayMsMin = 100;
-        public const int ReconnectDelayMsMax = 60_000;
-
-        /// <summary>
-        /// 校验重连延迟是否在合理范围内
-        /// </summary>
-        public static bool IsValidReconnectDelayMs(int value)
-        {
-            return value >= ReconnectDelayMsMin && value <= ReconnectDelayMsMax;
-        }
-
-        #endregion
-
-        #region 重连次数范围
-
-        /// <summary>
-        /// 最大重连次数有效范围
-        /// </summary>
-        public const int ReconnectAttemptsMin = 1;
-        public const int ReconnectAttemptsMax = 100;
-
-        /// <summary>
-        /// 校验最大重连次数是否在合理范围内
-        /// </summary>
-        public static bool IsValidReconnectAttempts(int value)
-        {
-            return value >= ReconnectAttemptsMin && value <= ReconnectAttemptsMax;
-        }
-
-        #endregion
-
         #region Modbus 从站地址范围
 
         /// <summary>
@@ -366,24 +344,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
         public static bool IsValidModbusSlaveId(int value)
         {
             return value >= ModbusSlaveIdMin && value <= ModbusSlaveIdMax;
-        }
-
-        #endregion
-
-        #region 数据超时范围
-
-        /// <summary>
-        /// 数据超时（秒）有效范围
-        /// </summary>
-        public const int DataTimeoutMinSec = 3;
-        public const int DataTimeoutMaxSec = 3600;
-
-        /// <summary>
-        /// 校验数据超时秒数是否在合理范围内
-        /// </summary>
-        public static bool IsValidDataTimeout(int seconds)
-        {
-            return seconds >= DataTimeoutMinSec && seconds <= DataTimeoutMaxSec;
         }
 
         #endregion
@@ -423,6 +383,40 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators
         /// 引脚名称最大长度（A1~B20 最长3字符，但允许手动输入更长的含前缀名称）
         /// </summary>
         public const int MaxPinNameLength = 10;
+
+        /// <summary>
+        /// 校验序列号：去除首尾空白后必须非空、不超过 50 个字符且不含控制字符。
+        /// </summary>
+        public static bool IsValidSerialNumber(string? value)
+        {
+            return IsValidFreeText(value, MaxSerialNumberLength);
+        }
+
+        /// <summary>
+        /// 校验作业员名称：去除首尾空白后必须非空、不超过 20 个字符且不含控制字符。
+        /// </summary>
+        public static bool IsValidOperatorName(string? value)
+        {
+            return IsValidFreeText(value, MaxOperatorNameLength);
+        }
+
+        private static bool IsValidFreeText(string? value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            string normalized = value.Trim();
+            if (normalized.Length > maxLength)
+                return false;
+
+            foreach (char character in normalized)
+            {
+                if (char.IsControl(character))
+                    return false;
+            }
+
+            return true;
+        }
 
         #endregion
     }

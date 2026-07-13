@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
@@ -63,9 +64,10 @@ public partial class OperatorSelectionDialogViewModel : ObservableObject
     private async Task AddOperatorAsync()
     {
         var name = InputName.Trim();
-        if (string.IsNullOrWhiteSpace(name))
+        if (!InputValidationHelper.IsValidOperatorName(name))
         {
-            MessageBox.Show("请输入有效的作业员名字。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            HintText = "作业员名称不能为空、不能超过 20 个字符且不能包含控制字符";
+            _logger.LogWarning("[作业员][校验拒绝] 名称不符合输入规则");
             return;
         }
 

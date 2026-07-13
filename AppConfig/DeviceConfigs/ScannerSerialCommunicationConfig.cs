@@ -17,9 +17,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         private int _dataBits = 8;
         private string _stopBits = "1";
         private string _flowControl = "None";
-        private HealthCheckMode _healthCheckMode = HealthCheckMode.DataActivity;
-        private int _healthCheckIntervalSeconds = 5;
-        private int _lastDataTimeoutSeconds = 30;
 
         /// <summary>
         /// 串口号（如COM9）
@@ -78,29 +75,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         /// <summary>
         /// 心跳检测模式（默认：DataActivity）
         /// </summary>
-        public HealthCheckMode HealthCheckMode
-        {
-            get => _healthCheckMode;
-            set { _healthCheckMode = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 心跳检查间隔（秒）
         /// </summary>
-        public int HealthCheckIntervalSeconds
-        {
-            get => _healthCheckIntervalSeconds;
-            set { _healthCheckIntervalSeconds = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 数据活动超时时间（秒）
         /// </summary>
-        public int LastDataTimeoutSeconds
-        {
-            get => _lastDataTimeoutSeconds;
-            set { _lastDataTimeoutSeconds = value; OnPropertyChanged(); }
-        }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 

@@ -64,12 +64,12 @@ public static class InspectionStartValidator
         // 基本信息检查
         if (string.IsNullOrWhiteSpace(request.ModelName))
             return Fail("未输入机种名称，无法启动");
-        if (string.IsNullOrWhiteSpace(request.SerialNumber))
-            return Fail("未输入序列号，无法启动");
+        if (!InputValidationHelper.IsValidSerialNumber(request.SerialNumber))
+            return Fail("序列号为空、超长或包含控制字符，无法启动");
         if (string.IsNullOrWhiteSpace(request.SchemeName) || request.IsSchemeNameInvalid)
             return Fail("当前方案无效或不属于当前机种，无法启动");
-        if (string.IsNullOrWhiteSpace(request.OperatorName))
-            return Fail("未指定作业员，无法启动");
+        if (!InputValidationHelper.IsValidOperatorName(request.OperatorName))
+            return Fail("作业员名称为空、超长或包含控制字符，无法启动");
 
         // 设备就绪检查
         if (!request.IsPlcConnected)

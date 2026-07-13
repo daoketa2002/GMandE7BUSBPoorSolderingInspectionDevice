@@ -15,10 +15,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         private string _ipAddress = "192.168.1.4";
         private int _port = 5025;
         private int _receiveTimeoutMs = 5000;
-        private int _sendTimeoutMs = 5000;
-        private HealthCheckMode _healthCheckMode = HealthCheckMode.CommandResponse;
-        private int _healthCheckIntervalSeconds = 5;
-        private int _lastDataTimeoutSeconds = 30;
 
         /// <summary>
         /// 万用表IP地址
@@ -50,38 +46,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         /// <summary>
         /// 发送超时时间（毫秒）
         /// </summary>
-        public int SendTimeoutMs
-        {
-            get => _sendTimeoutMs;
-            set { _sendTimeoutMs = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 心跳检测模式（默认：CommandResponse）
         /// </summary>
-        public HealthCheckMode HealthCheckMode
-        {
-            get => _healthCheckMode;
-            set { _healthCheckMode = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 心跳检查间隔（秒）
         /// </summary>
-        public int HealthCheckIntervalSeconds
-        {
-            get => _healthCheckIntervalSeconds;
-            set { _healthCheckIntervalSeconds = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 数据活动超时时间（秒）
         /// </summary>
-        public int LastDataTimeoutSeconds
-        {
-            get => _lastDataTimeoutSeconds;
-            set { _lastDataTimeoutSeconds = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。

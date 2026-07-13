@@ -10,13 +10,6 @@ public class ModbusTcpClientOptions
     public string Host { get; init; } = "192.168.1.3";
     public int Port { get; init; } = 502;
     public byte UnitId { get; init; } = 1;
-    public int ReceiveTimeoutMs { get; init; } = 5000;
-    public int SendTimeoutMs { get; init; } = 5000;
-    public int ReconnectDelayMs { get; init; } = 2000;
-    public int MaxReconnectAttempts { get; init; } = 12;
-    public Models.HealthCheckMode HealthCheckMode { get; init; } = Models.HealthCheckMode.Disabled;
-    public int HealthCheckIntervalSeconds { get; init; } = 5;
-    public int LastDataTimeoutSeconds { get; init; } = 30;
 
     /// <summary>
     /// 从 FP0HCommunicationConfig 创建客户端选项。
@@ -27,13 +20,6 @@ public class ModbusTcpClientOptions
         {
             Host = config.IpAddress,
             Port = config.Port,
-            UnitId = (byte)config.SlaveId,
-            ReceiveTimeoutMs = config.ReceiveTimeoutMs,
-            SendTimeoutMs = config.SendTimeoutMs,
-            ReconnectDelayMs = config.ReconnectDelayMs,
-            MaxReconnectAttempts = config.MaxReconnectAttempts,
-            HealthCheckMode = config.HealthCheckMode,
-            HealthCheckIntervalSeconds = config.HealthCheckIntervalSeconds,
-            LastDataTimeoutSeconds = config.LastDataTimeoutSeconds
+            UnitId = checked((byte)config.SlaveId)
         };
 }

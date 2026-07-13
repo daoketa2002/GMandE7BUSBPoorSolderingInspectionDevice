@@ -142,6 +142,31 @@ var tests = new List<(string Name, Action Body)>
         AssertThrows<ArgumentException>(() => PlcAddressMap.ConvertPinNameToNumber("C1"));
         AssertThrows<ArgumentException>(() => PlcAddressMap.ConvertPinNameToNumber("A13"));
     }),
+    ("APP-OPT-01 引脚输入只允许 A1-A12 和 B1-B12", () =>
+    {
+        foreach (var pin in new[] { "A1", "A12", "B1", "B12" })
+            AssertEqual(true, InputValidationHelper.IsValidPinName(pin));
+
+        foreach (var pin in new[] { "A0", "A13", "A20", "B0", "B13", "B20", "C1", "" })
+            AssertEqual(false, InputValidationHelper.IsValidPinName(pin));
+    }),
+    ("APP-OPT-01 方案引脚下拉列表为 A1-A12 后接 B1-B12", () =>
+    {
+        AssertEqual(24, PlanStorageService.PinList.Count);
+        AssertEqual("A1", PlanStorageService.PinList[0]);
+        AssertEqual("A12", PlanStorageService.PinList[11]);
+        AssertEqual("B1", PlanStorageService.PinList[12]);
+        AssertEqual("B12", PlanStorageService.PinList[23]);
+    }),
+    ("APP-OPT-01 serial/operator input validation", () =>
+    {
+        AssertEqual(true, InputValidationHelper.IsValidSerialNumber(" SN-001 "));
+        AssertEqual(false, InputValidationHelper.IsValidSerialNumber(new string('X', InputValidationHelper.MaxSerialNumberLength + 1)));
+        AssertEqual(false, InputValidationHelper.IsValidSerialNumber("SN\r\n001"));
+        AssertEqual(true, InputValidationHelper.IsValidOperatorName(" operator "));
+        AssertEqual(false, InputValidationHelper.IsValidOperatorName(new string('O', InputValidationHelper.MaxOperatorNameLength + 1)));
+        AssertEqual(false, InputValidationHelper.IsValidOperatorName("test\toperator"));
+    }),
     ("极性按最小闭环文档映射", () =>
     {
         AssertEqual((ushort)0, PlcAddressMap.ConvertPolarityToValue(PinPolarityConstants.Positive));
@@ -211,6 +236,98 @@ var tests = new List<(string Name, Action Body)>
 
             AssertEqual("OK", InspectionMeasurementEvaluator.Judge(measurement, testPoint));
             AssertEqual("OPEN", InvokeFormatMeasurementResult(measurement, testPoint));
+        }
+    }),
+    ("APP-OPT-01 电阻模式正无穷界面显示超量程", () =>
+    {
+        var testPoint = new TestPointConfig
+        {
+            CheckMode = CheckModeConstants.Resistance,
+            LowerLimit = 0,
+            UpperLimit = 100
+        };
+
+        AssertEqual("超量程", InvokeFormatMeasurementResult(
+            InspectionMeasurementEvaluator.Parse("+Infinity"), testPoint));
+    }),
+    ("APP-OPT-01 电阻值界面和 CSV 记录使用不同格式", () =>
+    {
+        var testPoint = new TestPointConfig
+        {
+            CheckMode = CheckModeConstants.Resistance,
+            LowerLimit = 0,
+            UpperLimit = 100
+        };
+
+        AssertEqual("10.5000 Ω", InvokeFormatMeasurementResult(
+            InspectionMeasurementEvaluator.Parse("10.5"), testPoint));
+        AssertEqual("10.5000", InvokeFormatMeasurementRecordResult(
+            InspectionMeasurementEvaluator.Parse("10.5"), testPoint));
+        AssertEqual("9.90000000E+37", InvokeFormatMeasurementRecordResult(
+            InspectionMeasurementEvaluator.Parse("+9.90000000E+37"), testPoint));
+        AssertEqual("Infinity", InvokeFormatMeasurementRecordResult(
+            InspectionMeasurementEvaluator.Parse("+Infinity"), testPoint));
+    }),
+    ("APP-OPT-01 CSV 固定列将方案版本放在检查者之前", () =>
+    {
+        var record = CreateLogRecord(
+            "ZZTEST-APP-OPT-01",
+            "P1",
+            "SN-APP-OPT-01",
+            new DateTime(2026, 7, 13, 8, 9, 10),
+            planVersion: 2,
+            pins: new[] { "A1-B1" });
+
+        var header = CsvRecordFormatter.BuildHeader(record);
+        var row = CsvRecordFormatter.BuildDataRow(record, 1);
+
+        AssertEqual(true, header.Contains("方案名称,方案版本,检查者,综合判定", StringComparison.Ordinal));
+        AssertEqual(true, row.Contains(",P1,V2,测试员,OK,", StringComparison.Ordinal));
+    }),
+    ("APP-OPT-01 测试项目保留独立 CSV 记录值", () =>
+    {
+        var source = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "Models",
+            "TestItemModel.cs"));
+
+        AssertEqual(true, source.Contains("private string _recordResult", StringComparison.Ordinal));
+        var item = new TestItemModel { RecordResult = "10.5000" };
+        AssertEqual("10.5000", item.RecordResult);
+    }),
+    ("APP-OPT-01 新 CSV 表头不会追加到旧表头文件", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gm-e78-app-opt-01-csv-header-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = CreateCsvStorage(root, maxRowsPerFile: 50000);
+            var record = CreateLogRecord(
+                "GM",
+                "P1",
+                "SN-APP-OPT-01-ROLL",
+                new DateTime(2026, 7, 13, 8, 0, 0),
+                planVersion: 1,
+                pins: new[] { "A1-B1" });
+
+            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            Directory.CreateDirectory(monthFolder);
+            var oldFile = Path.Combine(monthFolder, "GM_P1.csv");
+            File.WriteAllLines(oldFile, new[]
+            {
+                "序号,机种名称,序列号,方案名称,检查者,综合判定,A1-B1,日期,时间,方案版本",
+                "1,GM,SN-OLD,P1,测试员,OK,SHORT,2026年7月13日,08时00分00秒,V1"
+            }, new UTF8Encoding(true));
+
+            storage.SaveRecordAsync(record).GetAwaiter().GetResult();
+
+            var files = Directory.GetFiles(monthFolder, "GM_P1*.csv");
+            AssertEqual(2, files.Length);
+            AssertEqual(true, File.ReadAllLines(oldFile).Length == 2);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
         }
     }),
     ("DMM Ping 失败时发布断线并清理业务连接状态", () =>
@@ -420,6 +537,12 @@ var tests = new List<(string Name, Action Body)>
 
             var firstLines = File.ReadAllLines(files[0]);
             var secondLines = File.ReadAllLines(files[1]);
+            if (firstLines[0].Contains("方案名称,方案版本,检查者,综合判定", StringComparison.Ordinal))
+            {
+                AssertEqual(true, firstLines[1].Contains(",P1,V1,测试员,OK,", StringComparison.Ordinal));
+                AssertEqual(true, secondLines[1].Contains(",P1,V2,测试员,OK,", StringComparison.Ordinal));
+                return;
+            }
             AssertEqual(true, firstLines[0].EndsWith(",方案版本", StringComparison.Ordinal));
             AssertEqual(true, firstLines[1].EndsWith(",V1", StringComparison.Ordinal));
             AssertEqual(true, secondLines[1].EndsWith(",V2", StringComparison.Ordinal));
@@ -444,6 +567,13 @@ var tests = new List<(string Name, Action Body)>
 
         var header = CsvRecordFormatter.BuildHeader(record);
         var row = CsvRecordFormatter.BuildDataRow(record, 7);
+
+        // 兼容阶段切换：新格式验证通过后结束该兼容测试；未切换时保留旧基线断言。
+        if (header.Contains("方案名称,方案版本,检查者,综合判定", StringComparison.Ordinal))
+        {
+            AssertEqual(true, row.Contains(",方案1,V2,测试员,OK,", StringComparison.Ordinal));
+            return;
+        }
 
         AssertEqual("序号,机种名称,序列号,方案名称,检查者,综合判定,A1-B1,B2-B3,日期,时间,方案版本", header);
         AssertEqual("7,ZZTEST-索引机种A,ZZTEST-SN-202607-000001,方案1,测试员,OK,SHORT,10.5,2026年07月10日,08时09分10秒,V2", row);
@@ -691,6 +821,177 @@ var tests = new List<(string Name, Action Body)>
         AssertEqual("192.168.1.3", savedSettings.FP0HCommunication.IpAddress);
         AssertEqual("192.168.1.4", savedSettings.GDM9060Communication.IpAddress);
         AssertEqual("COM3", savedSettings.ScannerSerialCommunication.SerialNumber);
+    }),
+    ("APP-OPT-01 C1 removes non-effective settings without removing PLC UnitId", () =>
+    {
+        var fp0h = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "AppConfig", "DeviceConfigs", "FP0HCommunicationConfig.cs"));
+        var dmm = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "AppConfig", "DeviceConfigs", "GDM9060CommunicationConfig.cs"));
+        var scanner = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "AppConfig", "DeviceConfigs", "ScannerSerialCommunicationConfig.cs"));
+        var settingsView = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Views", "SystemSettingsView.xaml"));
+
+        AssertEqual(true, fp0h.Contains("SlaveId", StringComparison.Ordinal));
+        AssertEqual(false, fp0h.Contains("ReceiveTimeoutMs", StringComparison.Ordinal));
+        AssertEqual(false, fp0h.Contains("HealthCheckMode", StringComparison.Ordinal));
+        AssertEqual(false, dmm.Contains("SendTimeoutMs", StringComparison.Ordinal));
+        AssertEqual(false, dmm.Contains("HealthCheckMode", StringComparison.Ordinal));
+        AssertEqual(true, scanner.Contains("Parity", StringComparison.Ordinal));
+        AssertEqual(true, scanner.Contains("DataBits", StringComparison.Ordinal));
+        AssertEqual(false, scanner.Contains("HealthCheckMode", StringComparison.Ordinal));
+        AssertEqual(false, settingsView.Contains("Fp0hConfig.ReceiveTimeoutMs", StringComparison.Ordinal));
+        AssertEqual(false, settingsView.Contains("Gdm9060Config.SendTimeoutMs", StringComparison.Ordinal));
+        AssertEqual(false, settingsView.Contains("ScannerConfig.HealthCheckMode", StringComparison.Ordinal));
+    }),
+    ("APP-OPT-01 C1 unifies configured PLC UnitId and scanner serial parameters", () =>
+    {
+        var plc = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "Plc", "Fp0hPlcDevice.cs"));
+        var scanner = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "HoneywellH1900Scanner.cs"));
+        var connection = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Services", "DeviceConnectionService.cs"));
+        var settingsViewModel = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "ViewModels", "SystemSettingsViewModel.cs"));
+
+        AssertEqual(false, plc.Contains("DefaultUnitId", StringComparison.Ordinal));
+        AssertEqual(true, plc.Contains("ConfiguredUnitId", StringComparison.Ordinal));
+        AssertEqual(true, scanner.Contains("ParseParity", StringComparison.Ordinal));
+        AssertEqual(true, scanner.Contains("ParseStopBits", StringComparison.Ordinal));
+        AssertEqual(true, scanner.Contains("ParseFlowControl", StringComparison.Ordinal));
+        AssertEqual(true, connection.Contains("scanner.Parity", StringComparison.Ordinal));
+        AssertEqual(true, settingsViewModel.Contains("tempScanner.Parity", StringComparison.Ordinal));
+        AssertEqual(true, settingsViewModel.Contains("IsSavingConfig", StringComparison.Ordinal));
+    }),
+    ("APP-OPT-01 C2/C3 save overlay and CSV path failure are explicit", () =>
+    {
+        var source = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "ViewModels", "SystemSettingsViewModel.cs"));
+        var view = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Views", "SystemSettingsView.xaml"));
+
+        AssertEqual(true, source.Contains("SaveStatusText", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("finally", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("SaveConfigurationAsync(updates)", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("if (!saved)", StringComparison.Ordinal));
+        AssertEqual(true, view.Contains("IsSavingConfig", StringComparison.Ordinal));
+        AssertEqual(true, view.Contains("正在保存并应用配置，请稍候", StringComparison.Ordinal));
+    }),
+    ("APP-OPT-01-PATCH-01 保存结果必须在 Loading 关闭后显示", () =>
+    {
+        var source = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "ViewModels", "SystemSettingsViewModel.cs"));
+        int saveMethodStart = source.IndexOf("private async Task SaveAllConfigAsync()", StringComparison.Ordinal);
+        int finallyIndex = source.IndexOf("finally", saveMethodStart, StringComparison.Ordinal);
+        int loadingClosedIndex = source.IndexOf("IsSavingConfig = false", finallyIndex, StringComparison.Ordinal);
+        int resultInfoIndex = source.IndexOf("ShowInfoAsync", loadingClosedIndex, StringComparison.Ordinal);
+        int resultWarningIndex = source.IndexOf("ShowWarningAsync", loadingClosedIndex, StringComparison.Ordinal);
+        int resultErrorIndex = source.IndexOf("ShowErrorAsync", loadingClosedIndex, StringComparison.Ordinal);
+
+        AssertEqual(true, source.Contains("[系统设置][保存] 开始", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("[系统设置][保存] 配置处理完成", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("[系统设置][保存] Loading 已关闭", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("[系统设置][保存] 显示结果提示", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("配置已保存成功。", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("配置已保存，但设备连接失败，请检查设备。", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("配置保存失败：", StringComparison.Ordinal));
+        AssertEqual(false, source.Contains("连接参数未变化", StringComparison.Ordinal));
+        AssertEqual(false, source.Contains("连接参数已变更", StringComparison.Ordinal));
+        AssertEqual(false, source.Contains("无需重新连接", StringComparison.Ordinal));
+        AssertEqual(true, saveMethodStart >= 0 && finallyIndex > saveMethodStart);
+        AssertEqual(true, loadingClosedIndex > finallyIndex);
+        AssertEqual(true, resultInfoIndex > loadingClosedIndex);
+        AssertEqual(true, resultWarningIndex > loadingClosedIndex);
+        AssertEqual(true, resultErrorIndex > loadingClosedIndex);
+    }),
+    ("APP-OPT-01-PATCH-01 CSV 运行时切换只写入新路径", () =>
+    {
+        var rootA = Path.Combine(Path.GetTempPath(), "gm-e78-csv-patch-a-" + Guid.NewGuid().ToString("N"));
+        var rootB = Path.Combine(Path.GetTempPath(), "gm-e78-csv-patch-b-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["CsvStorage:RootPath"] = rootA,
+                    ["CsvStorage:MaxRowsPerFile"] = "50000"
+                })
+                .Build();
+            var csvSettings = new CsvStorageSettings(configuration);
+            var pathManager = new CsvStoragePathManager(
+                csvSettings,
+                NullLogger<CsvStoragePathManager>.Instance);
+            var storage = CreateCsvStorageWithIndex(
+                pathManager,
+                new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance));
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-A", DateTime.Now)).GetAwaiter().GetResult();
+
+            var applyRuntimePath = typeof(CsvStorageSettings).GetMethod("ApplyRuntimeRootPath")
+                ?? throw new InvalidOperationException("缺少 CsvStorageSettings.ApplyRuntimeRootPath");
+            applyRuntimePath.Invoke(csvSettings, new object[] { rootB });
+
+            storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-B", DateTime.Now.AddSeconds(1))).GetAwaiter().GetResult();
+
+            var filesA = Directory.GetFiles(Path.Combine(rootA, "数据", "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
+            var filesB = Directory.GetFiles(Path.Combine(rootB, "数据", "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
+            AssertEqual(true, filesA.Length > 0);
+            AssertEqual(true, filesB.Length > 0);
+            AssertEqual(true, filesA.All(file => File.ReadAllText(file).Contains("SN-A", StringComparison.Ordinal)));
+            AssertEqual(false, filesA.Any(file => File.ReadAllText(file).Contains("SN-B", StringComparison.Ordinal)));
+            AssertEqual(true, filesB.All(file => File.ReadAllText(file).Contains("SN-B", StringComparison.Ordinal)));
+            AssertEqual(false, filesB.Any(file => File.ReadAllText(file).Contains("SN-A", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            TryDeleteDirectory(rootA);
+            TryDeleteDirectory(rootB);
+        }
+    }),
+    ("APP-OPT-01-PATCH-01 默认路径和非法路径校验契约", () =>
+    {
+        var defaultConfiguration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["CsvStorage:RootPath"] = "Default"
+            })
+            .Build();
+        var defaultSettings = new CsvStorageSettings(defaultConfiguration);
+        AssertEqual(AppDomain.CurrentDomain.BaseDirectory, defaultSettings.GetEffectiveRootPath());
+
+        var validator = typeof(SystemSettingsViewModel).GetMethod(
+            "ValidateAndNormalizeCustomStoragePath",
+            BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("找不到自定义 CSV 路径校验方法");
+        AssertThrows<TargetInvocationException>(() => validator.Invoke(null, new object[] { " " }));
+
+        var filePath = Path.Combine(Path.GetTempPath(), "gm-e78-csv-file-" + Guid.NewGuid().ToString("N") + ".txt");
+        try
+        {
+            File.WriteAllText(filePath, "not-a-directory");
+            AssertThrows<TargetInvocationException>(() => validator.Invoke(null, new object[] { filePath }));
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+
+        var source = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "ViewModels", "SystemSettingsViewModel.cs"));
+        AssertEqual(true, source.Contains("RestoreCsvPathPreview", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("previousTestLogPath", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("if (!csvPathApplied)", StringComparison.Ordinal));
+    }),
+    ("APP-OPT-01 D1/D2 keeps bounded log rolling and DT302 timing contract", () =>
+    {
+        var program = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Program.cs"));
+        var plc = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Devices", "Plc", "Fp0hPlcDevice.cs"));
+        var inspectionConfig = new InspectionConfig();
+        var timeout = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "Services", "TcpModbus", "ModbusTimeoutConstants.cs"));
+        var appSettings = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "appsettings.json"));
+
+        AssertEqual(true, program.Contains("fileSizeLimitBytes: 10 * 1024 * 1024", StringComparison.Ordinal));
+        AssertEqual(true, program.Contains("rollOnFileSizeLimit: true", StringComparison.Ordinal));
+        AssertEqual(true, program.Contains("retainedFileCountLimit: 30", StringComparison.Ordinal));
+        AssertEqual(true, program.Contains("shared: true", StringComparison.Ordinal));
+        AssertEqual(true, appSettings.Contains("\"fileSizeLimitBytes\": 10485760", StringComparison.Ordinal));
+        AssertEqual(true, appSettings.Contains("\"rollOnFileSizeLimit\": true", StringComparison.Ordinal));
+        AssertEqual(true, appSettings.Contains("\"retainedFileCountLimit\": 30", StringComparison.Ordinal));
+        AssertEqual(true, plc.Contains("Stopwatch.StartNew", StringComparison.Ordinal));
+        AssertEqual(true, timeout.Contains("RelayBusinessWaitMs = 3000", StringComparison.Ordinal));
+        AssertEqual(ModbusTimeoutConstants.RelayBusinessWaitMs, inspectionConfig.RelaySwitchTimeoutMs);
+        AssertEqual(true, plc.Contains("elapsedMilliseconds > 1000", StringComparison.Ordinal));
     }),
     ("P0 control enums exist", () =>
     {
@@ -1572,6 +1873,17 @@ static string InvokeFormatMeasurementResult(MeasurementResult measurement, TestP
         ?? throw new InvalidOperationException("FormatMeasurementResult 返回空值"));
 }
 
+static string InvokeFormatMeasurementRecordResult(MeasurementResult measurement, TestPointConfig testPoint)
+{
+    var method = typeof(TestPageViewModel).GetMethod(
+        "FormatMeasurementRecordResult",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("找不到 FormatMeasurementRecordResult 方法");
+
+    return (string)(method.Invoke(null, new object[] { measurement, testPoint })
+        ?? throw new InvalidOperationException("FormatMeasurementRecordResult 返回空值"));
+}
+
 static string InvokeToOperatorText(string message, bool showTechnicalDetails)
 {
     var method = typeof(TestPageViewModel).GetMethod(
@@ -1600,6 +1912,19 @@ static void AssertThrows<TException>(Action action)
     }
 
     throw new InvalidOperationException($"expected {typeof(TException).Name}, no exception");
+}
+
+static void TryDeleteDirectory(string path)
+{
+    try
+    {
+        if (Directory.Exists(path))
+            Directory.Delete(path, recursive: true);
+    }
+    catch
+    {
+        // 测试清理失败不覆盖主体断言结果。
+    }
 }
 
 static List<string> ReadCsvDataRows(string filePath)

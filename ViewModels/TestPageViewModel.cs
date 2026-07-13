@@ -1074,6 +1074,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 LowerLimitText = FormatLowerLimit(item),
                 UpperLimitText = FormatUpperLimit(item),
                 CheckResult = "未检测",
+                RecordResult = string.Empty,
                 Judgment = string.Empty
             });
         }
@@ -1208,7 +1209,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 PinResults = TestItems.Select(item => new PinResult
                 {
                     PinName = item.ItemName,
-                    Result = item.CheckResult
+                    // CSV 使用独立记录值，避免把界面单位“Ω”或“超量程”写入正式记录。
+                    Result = string.IsNullOrEmpty(item.RecordResult)
+                        ? item.CheckResult
+                        : item.RecordResult
                 }).ToList()
             };
 
@@ -1233,6 +1237,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         foreach (var item in TestItems)
         {
             item.CheckResult = "未检测";
+            item.RecordResult = string.Empty;
             item.Judgment = string.Empty;
         }
     }
@@ -3211,6 +3216,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (item != null)
             {
                 item.CheckResult = "测试中";
+                item.RecordResult = string.Empty;
                 item.Judgment = string.Empty;
                 AddLog($"🔍 [{e.StepIndex + 1}/{TestItems.Count}] {e.TestPoint.Name} 检测中...");
             }
@@ -3236,6 +3242,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (item != null)
             {
                 item.CheckResult = FormatMeasurementResult(e.Measurement, e.TestPoint);
+                item.RecordResult = FormatMeasurementRecordResult(e.Measurement, e.TestPoint);
                 item.Judgment = e.TestPoint.Judgment;
             }
         });
@@ -3257,11 +3264,46 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return InspectionMeasurementEvaluator.ResolveContinuityState(value, testPoint.ContinuityThresholdOhm);
         }
 
-        // 电阻模式保留超量程、NaN 等异常显示文本，避免超长数字进入格式化。
+        // 电阻模式统一把正向超量程显示为业务文本，避免超长数字进入界面。
+        if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
+            return "超量程";
+
+        // NaN、负无穷等异常继续保留原有异常文本。
         if (!string.IsNullOrWhiteSpace(measurement.DisplayTextOverride))
             return measurement.DisplayTextOverride;
 
         return $"{InputValidationHelper.FormatResistanceValue(value)} Ω";
+    }
+
+    /// <summary>
+    /// 格式化正式 CSV 的检测项目值，不携带界面单位或通信原始空白。
+    /// </summary>
+    private static string FormatMeasurementRecordResult(MeasurementResult measurement, TestPointConfig testPoint)
+    {
+        if (!measurement.IsValid)
+            return measurement.DisplayTextOverride;
+
+        if (testPoint.CheckMode == CheckModeConstants.Continuity)
+        {
+            if (!string.IsNullOrWhiteSpace(testPoint.ActualContinuityState))
+                return testPoint.ActualContinuityState;
+
+            return InspectionMeasurementEvaluator.ResolveContinuityState(
+                measurement.Value,
+                testPoint.ContinuityThresholdOhm);
+        }
+
+        if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
+        {
+            return double.IsPositiveInfinity(measurement.Value)
+                ? "Infinity"
+                : measurement.Value.ToString("0.00000000E+00", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (!string.IsNullOrWhiteSpace(measurement.DisplayTextOverride))
+            return measurement.DisplayTextOverride;
+
+        return InputValidationHelper.FormatResistanceValue(measurement.Value);
     }
 
     // InspectionCompleted 事件已删除。

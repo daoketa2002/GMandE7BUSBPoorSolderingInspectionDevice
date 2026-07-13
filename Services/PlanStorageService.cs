@@ -37,7 +37,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public static readonly List<string> DefaultMachineTypes = new List<string> { "T998248391", "998245664NNHB" };
 
         /// <summary>
-        /// 固定引脚列表（A1~A20, B1~B20）
+        /// 固定引脚列表（A1~A12, B1~B12）
         /// 用于方案编辑时的引脚下拉选项
         /// </summary>
         public static readonly List<string> PinList = GeneratePinList();
@@ -75,16 +75,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         #region 辅助方法
 
         /// <summary>
-        /// 生成固定引脚列表 A1~A20, B1~B20
+        /// 生成固定引脚列表 A1~A12, B1~B12，保持下拉框分组顺序稳定。
         /// </summary>
         private static List<string> GeneratePinList()
         {
             var pins = new List<string>();
-            for (int i = 1; i <= 20; i++)
-            {
+            for (int i = 1; i <= 12; i++)
                 pins.Add($"A{i}");
+
+            for (int i = 1; i <= 12; i++)
                 pins.Add($"B{i}");
-            }
+
             return pins;
         }
 

@@ -13,13 +13,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         private string _ipAddress = "192.168.1.3";
         private int _port = 502;
         private int _slaveId = 1;
-        private int _receiveTimeoutMs = 5000;
-        private int _sendTimeoutMs = 5000;
-        private int _reconnectDelayMs = 2000;
-        private int _maxReconnectAttempts = 12;
-        private int _healthCheckIntervalSeconds = 5;
-        private int _lastDataTimeoutSeconds = 30;
-        private HealthCheckMode _healthCheckMode = HealthCheckMode.Disabled;
 
         /// <summary>
         /// PLC IP地址
@@ -51,66 +44,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         /// <summary>
         /// 接收超时时间（毫秒）
         /// </summary>
-        public int ReceiveTimeoutMs
-        {
-            get => _receiveTimeoutMs;
-            set { _receiveTimeoutMs = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 发送超时时间（毫秒）
         /// </summary>
-        public int SendTimeoutMs
-        {
-            get => _sendTimeoutMs;
-            set { _sendTimeoutMs = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 重连延迟（毫秒）
         /// </summary>
-        public int ReconnectDelayMs
-        {
-            get => _reconnectDelayMs;
-            set { _reconnectDelayMs = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 最大重连次数
         /// </summary>
-        public int MaxReconnectAttempts
-        {
-            get => _maxReconnectAttempts;
-            set { _maxReconnectAttempts = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 心跳检测模式（默认：禁用）
         /// </summary>
-        public HealthCheckMode HealthCheckMode
-        {
-            get => _healthCheckMode;
-            set { _healthCheckMode = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 心跳检查间隔（秒）
         /// </summary>
-        public int HealthCheckIntervalSeconds
-        {
-            get => _healthCheckIntervalSeconds;
-            set { _healthCheckIntervalSeconds = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// 配合 DataActivity 模式使用的无数据超时时间（秒）
         /// 超过此时间未收到数据则判定连接断开，触发重连
         /// </summary>
-        public int LastDataTimeoutSeconds
-        {
-            get => _lastDataTimeoutSeconds;
-            set { _lastDataTimeoutSeconds = value; OnPropertyChanged(); }
-        }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 

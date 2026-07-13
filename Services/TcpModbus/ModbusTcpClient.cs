@@ -164,9 +164,6 @@ public class ModbusTcpClient : IModbusTcpClient, IDisposable
     {
         _inner.Host = options.Host;
         _inner.Port = options.Port;
-        _inner.ReceiveTimeoutMs = options.ReceiveTimeoutMs;
-        _inner.SendTimeoutMs = options.SendTimeoutMs;
-
         _logger.LogDebug("ModbusTcpClient 配置已应用: {Host}:{Port}, UnitId={UnitId}",
             options.Host, options.Port, options.UnitId);
     }

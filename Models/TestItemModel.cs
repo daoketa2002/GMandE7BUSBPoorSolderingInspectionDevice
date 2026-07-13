@@ -63,6 +63,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         private string _checkResult = string.Empty;
 
         /// <summary>
+        /// 正式 CSV 记录值，与界面显示值分离。
+        /// </summary>
+        [ObservableProperty]
+        private string _recordResult = string.Empty;
+
+        /// <summary>
         /// 判定结果：OK / NG / (空=未测试)
         /// </summary>
         [ObservableProperty]

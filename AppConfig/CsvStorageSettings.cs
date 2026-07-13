@@ -14,6 +14,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig
     public class CsvStorageSettings
     {
         private readonly IConfiguration _configuration;
+        private string? _runtimeRootPath;
 
         /// <summary>
         /// 构造函数 —— 注入 IConfiguration 以读取配置
@@ -29,7 +30,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig
         /// 其他值 → 使用指定的自定义路径
         /// </summary>
         public string RootPath =>
-            _configuration["CsvStorage:RootPath"] ?? "Default";
+            _runtimeRootPath ?? _configuration["CsvStorage:RootPath"] ?? "Default";
+
+        /// <summary>
+        /// 更新当前进程使用的 CSV 根路径。
+        /// 持久化配置由调用方先完成，本方法只负责让已注册的存储服务立即使用新路径。
+        /// </summary>
+        public void ApplyRuntimeRootPath(string rootPath)
+        {
+            _runtimeRootPath = string.IsNullOrWhiteSpace(rootPath) ? "Default" : rootPath;
+        }
 
         /// <summary>
         /// 单个CSV文件最大数据行数（不含表头），超出后自动创建分卷文件

@@ -364,6 +364,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     var item = Items[i];
                     int displayIndex = item.Index;
 
+                    // 保存前统一标准化，确保大小写和首尾空格不会进入方案文件。
+                    item.PinLeft = NormalizePinName(item.PinLeft);
+                    item.PinRight = NormalizePinName(item.PinRight);
+
                     // 校验左引脚
                     string? leftError = ValidateSinglePin(item.PinLeft, "左引脚");
                     if (leftError != null)
@@ -419,18 +423,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
-                // ========== 校验电阻值阈值（电阻值模式下的 LowerLimit / UpperLimit） ==========
+                // ========== 校验检测方式、导通期望值和电阻值阈值 ==========
                 var resistanceErrors = new List<string>();
 
                 for (int i = 0; i < Items.Count; i++)
                 {
                     var item = Items[i];
 
-                    // 只校验电阻值模式下的项
-                    if (item.CheckMode != CheckModeConstants.Resistance)
+                    if (item.CheckMode != CheckModeConstants.Continuity
+                        && item.CheckMode != CheckModeConstants.Resistance)
+                    {
+                        resistanceErrors.Add($"第{item.Index}项 检测方式只能是“导通”或“电阻值”");
                         continue;
+                    }
+
+                    if (item.CheckMode == CheckModeConstants.Continuity)
+                    {
+                        item.ModeValue = item.ModeValue?.Trim().ToUpperInvariant();
+                        if (item.ModeValue != "OPEN" && item.ModeValue != "SHORT")
+                            resistanceErrors.Add($"第{item.Index}项 导通期望值只能是 OPEN 或 SHORT");
+
+                        continue;
+                    }
 
                     int displayIndex = item.Index;
+
+                    if (!item.LowerLimit.HasValue)
+                        resistanceErrors.Add($"第{displayIndex}项 下限不能为空");
+                    if (!item.UpperLimit.HasValue)
+                        resistanceErrors.Add($"第{displayIndex}项 上限不能为空");
 
                     // 校验下限电阻值范围（NaN / Infinity / 负数 / 过大）
                     string? lowerError = InputValidationHelper.ValidateResistanceValue(item.LowerLimit);
@@ -567,11 +588,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (string.IsNullOrWhiteSpace(pin))
                 return $"{side}不能为空";
 
-            if (!System.Text.RegularExpressions.Regex.IsMatch(pin.Trim(), @"^[AB]\d+$"))
-                return $"{side} \"{pin.Trim()}\" 格式错误：必须以大写A或B开头+数字（如A1、B20）";
+            if (!InputValidationHelper.IsValidPinName(pin))
+                return $"{side} \"{pin.Trim()}\" 格式错误：仅允许 A1～A12、B1～B12";
 
             return null;
         }
+
+        /// <summary>
+        /// 标准化方案编辑页的引脚输入，非法内容保留其文本供保存校验提示。
+        /// </summary>
+        private static string NormalizePinName(string? pinName)
+            => pinName?.Trim().ToUpperInvariant() ?? string.Empty;
 
         /// <summary>
         /// 判断是否有未保存的修改

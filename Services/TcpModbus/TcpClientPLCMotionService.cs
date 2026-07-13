@@ -47,7 +47,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <summary>
         /// 心跳检测定时器任务
         /// </summary>
-        private Task? _healthCheckTask;
 
         /// <summary>
         /// 同步锁信号量
@@ -80,16 +79,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// 读取循环取消令牌源
         /// </summary>
         private CancellationTokenSource? _readLoopCts;
-
-        /// <summary>
-        /// 心跳检测取消令牌源
-        /// </summary>
-        private CancellationTokenSource? _heartbeatCts;
-
-        /// <summary>
-        /// 最后数据接收时间戳
-        /// </summary>
-        private long _lastDataReceivedTicks = DateTime.UtcNow.Ticks;
 
         /// <summary>
         /// 当前事务ID计数器 - 使用原子操作
@@ -129,26 +118,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <summary>Modbus TCP 端口号</summary>
         public int Port { get; set; } = 502;
 
-        /// <summary>TCP 接收超时（毫秒）</summary>
-        public int ReceiveTimeoutMs { get; set; } = 5000;
-
-        /// <summary>TCP 发送超时（毫秒）</summary>
-        public int SendTimeoutMs { get; set; } = 5000;
-
-        /// <summary>重连延迟（毫秒）</summary>
-        public int ReconnectDelayMs { get; set; } = 2000;
-
-        /// <summary>最大重连次数</summary>
-        public int MaxReconnectAttempts { get; set; } = 12;
-
-        /// <summary>心跳检测模式</summary>
-        public HealthCheckMode HealthCheckMode { get; set; } = HealthCheckMode.Disabled;
-
-        /// <summary>心跳检查间隔（秒）</summary>
-        public int HealthCheckIntervalSeconds { get; set; } = 5;
-
-        /// <summary>无数据超时时间（秒），配合 DataActivity 模式使用</summary>
-        public int LastDataTimeoutSeconds { get; set; } = 30;
+        private const int TcpSocketReceiveTimeoutMilliseconds = 5000;
+        private const int TcpSocketSendTimeoutMilliseconds = 5000;
 
         /// <summary>
         /// 获取当前TCP连接是否已成功建立 - 由内部状态控制，更可靠
@@ -316,32 +287,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         }
 
         /// <summary>
-        /// 启动心跳检测循环
-        /// </summary>
-        /// <param name="ct">取消令牌</param>
-        /// <returns>表示异步心跳检测循环的任务</returns>
-        private async Task StartHealthCheckLoop(CancellationToken ct)
-        {
-            var periodicTimer = new PeriodicTimer(TimeSpan.FromSeconds(HealthCheckIntervalSeconds));
-
-            try
-            {
-                while (!ct.IsCancellationRequested && await periodicTimer.WaitForNextTickAsync(ct))
-                {
-                    await HealthCheckAsync();
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogDebug("心跳检测循环被取消");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "心跳检测循环异常");
-            }
-        }
-
-        /// <summary>
         /// 异步连接到服务器，使用当前属性中的连接参数
         /// </summary>
         /// <returns>表示异步连接操作的任务</returns>
@@ -354,7 +299,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             try
             {
                 _logger.LogInformation("尝试连接到 {Host}:{Port}", Host, Port);
-                tempTcpClient = new TcpClient { ReceiveTimeout = ReceiveTimeoutMs, SendTimeout = SendTimeoutMs };
+                tempTcpClient = new TcpClient
+                {
+                    ReceiveTimeout = TcpSocketReceiveTimeoutMilliseconds,
+                    SendTimeout = TcpSocketSendTimeoutMilliseconds
+                };
                 using var timeoutCts = new CancellationTokenSource(connectTimeoutMs);
                 await tempTcpClient.ConnectAsync(Host, Port, timeoutCts.Token).ConfigureAwait(false);
                 _tcpClient = tempTcpClient;
@@ -682,7 +631,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <param name="response">Modbus响应对象</param>
         private void HandleModbusResponse(ModbusResponse response)
         {
-            Interlocked.Exchange(ref _lastDataReceivedTicks, DateTime.UtcNow.Ticks);
 
             // 首先尝试通过事务ID找到对应的等待任务
             if (_pendingRequests.TryRemove(response.TransactionId, out var pendingReq))
@@ -707,7 +655,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <param name="data">接收到的原始数据</param>
         private void HandleStringResponse(byte[] data)
         {
-            Interlocked.Exchange(ref _lastDataReceivedTicks, DateTime.UtcNow.Ticks);
 
             var responseString = Encoding.UTF8.GetString(data);
 
@@ -786,27 +733,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             try
             {
                 _isRunning = false;
-
-                // 安全地取消和等待心跳任务
-                if (_heartbeatCts != null)
-                {
-                    _heartbeatCts.Cancel();
-                    if (_healthCheckTask != null)
-                    {
-                        try
-                        {
-                            await Task.WhenAny(_healthCheckTask, Task.Delay(1000));
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "等待心跳任务结束时出错");
-                        }
-                    }
-                }
-
-                _heartbeatCts?.Dispose();
-                _heartbeatCts = null;
-                _healthCheckTask = null;
 
                 _readLoopCts?.Cancel();
                 _readLoopCts?.Dispose();
@@ -1222,96 +1148,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         }
 
         /// <summary>
-        /// 执行心跳检测
-        /// </summary>
-        /// <returns>表示异步心跳检测操作的任务</returns>
-        private async Task HealthCheckAsync()
-        {
-            if (!_isRunning || _heartbeatCts?.IsCancellationRequested == true) return; // 如果服务已停止，不再执行心跳检测
-
-            try
-            {
-                _logger.LogDebug("执行心跳检测");
-
-                switch (HealthCheckMode)
-                {
-                    case HealthCheckMode.CommandResponse:
-                        await CheckByCommandResponse();
-                        break;
-
-                    case HealthCheckMode.DataActivity:
-                        CheckByDataActivity(LastDataTimeoutSeconds);
-                        break;
-
-                    case HealthCheckMode.StatusQuery:
-                        await CheckByStatusQuery();
-                        break;
-
-                    case HealthCheckMode.Disabled:
-                        break;
-
-                    default:
-                        _logger.LogWarning("未知的心跳模式: {HealthCheckMode}", HealthCheckMode);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "健康检查过程中发生异常");
-            }
-        }
-
-        /// <summary>
-        /// 通过命令响应方式检查PLC连接状态
-        /// </summary>
-        /// <returns>表示异步检查操作的任务</returns>
-        private async Task CheckByCommandResponse()
-        {
-            var response = await ExecuteReadOperationAsync(0x03, 1, 0, 1, 2000); // 读取保持寄存器
-            if (response == null || response.IsError)
-            {
-                _logger.LogWarning("Modbus心跳检测失败");
-                Notify(NotificationType.Warning, "心跳失败，已标记断线", "HealthCheck");
-                MarkDisconnected();
-            }
-        }
-
-        /// <summary>
-        /// 通过数据活动方式检查PLC连接状态
-        /// </summary>
-        /// <param name="timeoutSeconds">超时秒数</param>
-        private void CheckByDataActivity(int timeoutSeconds)
-        {
-            if (!_isRunning) return; // 如果服务已停止，不再执行数据活动检查
-
-            var lastReceivedTime = Interlocked.Read(ref _lastDataReceivedTicks);
-            var now = DateTime.UtcNow.Ticks;
-            var elapsedSeconds = (now - lastReceivedTime) / TimeSpan.TicksPerSecond;
-
-            if (elapsedSeconds > timeoutSeconds)
-            {
-                _logger.LogWarning("超过 {TimeoutSeconds}s 未收到Modbus数据", timeoutSeconds);
-                Notify(NotificationType.Warning, $"无数据超时({elapsedSeconds}s)，已标记断线", "HealthCheck");
-                MarkDisconnected();
-            }
-        }
-
-        /// <summary>
-        /// 通过状态查询方式检查PLC连接状态
-        /// </summary>
-        /// <returns>表示异步检查操作的任务</returns>
-        private async Task CheckByStatusQuery()
-        {
-            var response = await ExecuteReadOperationAsync(0x01, 1, 0, 1, 3000); // 读取线圈状态
-            if (response == null || response.IsError)
-            {
-                _logger.LogWarning("Modbus状态查询失败");
-                Notify(NotificationType.Warning, "状态异常，已标记断线", "HealthCheck");
-                MarkDisconnected();
-            }
-        }
-
-        /// <summary>
         /// 发送通知
         /// </summary>
         /// <param name="type">通知类型</param>
@@ -1476,9 +1312,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             status.AppendLine($"TCP连接状态: {IsConnected}");
             status.AppendLine($"待处理Modbus响应数量: {_pendingRequests.Count}");
             status.AppendLine($"待处理字符串响应: {_pendingStringResponseTcs != null && !_pendingStringResponseTcs.Task.IsCompleted}");
-            status.AppendLine($"心跳检测任务: {_healthCheckTask != null}");
             status.AppendLine($"读取循环取消令牌: {_readLoopCts != null}");
-            status.AppendLine($"心跳检测取消令牌: {_heartbeatCts != null}");
             status.AppendLine($"是否正在重连: {_isReconnecting == 1}");
             status.AppendLine($"接收缓冲区大小: {_receiveBuffer.Length} 字节");
 
@@ -1528,9 +1362,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                 _readLoopCts?.Cancel();
                 _readLoopCts?.Dispose();
-
-                _heartbeatCts?.Cancel();
-                _heartbeatCts?.Dispose();
 
                 _syncLock?.Dispose();
                 _sendLock?.Dispose();

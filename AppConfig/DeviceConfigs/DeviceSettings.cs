@@ -36,32 +36,5 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.AppConfig.DeviceConfigs
         /// </summary>
         public bool SaveNgInspectionResult { get; set; } = true;
 
-        /// <summary>
-        /// DAQ-9600
-        /// </summary>
-        public TcpClientGWInstekSettings TcpClientGWInstek { get; set; } = new TcpClientGWInstekSettings();
-
-        /// <summary>
-        /// DAQ-9600，电脑是tcp客户端
-        /// </summary>
-        public class TcpClientGWInstekSettings//主机（客户端）连读码器A（服务端）   DAQ-9600，实际的网络地址可以在web端改
-        {
-            public string? Host { get; set; } = "192.168.1.4"; //服务器地址
-            public int Port { get; set; } = 5025; //服务器端口
-
-            public string? TriggerCommand { get; set; } = "Cstart";
-
-
-            // 新增：心跳检测模式（具体去服务类通用组件看）
-            public HealthCheckMode HealthCheckMode { get; set; } = HealthCheckMode.Disabled;
-
-            // 新增：配合 DataActivity 使用的超时时间（单位：秒）
-            public int? LastDataTimeoutSeconds { get; set; } = 30;
-
-
-            // 可选：心跳检查间隔（秒）
-            public int HealthCheckIntervalSeconds { get; set; } = 5;
-
-        }
     }
 }

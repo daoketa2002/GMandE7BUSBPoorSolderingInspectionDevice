@@ -1,19 +1,27 @@
-﻿<UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.MainMenuView"
+<UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.MainMenuView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
-             xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
-             mc:Ignorable="d" 
-             d:DesignHeight="520" d:DesignWidth="800">
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="520"
+             d:DesignWidth="800">
 
     <UserControl.Resources>
-        <!-- 与运行页“终了”按钮保持同一视觉结构：纯色主体加底部深色边。 -->
-        <Style x:Key="MainMenuButtonStyle" TargetType="Button">
-            <Setter Property="Height" Value="64"/>
-            <Setter Property="MinWidth" Value="300"/>
+        <LinearGradientBrush x:Key="MenuButtonHighlightBrush"
+                             StartPoint="0,0"
+                             EndPoint="0,1">
+            <GradientStop Color="#66FFFFFF" Offset="0"/>
+            <GradientStop Color="#00FFFFFF" Offset="0.45"/>
+            <GradientStop Color="#22000000" Offset="1"/>
+        </LinearGradientBrush>
+
+        <!-- 主菜单按钮沿用工业页面的纯色、圆角、底部深色边和轻量层次。 -->
+        <Style x:Key="IndustrialMenuButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="72"/>
+            <Setter Property="MinWidth" Value="360"/>
             <Setter Property="MaxWidth" Value="420"/>
-            <Setter Property="Margin" Value="0,7"/>
+            <Setter Property="Margin" Value="0,6"/>
             <Setter Property="FontSize" Value="20"/>
             <Setter Property="FontWeight" Value="ExtraBold"/>
             <Setter Property="Foreground" Value="White"/>
@@ -23,84 +31,112 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="MainBorder"
-                                Background="{TemplateBinding Background}"
-                                CornerRadius="12"
-                                BorderThickness="0">
-                            <Border BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="0,0,0,4"
+                        <Grid>
+                            <Border x:Name="buttonShadow"
+                                    Background="#22000000"
                                     CornerRadius="12"
-                                    Background="Transparent">
-                                <ContentPresenter HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"/>
+                                    Margin="0,4,0,0"/>
+                            <Border x:Name="buttonHighlight"
+                                    Background="Transparent"
+                                    BorderBrush="#55FFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="12">
+                                <Border x:Name="buttonInnerStroke"
+                                        Background="Transparent"
+                                        BorderBrush="#22000000"
+                                        BorderThickness="1"
+                                        CornerRadius="11">
+                                    <Border x:Name="buttonSurface"
+                                            Background="{TemplateBinding Background}"
+                                            CornerRadius="10">
+                                        <Border x:Name="buttonBase"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="0,0,0,4"
+                                                CornerRadius="10">
+                                            <ContentPresenter x:Name="buttonContent"
+                                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                        </Border>
+                                    </Border>
+                                </Border>
                             </Border>
-                        </Border>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="MainBorder" Property="Opacity" Value="0.88"/>
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="MainBorder" Property="Opacity" Value="0.72"/>
+                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2"/>
+                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="MainBorder" Property="Opacity" Value="0.45"/>
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 保留原有资源键，避免既有页面代码或样式契约失效。 -->
+        <Style x:Key="MainMenuButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource IndustrialMenuButtonStyle}"/>
     </UserControl.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                  HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Margin="20">
-            <Border Background="#34495E"
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="#34495E"
                 CornerRadius="8"
                 Margin="0,0,0,16"
                 Padding="20">
-            <TextBlock Text="欢迎使用 GM和E78_USB焊接不良检查装置系统" 
-                       FontSize="28" 
+            <TextBlock Text="欢迎使用 GM和E78_USB焊接不良检查装置系统"
+                       FontSize="28"
                        FontWeight="Bold"
                        Foreground="White"
                        HorizontalAlignment="Center"/>
         </Border>
 
-            <StackPanel x:Name="MainButtonPanel"
-                    VerticalAlignment="Center"
-                    HorizontalAlignment="Center"
-                    MinWidth="300"
-                    MaxWidth="420">
+        <!-- 剩余空间内居中；窗口过小时由滚动条提供纵向兜底。 -->
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <Grid MinHeight="420">
+                <StackPanel x:Name="MainButtonPanel"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            MinWidth="360"
+                            MaxWidth="420">
+                    <Button x:Name="RunScreenBtn"
+                            Content="▶ 运行界面"
+                            Style="{StaticResource MainMenuButtonStyle}"
+                            Background="#3498DB"
+                            BorderBrush="#2471A3"/>
 
-            <Button x:Name="RunScreenBtn" 
-                    Content="▶ 运行界面"
-                    Style="{StaticResource MainMenuButtonStyle}"
-                    Background="#3498DB"
-                    BorderBrush="#2471A3"/>
+                    <Button x:Name="PlanSettingBtn"
+                            Content="▣ 方案设定"
+                            Style="{StaticResource MainMenuButtonStyle}"
+                            Background="#E67E22"
+                            BorderBrush="#B95F0B"/>
 
-            <Button x:Name="PlanSettingBtn" 
-                    Content="▣ 方案设定"
-                    Style="{StaticResource MainMenuButtonStyle}"
-                    Background="#E67E22"
-                    BorderBrush="#B95F0B"/>
+                    <Button x:Name="SystemSettingsBtn"
+                            Content="⚙ 系统设置"
+                            Style="{StaticResource MainMenuButtonStyle}"
+                            Background="#7F8C8D"
+                            BorderBrush="#566573"/>
 
-            <Button x:Name="SystemSettingsBtn" 
-                    Content="⚙ 系统设置"
-                    Style="{StaticResource MainMenuButtonStyle}"
-                    Background="#7F8C8D"
-                    BorderBrush="#566573"/>
-        </StackPanel>
-
-            <StackPanel Orientation="Horizontal"
-                    HorizontalAlignment="Center"
-                    Margin="0,16,0,0">
-
-            <Button x:Name="ExitBtn" 
-                    Content="× 退出系统"
-                    Style="{StaticResource MainMenuButtonStyle}"
-                    Background="#E74C3C"
-                    BorderBrush="#C0392B"/>
-            </StackPanel>
-        </StackPanel>
-    </ScrollViewer>
+                    <Button x:Name="ExitBtn"
+                            Content="× 退出系统"
+                            Style="{StaticResource MainMenuButtonStyle}"
+                            Background="#E74C3C"
+                            BorderBrush="#C0392B"/>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
 </UserControl>

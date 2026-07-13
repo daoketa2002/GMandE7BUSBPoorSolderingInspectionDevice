@@ -1,4 +1,5 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.Inspection;
 
@@ -8,7 +9,8 @@ public class InspectionConfig
     public string PlanName { get; set; } = string.Empty;
     public List<TestPointConfig> TestPoints { get; set; } = new();
     public int RelaySettleTimeMs { get; set; } = 150;
-    public int RelaySwitchTimeoutMs { get; set; } = 3000;
+    /// <summary>DT302 继电器动作完成业务等待上限，固定复用 Modbus 分层常量，不作为系统设置项。</summary>
+    public int RelaySwitchTimeoutMs { get; set; } = ModbusTimeoutConstants.RelayBusinessWaitMs;
 
     /// <summary>导通阈值(Ω)，用于导通模式判定 OPEN/SHORT。默认 10Ω，范围 1~1000Ω。</summary>
     public double ContinuityThresholdOhm { get; set; } = 10.0;

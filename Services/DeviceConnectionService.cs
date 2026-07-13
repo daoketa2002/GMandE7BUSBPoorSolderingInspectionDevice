@@ -374,8 +374,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             scanner.PortName = settings.ScannerSerialCommunication.SerialNumber;
             scanner.BaudRate = settings.ScannerSerialCommunication.BaudRate;
-            _logger.LogInformation("[设备连接][扫描枪] 已注入配置: Port={Port}, BaudRate={BaudRate}",
-                scanner.PortName, scanner.BaudRate);
+            scanner.Parity = settings.ScannerSerialCommunication.Parity;
+            scanner.DataBits = settings.ScannerSerialCommunication.DataBits;
+            scanner.StopBits = settings.ScannerSerialCommunication.StopBits;
+            scanner.FlowControl = settings.ScannerSerialCommunication.FlowControl;
+            _logger.LogInformation(
+                "[设备连接][扫描枪] 已注入配置: Port={Port}, BaudRate={BaudRate}, Parity={Parity}, DataBits={DataBits}, StopBits={StopBits}, FlowControl={FlowControl}",
+                scanner.PortName, scanner.BaudRate, scanner.Parity, scanner.DataBits, scanner.StopBits, scanner.FlowControl);
         }
 
         private async Task<DeviceReconnectResult> ApplyConfigAndReconnectDeviceAsync(string deviceType, DeviceSettings settings)

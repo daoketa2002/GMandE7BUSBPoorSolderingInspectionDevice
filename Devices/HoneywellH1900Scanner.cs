@@ -32,9 +32,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         #region 常量
 
         private const int DEFAULT_BAUD_RATE = 115200;
-        private const int DATA_BITS = 8;
-        private const Parity PARITY = Parity.None;
-        private const StopBits STOP_BITS = StopBits.One;
         private const int READ_TIMEOUT_MS = 100;
         private const int WRITE_TIMEOUT_MS = 100;
 
@@ -88,6 +85,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         private string _portName = "COM9";
         private int _baudRate = DEFAULT_BAUD_RATE;
+        private string _parity = "None";
+        private int _dataBits = 8;
+        private string _stopBits = "1";
+        private string _flowControl = "None";
 
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
@@ -184,6 +185,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             }
         }
 
+        /// <summary>串口校验位，配置值会在打开串口时转换为 Parity 枚举。</summary>
+        public string Parity
+        {
+            get => _parity;
+            set => _parity = string.IsNullOrWhiteSpace(value) ? "None" : value.Trim();
+        }
+
+        /// <summary>串口数据位。</summary>
+        public int DataBits
+        {
+            get => _dataBits;
+            set => _dataBits = value;
+        }
+
+        /// <summary>串口停止位，配置值会在打开串口时转换为 StopBits 枚举。</summary>
+        public string StopBits
+        {
+            get => _stopBits;
+            set => _stopBits = string.IsNullOrWhiteSpace(value) ? "1" : value.Trim();
+        }
+
+        /// <summary>串口流控制，配置值会在打开串口时转换为 Handshake 枚举。</summary>
+        public string FlowControl
+        {
+            get => _flowControl;
+            set => _flowControl = string.IsNullOrWhiteSpace(value) ? "None" : value.Trim();
+        }
+
         #endregion
 
         #region 构造函数
@@ -250,14 +279,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
                     _logger.LogInformation("正在打开扫描枪串口 {PortName} @ {BaudRate}bps...", portName, baudRate);
 
-                    _serialPort = new SerialPort(portName, baudRate, PARITY, DATA_BITS, STOP_BITS)
+                    var parity = ParseParity(_parity);
+                    var stopBits = ParseStopBits(_stopBits);
+                    var handshake = ParseFlowControl(_flowControl);
+                    _serialPort = new SerialPort(portName, baudRate, parity, _dataBits, stopBits)
                     {
                         ReadTimeout = READ_TIMEOUT_MS,
                         WriteTimeout = WRITE_TIMEOUT_MS,
                         Encoding = Encoding.ASCII,
                         DtrEnable = true,
-                        RtsEnable = true,
-                        Handshake = Handshake.None
+                        RtsEnable = handshake == Handshake.RequestToSend,
+                        Handshake = handshake
                     };
 
                     _serialPort.DataReceived += OnDataReceived;
@@ -336,6 +368,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         public bool Connect(string portName = "COM9", int baudRate = DEFAULT_BAUD_RATE)
         {
             return ConnectInternal(portName, baudRate);
+        }
+
+        private static Parity ParseParity(string value)
+        {
+            return value.Trim().ToLowerInvariant() switch
+            {
+                "none" => System.IO.Ports.Parity.None,
+                "odd" => System.IO.Ports.Parity.Odd,
+                "even" => System.IO.Ports.Parity.Even,
+                _ => throw new ArgumentException($"不支持的扫描枪校验位：{value}", nameof(value))
+            };
+        }
+
+        private static StopBits ParseStopBits(string value)
+        {
+            return value.Trim() switch
+            {
+                "1" => System.IO.Ports.StopBits.One,
+                "1.5" => System.IO.Ports.StopBits.OnePointFive,
+                "2" => System.IO.Ports.StopBits.Two,
+                _ => throw new ArgumentException($"不支持的扫描枪停止位：{value}", nameof(value))
+            };
+        }
+
+        private static Handshake ParseFlowControl(string value)
+        {
+            return value.Trim().ToLowerInvariant() switch
+            {
+                "none" => Handshake.None,
+                "xonxoff" => Handshake.XOnXOff,
+                "requesttosend" => Handshake.RequestToSend,
+                _ => throw new ArgumentException($"不支持的扫描枪流控制：{value}", nameof(value))
+            };
         }
 
         private void CloseSerialPort()

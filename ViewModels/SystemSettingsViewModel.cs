@@ -16,6 +16,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Threading;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
@@ -73,6 +75,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>当前选中的Tab页索引（0=常规设置, 1=PLC, 2=扫描仪, 3=万用表）</summary>
         [ObservableProperty]
         private int _selectedTabIndex = 0;
+
+        /// <summary>保存配置期间显示非模态等待遮罩并阻止重复操作。</summary>
+        [ObservableProperty]
+        [NotifyCanExecuteChangedFor(nameof(ResetToDefaultCommand))]
+        [NotifyCanExecuteChangedFor(nameof(SaveAllConfigCommand))]
+        [NotifyCanExecuteChangedFor(nameof(NavigateBackToMainMenuCommand))]
+        [NotifyCanExecuteChangedFor(nameof(BrowseStoragePathCommand))]
+        [NotifyCanExecuteChangedFor(nameof(OpenTestLogFolderCommand))]
+        [NotifyCanExecuteChangedFor(nameof(TestPlcConnectionCommand))]
+        [NotifyCanExecuteChangedFor(nameof(TestScannerConnectionCommand))]
+        [NotifyCanExecuteChangedFor(nameof(TestDmmConnectionCommand))]
+        private bool _isSavingConfig;
+
+        [ObservableProperty]
+        private string _saveStatusText = string.Empty;
 
         #endregion
 
@@ -205,7 +222,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 保存/恢复/返回命令
 
         /// <summary>恢复所有设备配置为默认值</summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private async Task ResetToDefaultAsync()
         {
             try
@@ -231,21 +248,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>保存所有设备配置到文件</summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private async Task SaveAllConfigAsync()
         {
+            if (IsSavingConfig)
+                return;
+
+            var errors = ValidateAllConfigs();
+            if (errors.Count > 0)
+            {
+                string errorMessage = "以下参数设置有误，请修正后再保存：\n\n" + string.Join("\n", errors);
+                await _notificationService.ShowWarningAsync(errorMessage, "参数校验失败");
+                _logger.Warning("系统设置保存被拒绝，校验错误 {Count} 项", errors.Count);
+                return;
+            }
+
+            string? resultMessage = null;
+            bool showAsWarning = false;
+            bool showAsError = false;
+            string previousCsvRootPath = _csvStorageSettings.RootPath;
+            string previousTestLogPath = CurrentTestLogPath;
+            bool csvPathApplied = false;
+
+            IsSavingConfig = true;
+            SaveStatusText = "正在保存并应用配置，请稍候……";
+            _logger.Information("[系统设置][保存] 开始");
             try
             {
                 // 保存前从磁盘读取快照，避免 UI 双向绑定已原地修改对象而丢失旧值。
                 var previousSettings = _settingsService.LoadSettings();
-                var errors = ValidateAllConfigs();
-                if (errors.Count > 0)
-                {
-                    string errorMessage = "以下参数设置有误，请修正后再保存：\n\n" + string.Join("\n", errors);
-                    await _notificationService.ShowWarningAsync(errorMessage, "参数校验失败");
-                    _logger.Warning("系统设置保存被拒绝，校验错误 {Count} 项", errors.Count);
-                    return;
-                }
 
                 var deviceSettings = new DeviceSettings
                 {
@@ -258,42 +289,106 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 _settingsService.SaveSettings(deviceSettings);
                 await SaveCsvStoragePathAsync();
+                csvPathApplied = true;
 
                 bool plcChanged = HasPlcConnectionChanged(previousSettings.FP0HCommunication, Fp0hConfig);
                 bool dmmChanged = HasDmmConnectionChanged(previousSettings.GDM9060Communication, Gdm9060Config);
                 bool scannerChanged = HasScannerConnectionChanged(previousSettings.ScannerSerialCommunication, ScannerConfig);
-                var reconnectSummary = await _deviceManager
-                    .ApplySettingsAndReconnectAsync(plcChanged, dmmChanged, scannerChanged)
-                    .ConfigureAwait(true);
+
+                DeviceReconnectSummary? reconnectSummary = null;
+                try
+                {
+                    reconnectSummary = await _deviceManager
+                        .ApplySettingsAndReconnectAsync(plcChanged, dmmChanged, scannerChanged)
+                        .ConfigureAwait(true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "[系统设置][保存] 设备连接应用失败");
+                    resultMessage = "配置已保存，但设备连接失败，请检查设备。";
+                    showAsWarning = true;
+                }
 
                 _logger.Warning(
                     "[系统设置][审计] 单项 NG 后继续测试={ContinueTestingAfterNg}, 单项 NG 后继续保存={SaveNgInspectionResult}",
                     ContinueTestingAfterNg, SaveNgInspectionResult);
-                await _notificationService.ShowInfoAsync(BuildSaveResultMessage(reconnectSummary));
+
+                if (reconnectSummary is not null)
+                {
+                    foreach (var result in reconnectSummary.Results.Where(item => item.Requested))
+                    {
+                        _logger.Information(
+                            "[系统设置][保存] 设备重连结果 Device={DeviceType}, Connected={Connected}, Status={StatusText}",
+                            result.DeviceType, result.IsConnected, result.StatusText);
+                    }
+
+                    bool hasConnectionFailure = reconnectSummary.Results
+                        .Any(item => item.Requested && !item.IsConnected);
+                    resultMessage = hasConnectionFailure
+                        ? "配置已保存，但设备连接失败，请检查设备。"
+                        : "配置已保存成功。";
+                    showAsWarning = hasConnectionFailure;
+                }
+
+                _logger.Information("[系统设置][保存] 配置处理完成");
             }
             catch (Exception ex)
             {
+                if (!csvPathApplied)
+                    RestoreCsvPathPreview(previousCsvRootPath, previousTestLogPath);
+
                 _logger.Error(ex, "保存配置失败");
-                await _notificationService.ShowErrorAsync($"保存配置失败：{ex.Message}");
+                resultMessage = $"配置保存失败：{ex.Message}";
+                showAsError = true;
             }
+            finally
+            {
+                SaveStatusText = string.Empty;
+                IsSavingConfig = false;
+                _logger.Information("[系统设置][保存] Loading 已关闭");
+            }
+
+            await WaitForSaveOverlayToCloseAsync();
+
+            if (string.IsNullOrWhiteSpace(resultMessage))
+                return;
+
+            _logger.Information("[系统设置][保存] 显示结果提示");
+            if (showAsError)
+                await _notificationService.ShowErrorAsync(resultMessage, "保存失败");
+            else if (showAsWarning)
+                await _notificationService.ShowWarningAsync(resultMessage, "保存完成");
+            else
+                await _notificationService.ShowInfoAsync(resultMessage, "保存成功");
         }
+
+        private bool CanEditSettings() => !IsSavingConfig;
 
         private static bool HasPlcConnectionChanged(FP0HCommunicationConfig? before, FP0HCommunicationConfig after)
             => before is null || before.IpAddress != after.IpAddress || before.Port != after.Port
-                || before.SlaveId != after.SlaveId || before.ReceiveTimeoutMs != after.ReceiveTimeoutMs
-                || before.SendTimeoutMs != after.SendTimeoutMs;
+                || before.SlaveId != after.SlaveId;
 
         private static bool HasDmmConnectionChanged(GDM9060CommunicationConfig? before, GDM9060CommunicationConfig after)
             => before is null || before.IpAddress != after.IpAddress || before.Port != after.Port
-                || before.ReceiveTimeoutMs != after.ReceiveTimeoutMs || before.SendTimeoutMs != after.SendTimeoutMs;
+                || before.ReceiveTimeoutMs != after.ReceiveTimeoutMs;
 
         private static bool HasScannerConnectionChanged(ScannerSerialCommunicationConfig? before, ScannerSerialCommunicationConfig after)
-            => before is null || before.SerialNumber != after.SerialNumber || before.BaudRate != after.BaudRate;
+            => before is null
+                || !string.Equals(before.SerialNumber, after.SerialNumber, StringComparison.OrdinalIgnoreCase)
+                || before.BaudRate != after.BaudRate
+                || !string.Equals(before.Parity, after.Parity, StringComparison.OrdinalIgnoreCase)
+                || before.DataBits != after.DataBits
+                || !string.Equals(before.StopBits, after.StopBits, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(before.FlowControl, after.FlowControl, StringComparison.OrdinalIgnoreCase);
 
         private static bool IsSameScannerConnection(ScannerSerialCommunicationConfig? saved, ScannerSerialCommunicationConfig input)
             => saved is not null
                 && string.Equals(saved.SerialNumber, input.SerialNumber, StringComparison.OrdinalIgnoreCase)
-                && saved.BaudRate == input.BaudRate;
+                && saved.BaudRate == input.BaudRate
+                && string.Equals(saved.Parity, input.Parity, StringComparison.OrdinalIgnoreCase)
+                && saved.DataBits == input.DataBits
+                && string.Equals(saved.StopBits, input.StopBits, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(saved.FlowControl, input.FlowControl, StringComparison.OrdinalIgnoreCase);
 
         private static bool IsSamePlcConnectionTarget(FP0HCommunicationConfig? saved, FP0HCommunicationConfig input)
             => saved is not null
@@ -311,14 +406,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 IpAddress = source.IpAddress,
                 Port = source.Port,
-                SlaveId = source.SlaveId,
-                ReceiveTimeoutMs = source.ReceiveTimeoutMs,
-                SendTimeoutMs = source.SendTimeoutMs,
-                ReconnectDelayMs = source.ReconnectDelayMs,
-                MaxReconnectAttempts = source.MaxReconnectAttempts,
-                HealthCheckMode = source.HealthCheckMode,
-                HealthCheckIntervalSeconds = source.HealthCheckIntervalSeconds,
-                LastDataTimeoutSeconds = source.LastDataTimeoutSeconds
+                SlaveId = source.SlaveId
             };
 
         private static GDM9060CommunicationConfig CloneDmmConfig(GDM9060CommunicationConfig source)
@@ -327,10 +415,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 IpAddress = source.IpAddress,
                 Port = source.Port,
                 ReceiveTimeoutMs = source.ReceiveTimeoutMs,
-                SendTimeoutMs = source.SendTimeoutMs,
-                HealthCheckMode = source.HealthCheckMode,
-                HealthCheckIntervalSeconds = source.HealthCheckIntervalSeconds,
-                LastDataTimeoutSeconds = source.LastDataTimeoutSeconds,
                 ContinuityThresholdOhm = source.ContinuityThresholdOhm
             };
 
@@ -342,35 +426,36 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 Parity = source.Parity,
                 DataBits = source.DataBits,
                 StopBits = source.StopBits,
-                FlowControl = source.FlowControl,
-                HealthCheckMode = source.HealthCheckMode,
-                HealthCheckIntervalSeconds = source.HealthCheckIntervalSeconds,
-                LastDataTimeoutSeconds = source.LastDataTimeoutSeconds
+                FlowControl = source.FlowControl
             };
 
-        private static string BuildSaveResultMessage(DeviceReconnectSummary summary)
+        private void RestoreCsvPathPreview(string rootPath, string previousTestLogPath)
         {
-            if (!summary.HasRequestedReconnect)
-                return "所有配置已保存成功！连接参数未变化。";
+            bool useDefaultPath = string.IsNullOrWhiteSpace(rootPath)
+                || rootPath.Equals("Default", StringComparison.OrdinalIgnoreCase);
 
-            var lines = new List<string> { "配置保存成功。", "连接参数已变更，生产设备重连结果：" };
-            foreach (var result in summary.Results.Where(x => x.Requested))
+            UseDefaultStoragePath = useDefaultPath;
+            CustomStoragePath = useDefaultPath ? string.Empty : rootPath;
+            CsvStorageRootPath = rootPath;
+            CurrentTestLogPath = previousTestLogPath;
+        }
+
+        private static async Task WaitForSaveOverlayToCloseAsync()
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null)
             {
-                var deviceName = result.DeviceType switch
-                {
-                    DeviceTypeNames.Plc => "PLC",
-                    DeviceTypeNames.Dmm => "DMM",
-                    DeviceTypeNames.Scanner => "Scanner",
-                    _ => result.DeviceType
-                };
-                lines.Add($"{deviceName}：{(result.IsConnected ? "重连成功" : "重连失败")}（{result.StatusText}）");
+                await Task.Yield();
+                return;
             }
 
-            return string.Join(Environment.NewLine, lines);
+            await dispatcher.InvokeAsync(
+                () => { },
+                DispatcherPriority.Render);
         }
 
         /// <summary>返回主菜单</summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private async Task NavigateBackToMainMenuAsync()
         {
             try
@@ -386,7 +471,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>浏览选择存储文件夹</summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private void BrowseStoragePath()
         {
             try
@@ -422,7 +507,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>打开当前 TestLog 文件夹</summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private void OpenTestLogFolder()
         {
             try
@@ -454,7 +539,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 其余情况通过 IDeviceConnectionManager.TestPlcConfigurationAsync 使用独立临时测试器，
         /// 复用 _plcLock 与生产重连互斥。
         /// </summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private async Task TestPlcConnectionAsync()
         {
             // 防止重复点击
@@ -569,7 +654,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 输入配置与已保存生产配置相同且生产连接正常时，仅说明端口被生产实例占用。
         /// 其他场景创建临时 HoneywellH1900Scanner 实例测试当前输入串口，用完即释放。
         /// </summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private async Task TestScannerConnectionAsync()
         {
             if (IsTestingScanner) return;
@@ -592,6 +677,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     SetScannerTestResult(false, $"串口号格式不正确: \"{ScannerConfig.SerialNumber}\"（应为 COM1~COM256）");
                     return;
                 }
+                if (!Common.Validators.InputValidationHelper.IsValidBaudRate(ScannerConfig.BaudRate)
+                    || !Common.Validators.InputValidationHelper.IsValidParity(ScannerConfig.Parity)
+                    || !Common.Validators.InputValidationHelper.IsValidDataBits(ScannerConfig.DataBits)
+                    || !Common.Validators.InputValidationHelper.IsValidStopBits(ScannerConfig.StopBits)
+                    || !Common.Validators.InputValidationHelper.IsValidFlowControl(ScannerConfig.FlowControl))
+                {
+                    SetScannerTestResult(false, "扫描枪串口参数无效，请检查波特率、校验位、数据位、停止位和流控制");
+                    return;
+                }
 
                 var savedSettings = _settingsService.LoadSettings();
                 if (IsSameScannerConnection(savedSettings.ScannerSerialCommunication, ScannerConfig)
@@ -609,6 +703,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 tempScanner = new HoneywellH1900Scanner(scannerLogger);
                 tempScanner.PortName = ScannerConfig.SerialNumber;
                 tempScanner.BaudRate = ScannerConfig.BaudRate;
+                tempScanner.Parity = ScannerConfig.Parity;
+                tempScanner.DataBits = ScannerConfig.DataBits;
+                tempScanner.StopBits = ScannerConfig.StopBits;
+                tempScanner.FlowControl = ScannerConfig.FlowControl;
 
                 using var cts = new CancellationTokenSource(TEST_CONNECTION_TIMEOUT_MS);
                 bool success = await tempScanner.ConnectAsync(cts.Token).ConfigureAwait(true);
@@ -684,7 +782,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 其余情况通过 IDeviceConnectionManager.TestDmmConfigurationAsync 使用独立临时测试器，
         /// 不复用生产 GwInstekGDM9060Driver 实例。
         /// </summary>
-        [RelayCommand]
+        [RelayCommand(CanExecute = nameof(CanEditSettings))]
         private async Task TestDmmConnectionAsync()
         {
             if (IsTestingDmm) return;
@@ -846,24 +944,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 errors.Add($"PLC 端口号 {Fp0hConfig.Port} 超出范围（应为 {Common.Validators.InputValidationHelper.PortMinValue}~{Common.Validators.InputValidationHelper.PortMaxValue}）");
             if (!Common.Validators.InputValidationHelper.IsValidModbusSlaveId(Fp0hConfig.SlaveId))
                 errors.Add($"PLC Modbus从站ID {Fp0hConfig.SlaveId} 超出范围（应为 {Common.Validators.InputValidationHelper.ModbusSlaveIdMin}~{Common.Validators.InputValidationHelper.ModbusSlaveIdMax}）");
-            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Fp0hConfig.ReceiveTimeoutMs))
-                errors.Add($"PLC 接收超时 {Fp0hConfig.ReceiveTimeoutMs}ms 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Fp0hConfig.SendTimeoutMs))
-                errors.Add($"PLC 发送超时 {Fp0hConfig.SendTimeoutMs}ms 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidReconnectDelayMs(Fp0hConfig.ReconnectDelayMs))
-                errors.Add($"PLC 重连延迟 {Fp0hConfig.ReconnectDelayMs}ms 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidReconnectAttempts(Fp0hConfig.MaxReconnectAttempts))
-                errors.Add($"PLC 最大重连次数 {Fp0hConfig.MaxReconnectAttempts} 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidHealthCheckInterval(Fp0hConfig.HealthCheckIntervalSeconds))
-                errors.Add($"PLC 心跳间隔 {Fp0hConfig.HealthCheckIntervalSeconds}秒 超出范围");
-
             // ─── 扫描枪 H1900 校验 ───
             if (!Common.Validators.InputValidationHelper.IsValidComPort(ScannerConfig.SerialNumber))
                 errors.Add($"扫描枪串口号 \"{ScannerConfig.SerialNumber}\" 格式不正确（应为 COM1~COM256）");
-            if (!Common.Validators.InputValidationHelper.IsValidHealthCheckInterval(ScannerConfig.HealthCheckIntervalSeconds))
-                errors.Add($"扫描枪心跳间隔 {ScannerConfig.HealthCheckIntervalSeconds}秒 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidDataTimeout(ScannerConfig.LastDataTimeoutSeconds))
-                errors.Add($"扫描枪数据超时 {ScannerConfig.LastDataTimeoutSeconds}秒 超出范围");
+            if (!Common.Validators.InputValidationHelper.IsValidBaudRate(ScannerConfig.BaudRate))
+                errors.Add($"扫描枪波特率 {ScannerConfig.BaudRate} 不在允许列表内");
+            if (!Common.Validators.InputValidationHelper.IsValidParity(ScannerConfig.Parity))
+                errors.Add($"扫描枪校验位 {ScannerConfig.Parity} 无效");
+            if (!Common.Validators.InputValidationHelper.IsValidDataBits(ScannerConfig.DataBits))
+                errors.Add($"扫描枪数据位 {ScannerConfig.DataBits} 无效");
+            if (!Common.Validators.InputValidationHelper.IsValidStopBits(ScannerConfig.StopBits))
+                errors.Add($"扫描枪停止位 {ScannerConfig.StopBits} 无效");
+            if (!Common.Validators.InputValidationHelper.IsValidFlowControl(ScannerConfig.FlowControl))
+                errors.Add($"扫描枪流控制 {ScannerConfig.FlowControl} 无效");
 
             // ─── GDM-9060 万用表校验 ───
             if (!Common.Validators.InputValidationHelper.IsValidIpAddress(Gdm9060Config.IpAddress))
@@ -871,13 +964,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             if (!Common.Validators.InputValidationHelper.IsValidPort(Gdm9060Config.Port))
                 errors.Add($"万用表 端口号 {Gdm9060Config.Port} 超出范围");
             if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Gdm9060Config.ReceiveTimeoutMs))
-                errors.Add($"万用表 接收超时 {Gdm9060Config.ReceiveTimeoutMs}ms 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidTimeoutMs(Gdm9060Config.SendTimeoutMs))
-                errors.Add($"万用表 发送超时 {Gdm9060Config.SendTimeoutMs}ms 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidHealthCheckInterval(Gdm9060Config.HealthCheckIntervalSeconds))
-                errors.Add($"万用表心跳间隔 {Gdm9060Config.HealthCheckIntervalSeconds}秒 超出范围");
-            if (!Common.Validators.InputValidationHelper.IsValidDataTimeout(Gdm9060Config.LastDataTimeoutSeconds))
-                errors.Add($"万用表数据超时 {Gdm9060Config.LastDataTimeoutSeconds}秒 超出范围");
+                errors.Add($"万用表通信超时 {Gdm9060Config.ReceiveTimeoutMs}ms 超出范围");
             if (Gdm9060Config.ContinuityThresholdOhm < 1.0 || Gdm9060Config.ContinuityThresholdOhm > 1000.0)
                 errors.Add($"万用表导通阈值 {Gdm9060Config.ContinuityThresholdOhm}Ω 超出范围（应为 1~1000Ω）");
 
@@ -946,23 +1033,45 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// <summary>保存CSV存储路径到appsettings.json</summary>
         private async Task SaveCsvStoragePathAsync()
         {
+            string newPath = UseDefaultStoragePath ? "Default" : ValidateAndNormalizeCustomStoragePath(CustomStoragePath);
+            using var configManager = new ConfigManagerService(_configuration);
+            var updates = new Dictionary<string, object>
+            {
+                ["CsvStorage:RootPath"] = newPath
+            };
+
+            bool saved = await configManager.SaveConfigurationAsync(updates);
+            if (!saved)
+                throw new IOException("CSV 存储路径配置写入失败");
+
+            _csvStorageSettings.ApplyRuntimeRootPath(newPath);
+            _logger.Information("CSV存储路径已保存: {Path}", newPath);
+            UpdateTestLogPreview();
+        }
+
+        /// <summary>
+        /// 保存自定义路径前只做一次目录创建和临时写入测试，避免配置保存成功但运行时无法写 CSV。
+        /// </summary>
+        private static string ValidateAndNormalizeCustomStoragePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new InvalidOperationException("自定义 CSV 存储路径不能为空");
+
+            string normalizedPath = Path.GetFullPath(path.Trim());
+            Directory.CreateDirectory(normalizedPath);
+
+            string probePath = Path.Combine(normalizedPath, $".csv-write-probe-{Guid.NewGuid():N}.tmp");
             try
             {
-                var configManager = new ConfigManagerService(_configuration);
-                var newPath = UseDefaultStoragePath ? "Default" : CustomStoragePath;
-                var updates = new Dictionary<string, object>
-                {
-                    ["CsvStorage:RootPath"] = newPath
-                };
-                await configManager.SaveConfigurationAsync(updates);
-                _logger.Information("CSV存储路径已保存: {Path}", newPath);
-                UpdateTestLogPreview();
+                File.WriteAllText(probePath, string.Empty);
             }
-            catch (Exception ex)
+            finally
             {
-                _logger.Error(ex, "保存CSV存储路径失败");
-                await _notificationService.ShowErrorAsync($"保存存储路径失败：{ex.Message}");
+                if (File.Exists(probePath))
+                    File.Delete(probePath);
             }
+
+            return normalizedPath;
         }
 
         /// <summary>更新TestLog路径预览</summary>

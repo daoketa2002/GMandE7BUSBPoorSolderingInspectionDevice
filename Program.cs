@@ -190,7 +190,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
                           outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [RunMode={RunMode}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}")
                       .WriteTo.File("logs/app-.log",
                           rollingInterval: RollingInterval.Day,
-                          retainedFileCountLimit: 7,
+                          fileSizeLimitBytes: 10 * 1024 * 1024,
+                          rollOnFileSizeLimit: true,
+                          retainedFileCountLimit: 30,
+                          shared: true,
                           outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [RunMode={RunMode}] [{SourceContextShortName}] {Message:lj}{NewLine}{Exception}");
               });
 
