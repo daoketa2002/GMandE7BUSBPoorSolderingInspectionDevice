@@ -27,6 +27,7 @@
         <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
         <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
         <converters:DeviceConnectionStatusToColorConverter x:Key="DeviceConnectionStatusToColorConverter"/>
+        <converters:DeviceConnectionStatusToShadowColorConverter x:Key="DeviceConnectionStatusToShadowColorConverter"/>
         <converters:BoolInverterConverter x:Key="BoolInverterConverter"/>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
 
@@ -51,40 +52,52 @@
             <Setter Property="HorizontalAlignment" Value="Center"/>
         </Style>
 
+        <!-- ============================================================
+     设备状态指示灯按钮样式（优化版）
+     改动说明：
+       1. 按钮尺寸 110×40 → 120×48，容纳更大字号
+       2. 主标签 14px → 16px，状态标签 11px → 12px
+       3. 移除状态标签 Opacity="0.9"，消除光晕效应
+       4. 增加底部阴影 BorderThickness="0,0,0,4"，参照"终了"按钮立体感
+       5. 圆角 6px → 8px，保持层次感
+       6. 内部布局由 StackPanel 改为 Grid + RowDefinitions，行距更舒展
+     ============================================================ -->
         <Style x:Key="DeviceStatusButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="110"/>
-            <Setter Property="Height" Value="40"/>
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Width" Value="120"/>
+            <Setter Property="Height" Value="48"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderBrush" Value="#566573"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Padding" Value="8,2"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
+                        <!-- 外层：表面背景色 -->
                         <Border x:Name="buttonSurface"
-                                    Background="{TemplateBinding Background}"
-                                    CornerRadius="6">
+                        Background="{TemplateBinding Background}"
+                        CornerRadius="8">
+                            <!-- 内层：底部厚阴影（立体感来源） -->
                             <Border x:Name="buttonBase"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="0,0,0,4"
-                                    CornerRadius="6">
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="0,0,0,4"
+                            CornerRadius="8">
                                 <ContentPresenter x:Name="buttonContent"
-                                                  HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"
-                                                  Margin="{TemplateBinding Padding}"/>
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}"/>
                             </Border>
                         </Border>
                         <ControlTemplate.Triggers>
+                            <!-- 悬停：轻微变亮 -->
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88"/>
                             </Trigger>
+                            <!-- 按下：底部阴影变薄 + 内容下移 → 按下反馈 -->
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2"/>
                                 <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0"/>
                             </Trigger>
+                            <!-- 禁用：半透明 -->
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45"/>
                             </Trigger>
@@ -93,6 +106,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
 
         <Style x:Key="ClearCountButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="50"/>
@@ -316,47 +330,105 @@
                     </Border>
 
                     <UniformGrid Grid.Row="1" Rows="1" Columns="4" HorizontalAlignment="Center">
+                        <!-- ═══════════ PLC 按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
                                 Command="{Binding ReconnectPlcCommand}" Margin="6">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
-                            <StackPanel>
-                                <TextBlock Text="PLC" FontSize="14" HorizontalAlignment="Center"/>
-                                <TextBlock Text="{Binding PlcStatusText}" FontSize="11" HorizontalAlignment="Center" Opacity="0.9"/>
-                            </StackPanel>
+                            <Button.BorderBrush>
+                                <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}"/>
+                            </Button.BorderBrush>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="26"/>
+                                    <RowDefinition Height="18"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="PLC"
+                                           FontSize="16" FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Bottom"/>
+                                <TextBlock Grid.Row="1" Text="{Binding PlcStatusText}"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Top"/>
+                            </Grid>
                         </Button>
 
+                        <!-- ═══════════ 扫描仪按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
                                 Command="{Binding ReconnectScannerCommand}" Margin="6">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
-                            <StackPanel>
-                                <TextBlock Text="扫描仪" FontSize="14" HorizontalAlignment="Center"/>
-                                <TextBlock Text="{Binding ScannerStatusText}" FontSize="11" HorizontalAlignment="Center" Opacity="0.9"/>
-                            </StackPanel>
+                            <Button.BorderBrush>
+                                <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}"/>
+                            </Button.BorderBrush>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="26"/>
+                                    <RowDefinition Height="18"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="扫描仪"
+                                           FontSize="16" FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Bottom"/>
+                                <TextBlock Grid.Row="1" Text="{Binding ScannerStatusText}"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Top"/>
+                            </Grid>
                         </Button>
 
+                        <!-- ═══════════ 万用表按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
                                 Command="{Binding ReconnectDmmCommand}" Margin="6">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
-                            <StackPanel>
-                                <TextBlock Text="万用表" FontSize="14" HorizontalAlignment="Center"/>
-                                <TextBlock Text="{Binding DmmStatusText}" FontSize="11" HorizontalAlignment="Center" Opacity="0.9"/>
-                            </StackPanel>
+                            <Button.BorderBrush>
+                                <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}"/>
+                            </Button.BorderBrush>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="26"/>
+                                    <RowDefinition Height="18"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="万用表"
+                                           FontSize="16" FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Bottom"/>
+                                <TextBlock Grid.Row="1" Text="{Binding DmmStatusText}"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Top"/>
+                            </Grid>
                         </Button>
 
-                        <Button Style="{StaticResource DeviceStatusButtonStyle}" Margin="6" IsHitTestVisible="False">
+                        <!-- ═══════════ PC 按钮 ═══════════ -->
+                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
+                                Margin="6" IsHitTestVisible="False">
                             <Button.Background>
                                 <SolidColorBrush Color="#27AE60"/>
                             </Button.Background>
-                            <StackPanel>
-                                <TextBlock Text="PC" FontSize="14" HorizontalAlignment="Center"/>
-                                <TextBlock Text="就绪" FontSize="11" HorizontalAlignment="Center" Opacity="0.9"/>
-                            </StackPanel>
+                            <Button.BorderBrush>
+                                <!-- PC 按钮颜色固定为绿色，阴影色手动计算：#27AE60 × 0.6 = #186A40 -->
+                                <SolidColorBrush Color="#186A40"/>
+                            </Button.BorderBrush>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="26"/>
+                                    <RowDefinition Height="18"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="PC"
+                                           FontSize="16" FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Bottom"/>
+                                <TextBlock Grid.Row="1" Text="就绪"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Top"/>
+                            </Grid>
                         </Button>
                     </UniformGrid>
                 </Grid>
