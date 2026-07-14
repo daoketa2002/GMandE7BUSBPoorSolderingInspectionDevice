@@ -25,7 +25,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private readonly ILogger<CsvStoragePathManager> _logger;
         private readonly int _maxRowsPerFile;
 
-        private const string DATA_FOLDER_NAME = "数据";
         private const string TEST_LOG_FOLDER_NAME = "TestLog";
 
         /// <summary>
@@ -54,12 +53,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public int MaxRowsPerFile => _maxRowsPerFile;
 
         /// <summary>
-        /// 获取 TestLog 根目录路径（实时从配置读取，支持动态切换）
+        /// 根据用户选择的存储根目录，生成实际 TestLog 目录。
+        /// </summary>
+        public static string BuildTestLogRootPath(string rootPath)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+            return Path.Combine(rootPath, TEST_LOG_FOLDER_NAME);
+        }
+
+        /// <summary>
+        /// 获取当前实际使用的 CSV 日志根目录。
         /// </summary>
         public string GetTestLogRootPath()
         {
             var effectiveRoot = _settings.GetEffectiveRootPath();
-            return Path.Combine(effectiveRoot, DATA_FOLDER_NAME, TEST_LOG_FOLDER_NAME);
+            return BuildTestLogRootPath(effectiveRoot);
         }
 
         /// <summary>

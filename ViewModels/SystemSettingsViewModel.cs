@@ -23,7 +23,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     /// <summary>
     /// 系统设定页面的ViewModel
-    /// 负责三个设备的参数配置展示、保存/恢复默认以及设备测试连接功能
+    /// 负责三个设备的参数配置展示、保存以及设备测试连接功能
     /// </summary>
     public partial class SystemSettingsViewModel : ObservableObject, INavigationAware
     {
@@ -78,7 +78,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         /// <summary>保存配置期间显示非模态等待遮罩并阻止重复操作。</summary>
         [ObservableProperty]
-        [NotifyCanExecuteChangedFor(nameof(ResetToDefaultCommand))]
         [NotifyCanExecuteChangedFor(nameof(SaveAllConfigCommand))]
         [NotifyCanExecuteChangedFor(nameof(NavigateBackToMainMenuCommand))]
         [NotifyCanExecuteChangedFor(nameof(BrowseStoragePathCommand))]
@@ -219,33 +218,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
         #endregion
 
-        #region 保存/恢复/返回命令
-
-        /// <summary>恢复所有设备配置为默认值</summary>
-        [RelayCommand(CanExecute = nameof(CanEditSettings))]
-        private async Task ResetToDefaultAsync()
-        {
-            try
-            {
-                bool confirmed = await _notificationService.ConfirmAsync(
-                    "确定要恢复所有设备参数为默认配置吗？\n当前修改将丢失。",
-                    "恢复默认配置");
-
-                if (!confirmed) return;
-
-                Fp0hConfig = new FP0HCommunicationConfig();
-                ScannerConfig = new ScannerSerialCommunicationConfig();
-                Gdm9060Config = new GDM9060CommunicationConfig();
-
-                _logger.Information("所有设备配置已恢复为默认值");
-                await _notificationService.ShowInfoAsync("已恢复默认配置。");
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "恢复默认配置失败");
-                await _notificationService.ShowErrorAsync($"恢复默认配置失败：{ex.Message}");
-            }
-        }
+        #region 保存/返回命令
 
         /// <summary>保存所有设备配置到文件</summary>
         [RelayCommand(CanExecute = nameof(CanEditSettings))]
@@ -513,14 +486,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             try
             {
                 var testLogPath = _csvPathManager.GetTestLogRootPath();
-                if (Directory.Exists(testLogPath))
+                Directory.CreateDirectory(testLogPath);
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    System.Diagnostics.Process.Start("explorer.exe", testLogPath);
-                }
-                else
-                {
-                    _notificationService.ShowWarningAsync("TestLog 文件夹尚不存在，保存第一条记录后会自动创建。", "提示");
-                }
+                    FileName = testLogPath,
+                    UseShellExecute = true
+                });
             }
             catch (Exception ex)
             {
@@ -1074,17 +1046,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             return normalizedPath;
         }
 
-        /// <summary>更新TestLog路径预览</summary>
+        /// <summary>
+        /// 刷新系统设置界面的 TestLog 路径预览。
+        /// 路径规则必须与实际 CSV 保存规则保持一致。
+        /// </summary>
         private void UpdateTestLogPreview()
         {
-            if (UseDefaultStoragePath || string.IsNullOrWhiteSpace(CustomStoragePath))
-            {
-                CurrentTestLogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "数据", "TestLog");
-            }
-            else
-            {
-                CurrentTestLogPath = Path.Combine(CustomStoragePath, "数据", "TestLog");
-            }
+            string rootPath = UseDefaultStoragePath || string.IsNullOrWhiteSpace(CustomStoragePath)
+                ? AppDomain.CurrentDomain.BaseDirectory
+                : CustomStoragePath;
+
+            CurrentTestLogPath = CsvStoragePathManager.BuildTestLogRootPath(rootPath);
         }
 
         #endregion

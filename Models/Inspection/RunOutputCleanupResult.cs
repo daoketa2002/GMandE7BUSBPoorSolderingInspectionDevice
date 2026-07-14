@@ -3,13 +3,11 @@ public sealed record RunOutputCleanupResult(
     bool StartCleared,
     bool PcReadyCleared,
     bool RelayCleared,
-    bool PinsCleared,
-    bool FinalResultCleared)
+    bool PinsCleared)
 {
     public bool AllSucceeded =>
         StartCleared
         && PcReadyCleared
         && RelayCleared
-        && PinsCleared
-        && FinalResultCleared;
+        && PinsCleared;
 }

@@ -149,6 +149,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private int _inspectionRunVersion;
 
+    /// <summary>正常 OK 结果的延时清除任务取消源。</summary>
+    private CancellationTokenSource? _finalResultAutoClearCts;
+
+    /// <summary>正常 OK 结果的延时清除任务，便于控制动作安全等待其退出。</summary>
+    private Task? _finalResultAutoClearTask;
+
+    /// <summary>串行化最终结果延时任务的替换和取消，避免竞态覆盖任务引用。</summary>
+    private readonly SemaphoreSlim _finalResultAutoClearLock = new(1, 1);
+
     /// <summary>
     /// 复位后等待 DT120 启动请求释放。
     /// 复位流程会主动清 DT120，但真实 PLC 或按钮链路可能需要一个轮询周期才读回 0。
@@ -1173,8 +1182,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 FinalJudgment = finalResult;
-                SetUiState(finalResult == "OK" ? TestUIState.CompletedPass : TestUIState.CompletedFail);
-                AddLog($"本轮检测完成：{finalResult}");
+                if (UiState != TestUIState.Error)
+                {
+                    SetUiState(finalResult == "OK" ? TestUIState.CompletedPass : TestUIState.CompletedFail);
+                    AddLog($"本轮检测完成：{finalResult}");
+                }
+                else
+                {
+                    AddLog($"本轮检测结果为 {finalResult}，但最终结果清理异常，保持异常状态并等待复位。");
+                }
             });
         }
         finally
@@ -1398,14 +1414,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogInformation("[PLC动作][审计] 检测完成且保存策略已处理，开始清理本轮启动握手信号");
 
-        var cleanupResult = await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
+        var cleanupResult = await ClearTransientRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
 
         if (!cleanupResult.AllSucceeded)
         {
-            _logger.LogError("[PLC收口][审计] 正常完成收口失败：Start={Start}, PcReady={PcReady}, Relay={Relay}, Pins={Pins}, Final={Final}",
+            _logger.LogError("[PLC收口][审计] 正常完成收口失败：Start={Start}, PcReady={PcReady}, Relay={Relay}, Pins={Pins}",
                 cleanupResult.StartCleared, cleanupResult.PcReadyCleared,
-                cleanupResult.RelayCleared, cleanupResult.PinsCleared,
-                cleanupResult.FinalResultCleared);
+                cleanupResult.RelayCleared, cleanupResult.PinsCleared);
 
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
@@ -1422,7 +1437,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             IsPlcStartRequested = false;
         });
 
-        _logger.LogInformation("[PLC动作][审计] 本轮正常完成收口结束：DT120/DT234/DT304/DT305 已清除，界面结果保留到复位");
+        _logger.LogInformation("[PLC动作][审计] 本轮正常完成收口结束：DT120/DT234/DT302/DT130~DT185 已清除，最终产品结果按 OK/NG 保持规则独立处理");
         AddLog("PLC 检测完成收口完成");
         return true;
     }
@@ -1432,37 +1447,196 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     #region 统一 PLC 输出清理
 
     /// <summary>
-    /// 清当前运行输出：DT120、DT234、DT302、DT130~185、DT304/DT305。
+    /// 清普通运行输出：DT120、DT234、DT302、DT130~185。
     /// 停止、单项 NG、正常完成收口、紧急停止后调用。
     /// 返回逐项清理结果。
     /// </summary>
-    private async Task<RunOutputCleanupResult> ClearCurrentRunOutputsAsync(CancellationToken ct = default)
+    private async Task<RunOutputCleanupResult> ClearTransientRunOutputsAsync(CancellationToken ct = default)
     {
         var start = await _plcDevice.ClearStartRequestAsync(ct).ConfigureAwait(false);
         var pcReady = await _plcDevice.ClearPcReadyAsync(ct).ConfigureAwait(false);
         var relay = await _plcDevice.ClearRelayActionCompletedAsync(ct).ConfigureAwait(false);
         var pins = await _plcDevice.ClearPinOutputsAsync(ct).ConfigureAwait(false);
-        var finalResult = await _plcDevice.ClearFinalResultAsync(ct).ConfigureAwait(false);
 
         var result = new RunOutputCleanupResult(
             start.IsSuccess,
             pcReady.IsSuccess,
             relay.IsSuccess,
-            pins.IsSuccess,
-            finalResult.IsSuccess);
+            pins.IsSuccess);
 
         if (result.AllSucceeded)
         {
-            _logger.LogInformation("[PLC清理][成功] DT120={Start}, DT234={PcReady}, DT302={Relay}, DT130~185={Pins}, DT304/305={Final}",
-                start.IsSuccess, pcReady.IsSuccess, relay.IsSuccess, pins.IsSuccess, finalResult.IsSuccess);
+            _logger.LogInformation("[PLC清理][成功] DT120={Start}, DT234={PcReady}, DT302={Relay}, DT130~185={Pins}",
+                start.IsSuccess, pcReady.IsSuccess, relay.IsSuccess, pins.IsSuccess);
         }
         else
         {
-            _logger.LogError("[PLC清理][失败] DT120={Start}, DT234={PcReady}, DT302={Relay}, DT130~185={Pins}, DT304/305={Final}",
-                start.IsSuccess, pcReady.IsSuccess, relay.IsSuccess, pins.IsSuccess, finalResult.IsSuccess);
+            _logger.LogError("[PLC清理][失败] DT120={Start}, DT234={PcReady}, DT302={Relay}, DT130~185={Pins}",
+                start.IsSuccess, pcReady.IsSuccess, relay.IsSuccess, pins.IsSuccess);
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 单独清理 DT304/DT305，并保留调用场景和失败原因，避免普通运行输出清理误清最终结果。
+    /// </summary>
+    private async Task<PlcOperationResult> ClearFinalResultWithAuditAsync(
+        string reason,
+        CancellationToken ct = default)
+    {
+        var result = await _plcDevice.ClearFinalResultAsync(ct).ConfigureAwait(false);
+        if (result.IsSuccess)
+        {
+            _logger.LogInformation("[PLC最终结果清理][成功] Reason={Reason}, Message={Message}", reason, result.Message);
+        }
+        else
+        {
+            _logger.LogError(
+                "[PLC最终结果清理][失败] Reason={Reason}, Message={Message}",
+                reason,
+                result.Message);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 取消并等待上一轮 OK 自动清除任务，确保复位或页面退出后旧任务不再操作 PLC。
+    /// </summary>
+    private async Task CancelFinalResultAutoClearAsync(string reason)
+    {
+        await _finalResultAutoClearLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await CancelFinalResultAutoClearCoreAsync(reason).ConfigureAwait(false);
+        }
+        finally
+        {
+            _finalResultAutoClearLock.Release();
+        }
+    }
+
+    private async Task CancelFinalResultAutoClearCoreAsync(string reason)
+    {
+        var cts = _finalResultAutoClearCts;
+        var task = _finalResultAutoClearTask;
+        _finalResultAutoClearCts = null;
+        _finalResultAutoClearTask = null;
+
+        if (cts is null && task is null)
+            return;
+
+        cts?.Cancel();
+        if (task is not null)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消是 Reset、Stop、Finish 和页面生命周期的预期结果。
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[PLC最终结果清理][任务取消异常] Reason={Reason}", reason);
+            }
+        }
+
+        cts?.Dispose();
+        _logger.LogInformation("[PLC最终结果清理][延时任务已取消] Reason={Reason}", reason);
+    }
+
+    /// <summary>
+    /// 在最终结果成功写入后启动独立的 OK 延时清除任务，不阻塞 CSV 保存和完成界面更新。
+    /// </summary>
+    private async Task ScheduleOkFinalResultAutoClearAsync(int runVersion)
+    {
+        await _finalResultAutoClearLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await CancelFinalResultAutoClearCoreAsync("替换上一轮 OK 延时任务").ConfigureAwait(false);
+
+            var cts = new CancellationTokenSource();
+            _finalResultAutoClearCts = cts;
+            _finalResultAutoClearTask = RunOkFinalResultAutoClearAsync(runVersion, cts.Token);
+            _logger.LogInformation(
+                "[PLC最终结果][OK保持] 已启动延时清除任务，RunVersion={RunVersion}",
+                runVersion);
+        }
+        finally
+        {
+            _finalResultAutoClearLock.Release();
+        }
+    }
+
+    private async Task RunOkFinalResultAutoClearAsync(int runVersion, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+
+            if (runVersion != Volatile.Read(ref _inspectionRunVersion))
+            {
+                _logger.LogInformation(
+                    "[PLC最终结果][OK保持] 任务版本已过期，跳过清除，RunVersion={RunVersion}, CurrentRunVersion={CurrentRunVersion}",
+                    runVersion,
+                    _inspectionRunVersion);
+                return;
+            }
+
+            var clearResult = await ClearFinalResultWithAuditAsync("OK延时清除-第一次", token).ConfigureAwait(false);
+            if (!clearResult.IsSuccess)
+            {
+                _logger.LogWarning(
+                    "[PLC最终结果][OK清除重试] 第一次清除失败，200ms 后进行最后一次尝试，Message={Message}",
+                    clearResult.Message);
+                await Task.Delay(TimeSpan.FromMilliseconds(200), token).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+
+                if (runVersion != Volatile.Read(ref _inspectionRunVersion))
+                    return;
+
+                clearResult = await ClearFinalResultWithAuditAsync("OK延时清除-第二次", token).ConfigureAwait(false);
+            }
+
+            if (!clearResult.IsSuccess)
+            {
+                _logger.LogError(
+                    "[FinalResultAutoClearFailed][PLC最终结果] OK 信号清除失败，Message={Message}",
+                    clearResult.Message);
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    if (runVersion != _inspectionRunVersion)
+                        return;
+
+                    SetUiState(TestUIState.Error);
+                    AddLog("PLC OK 结果信号清除失败，请执行复位后再继续操作。");
+                });
+            }
+            else
+            {
+                _logger.LogInformation("[PLC最终结果][OK保持] 已完成约 1 秒延时清除");
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _logger.LogDebug("[PLC最终结果][OK保持] 延时清除任务已取消，RunVersion={RunVersion}", runVersion);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[FinalResultAutoClearFailed][PLC最终结果] OK 延时清除任务异常，RunVersion={RunVersion}", runVersion);
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (runVersion != _inspectionRunVersion)
+                    return;
+
+                SetUiState(TestUIState.Error);
+                AddLog("PLC OK 结果延时清除异常，请执行复位后再继续操作。");
+            });
+        }
     }
 
     /// <summary>
@@ -1526,6 +1700,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         try
         {
+            await CancelFinalResultAutoClearAsync("Finish开始").ConfigureAwait(false);
             _logger.LogWarning("[终止按钮][审计] 终止按钮触发，写 DT306=1");
             await _plcDevice.RequestTerminateAsync(CancellationToken.None);
             AddLog("终止信号(DT306=1)已写入");
@@ -2128,7 +2303,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             _logger.LogWarning("[启动流程][取消] Starting 被外部取消（Stop/Reset/EmergencyStop），已释放锁交由新 Flow 执行");
             _startingCts = null;
-            // DT234 可能已写入，由新 Flow（如 ResetFlow）的 ClearCurrentRunOutputsAsync 清理
+            // DT234 可能已写入，由新 Flow（如 ResetFlow）的 ClearTransientRunOutputsAsync 清理
             return;
         }
         finally
@@ -2245,6 +2420,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         try
         {
+            await CancelFinalResultAutoClearAsync("Reset开始").ConfigureAwait(false);
+
             if (_inspectionEngine!.IsRunning)
             {
                 // ── 第 1 级：软超时（2 秒）──
@@ -2320,7 +2497,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             // 统一调用运行输出清理替换手写序列
-            await ClearCurrentRunOutputsAsync(CancellationToken.None);
+            await ClearTransientRunOutputsAsync(CancellationToken.None);
+
+            var finalResultClear = await ClearFinalResultWithAuditAsync("Reset", CancellationToken.None);
+            if (!finalResultClear.IsSuccess)
+            {
+                SetUiState(TestUIState.ResetFailed);
+                _isResetting = false;
+                AddLog("复位未完成：产品结果信号未能清除，请检查 PLC 通信后重新复位。");
+                await _notificationService.ShowWarningAsync(
+                    "复位未完成：产品结果信号未能清除。\n请检查 PLC 通信后重新执行复位。",
+                    "复位失败").ConfigureAwait(false);
+                return;
+            }
 
             if (_plcDevice is Devices.Fakes.FakeInspectionHardware fake)
             {
@@ -2454,6 +2643,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             _ignoreInspectionCallbacksUntilNextStart = true;
             Interlocked.Increment(ref _inspectionRunVersion);
+            await CancelFinalResultAutoClearAsync("Stop开始").ConfigureAwait(false);
             SetUiState(TestUIState.Paused);
             _logger.LogWarning("[停止流程][审计] DT122 停止信号，来源={Source}，执行停止收口", source);
             AddLog($"[停止流程] 收到停止信号(DT122)，来源={source}，正在停止检测...");
@@ -2468,6 +2658,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     _logger.LogError(
                         "[停止流程][停止超时] UiState={UiState}, ControlAction={Action}, EngineState={EngineState}, EngineStage={Stage}, EngineIsRunning={IsRunning}",
                         UiState, _currentControlAction, _inspectionEngine.CurrentState, engineStage, engineIsRunning);
+                    var timeoutFinalResult = await ClearFinalResultWithAuditAsync("Stop-EngineTimeout", CancellationToken.None).ConfigureAwait(false);
+                    if (!timeoutFinalResult.IsSuccess)
+                        AddLog("停止收口时产品结果信号清除失败，请执行复位完成清理。");
                     await CompleteStopSignalHandshakeAsync("StopAndWaitTimeout", CancellationToken.None).ConfigureAwait(false);
                     _inspectionStarted = false;
                     IsPlcStartRequested = false;
@@ -2478,7 +2671,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             _inspectionEngine.ClearResetState();
-            await ClearCurrentRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
+            await ClearTransientRunOutputsAsync(CancellationToken.None).ConfigureAwait(false);
+            var finalResult = await ClearFinalResultWithAuditAsync("Stop", CancellationToken.None).ConfigureAwait(false);
             bool stopSignalReleased = await CompleteStopSignalHandshakeAsync("NormalStopFlow", CancellationToken.None).ConfigureAwait(false);
 
             _inspectionStarted = false;
@@ -2494,6 +2688,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 AddLog("[停止流程] 已停止，但 DT122 仍未稳定释放，请执行复位完成收口");
                 _logger.LogWarning("[停止流程][DT122] 稳定确认未释放，页面保持 AwaitingReset，等待 ResetFlow 兜底");
             }
+
+            if (!finalResult.IsSuccess)
+                AddLog("[停止流程] 产品结果信号清除失败，保持等待复位，不允许继续启动");
         }
         catch (Exception ex)
         {
@@ -2562,13 +2759,17 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             _ignoreInspectionCallbacksUntilNextStart = true;
             Interlocked.Increment(ref _inspectionRunVersion);
+            await CancelFinalResultAutoClearAsync("EmergencyStop开始").ConfigureAwait(false);
             SetUiState(TestUIState.EmergencyStop);
 
             if (_inspectionEngine!.IsRunning)
                 _inspectionEngine.StopForEmergencyStop();
 
             // 统一调用运行输出清理替换手写序列
-            await ClearCurrentRunOutputsAsync(CancellationToken.None);
+            await ClearTransientRunOutputsAsync(CancellationToken.None);
+            var finalResult = await ClearFinalResultWithAuditAsync("EmergencyStop", CancellationToken.None);
+            if (!finalResult.IsSuccess)
+                _logger.LogError("[急停流程][审计] 产品结果信号清除失败，保持急停状态并等待复位");
 
             _inspectionEngine.ClearResetState();
             _inspectionStarted = false;
@@ -3022,6 +3223,17 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         else
         {
+            if (result.IsAllPassed)
+            {
+                // 最终结果写入已在 InspectionEngine 中确认成功，此处立即开始计时，不能等待 CSV 保存。
+                await ScheduleOkFinalResultAutoClearAsync(runVersion).ConfigureAwait(false);
+            }
+            else
+            {
+                _logger.LogWarning("[PLC最终结果][NG保持] 最终 NG 结果保持到完整复位，RunVersion={RunVersion}", runVersion);
+                await Application.Current.Dispatcher.InvokeAsync(() => AddLog("最终结果为 NG，保持至完整复位后清除。"));
+            }
+
             // 正常完成 → 自动保存、PLC 收口，最后再显示 OK/NG
             await Application.Current.Dispatcher.InvokeAsync(async () =>
             {
@@ -3365,6 +3577,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         // 导致本轮页面初始化后误触发启动、复位、停止等流程
         try
         {
+            await CancelFinalResultAutoClearAsync("进入运行页初始化").ConfigureAwait(false);
             await ClearAllRunSignalsAsync(CancellationToken.None);
             _logger.LogInformation("[运行页初始化] 已主动清除所有残留 PLC 信号");
         }
@@ -3384,6 +3597,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _duplicateCheckCts?.Cancel();
         _duplicateCheckCts?.Dispose();
         _duplicateCheckCts = null;
+        await CancelFinalResultAutoClearAsync("离开运行页").ConfigureAwait(false);
         StopPlcPolling();
         UnsubscribeFromHardwareEvents();
 
@@ -3561,6 +3775,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _duplicateCheckCts?.Cancel();
         _duplicateCheckCts?.Dispose();
         _duplicateCheckCts = null;
+        try
+        {
+            _finalResultAutoClearCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 页面销毁与延时任务收尾并发时，CTS 已由收口流程释放即可忽略。
+        }
+        _ = CancelFinalResultAutoClearAsync("Dispose");
         StopPlcPolling();
         UnsubscribeFromHardwareEvents();
         _controlActionLock.Dispose();

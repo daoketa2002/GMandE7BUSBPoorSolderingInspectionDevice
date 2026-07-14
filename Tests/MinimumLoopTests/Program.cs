@@ -62,6 +62,8 @@ var tests = new List<(string Name, Action Body)>
     ("DMM 模式初始化连接异常会标记断线", TestDmmModeFailureMarksDisconnected),
     ("阶段 C Modbus 日志包含拒绝、堆栈、慢请求和释放上下文", TestStageCModbusLogContract),
     ("CTRL-FIX-01 复位停止请求门禁与复位高电平轮询契约", TestCtrlFix01SourceContract),
+    ("RESULT-UI-01 PLC 最终结果和系统设置源码契约", TestResultUi01SourceContract),
+    ("CSV 日志根目录统一为根目录 TestLog", TestCsvLogRootPathContract),
     ("启动拒绝记录来源原因和是否清除启动请求", () =>
     {
         var source = File.ReadAllText(Path.Combine(
@@ -309,7 +311,7 @@ var tests = new List<(string Name, Action Body)>
                 planVersion: 1,
                 pins: new[] { "A1-B1" });
 
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var monthFolder = Path.Combine(root, "TestLog", "2026-07");
             Directory.CreateDirectory(monthFolder);
             var oldFile = Path.Combine(monthFolder, "GM_P1.csv");
             File.WriteAllLines(oldFile, new[]
@@ -493,7 +495,7 @@ var tests = new List<(string Name, Action Body)>
                     .GetResult();
             }
 
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var monthFolder = Path.Combine(root, "TestLog", "2026-07");
             var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
             AssertEqual(2, files.Count);
 
@@ -531,7 +533,7 @@ var tests = new List<(string Name, Action Body)>
                 .GetAwaiter()
                 .GetResult();
 
-            var monthFolder = Path.Combine(root, "数据", "TestLog", "2026-07");
+            var monthFolder = Path.Combine(root, "TestLog", "2026-07");
             var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
             AssertEqual(2, files.Count);
 
@@ -924,8 +926,8 @@ var tests = new List<(string Name, Action Body)>
 
             storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-B", DateTime.Now.AddSeconds(1))).GetAwaiter().GetResult();
 
-            var filesA = Directory.GetFiles(Path.Combine(rootA, "数据", "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
-            var filesB = Directory.GetFiles(Path.Combine(rootB, "数据", "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
+            var filesA = Directory.GetFiles(Path.Combine(rootA, "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
+            var filesB = Directory.GetFiles(Path.Combine(rootB, "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
             AssertEqual(true, filesA.Length > 0);
             AssertEqual(true, filesB.Length > 0);
             AssertEqual(true, filesA.All(file => File.ReadAllText(file).Contains("SN-A", StringComparison.Ordinal)));
@@ -1782,6 +1784,98 @@ static void TestRefClean01ForbiddenSourceContract()
     }
 
     AssertEqual(string.Empty, string.Join(Environment.NewLine, hits));
+}
+
+static void TestResultUi01SourceContract()
+{
+    string engineSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "InspectionEngine.cs"));
+    string viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+    string cleanupModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Models",
+        "Inspection",
+        "RunOutputCleanupResult.cs"));
+    string settingsViewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "SystemSettingsViewModel.cs"));
+    string settingsViewSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Views",
+        "SystemSettingsView.xaml"));
+
+    AssertEqual(true, engineSource.Contains("var finalWriteResult = await _plcDevice.WriteFinalResultAsync(", StringComparison.Ordinal));
+    AssertEqual(true, engineSource.Contains("FinalResultWriteFailed", StringComparison.Ordinal));
+    AssertEqual(true, engineSource.Contains("finalWriteResult.Message", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ClearTransientRunOutputsAsync", StringComparison.Ordinal));
+    AssertEqual(false, viewModelSource.Contains("ClearCurrentRunOutputsAsync", StringComparison.Ordinal));
+    AssertEqual(false, cleanupModelSource.Contains("FinalResultCleared", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("_finalResultAutoClearCts", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("_finalResultAutoClearTask", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ScheduleOkFinalResultAutoClear", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("Task.Delay(TimeSpan.FromSeconds(1), token)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("if (UiState != TestUIState.Error)", StringComparison.Ordinal));
+    AssertEqual(false, settingsViewModelSource.Contains("ResetToDefaultAsync", StringComparison.Ordinal));
+    AssertEqual(false, settingsViewSource.Contains("ResetToDefaultCommand", StringComparison.Ordinal));
+    AssertEqual(true, settingsViewSource.Contains("IsReadOnly=\"True\"", StringComparison.Ordinal));
+}
+
+static void TestCsvLogRootPathContract()
+{
+    string root = Path.Combine(
+        Path.GetTempPath(),
+        "gm-e78-csv-root-contract-" + Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var pathManager = CreateCsvPathManager(root, maxRowsPerFile: 50000);
+        AssertEqual(Path.Combine(root, "TestLog"), pathManager.GetTestLogRootPath());
+
+        string pathManagerSource = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "Services",
+            "CsvStoragePathManager.cs"));
+        string settingsViewModelSource = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "ViewModels",
+            "SystemSettingsViewModel.cs"));
+        string settingsViewSource = File.ReadAllText(Path.Combine(
+            Environment.CurrentDirectory,
+            "Views",
+            "SystemSettingsView.xaml"));
+
+        AssertEqual(true, pathManagerSource.Contains(
+            "public static string BuildTestLogRootPath(string rootPath)",
+            StringComparison.Ordinal));
+        AssertEqual(false, pathManagerSource.Contains("DATA_FOLDER_NAME", StringComparison.Ordinal));
+        AssertEqual(true, settingsViewModelSource.Contains(
+            "CsvStoragePathManager.BuildTestLogRootPath(rootPath)",
+            StringComparison.Ordinal));
+        AssertEqual(false, settingsViewModelSource.Contains(
+            "Path.Combine(CustomStoragePath, \"数据\", \"TestLog\")",
+            StringComparison.Ordinal));
+        AssertEqual(true, settingsViewModelSource.Contains(
+            "_csvPathManager.GetTestLogRootPath()",
+            StringComparison.Ordinal));
+        AssertEqual(true, settingsViewModelSource.Contains(
+            "Directory.CreateDirectory(testLogPath)",
+            StringComparison.Ordinal));
+        AssertEqual(true, settingsViewModelSource.Contains(
+            "new System.Diagnostics.ProcessStartInfo",
+            StringComparison.Ordinal));
+        AssertEqual(false, settingsViewSource.Contains("「数据\\TestLog」", StringComparison.Ordinal));
+        AssertEqual(true, settingsViewSource.Contains("「TestLog」文件夹", StringComparison.Ordinal));
+    }
+    finally
+    {
+        TryDeleteDirectory(root);
+    }
 }
 
 static void AssertEqual<T>(T expected, T actual)

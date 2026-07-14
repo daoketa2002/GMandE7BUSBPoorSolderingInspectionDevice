@@ -23,7 +23,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     /// CSV 测试记录存储实现
     /// 
     /// 目录结构：
-    /// {根目录}/数据/TestLog/{yyyy-MM}/{机种名称}_{方案名称}.csv
+    /// {根目录}/TestLog/{yyyy-MM}/{机种名称}_{方案名称}.csv
     /// 
     /// 特性：
     /// - 按年月自动分层

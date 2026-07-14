@@ -345,13 +345,30 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                 result.IsAllPassed = failCount == 0;
                 result.EndTime = DateTime.Now;
 
-                _progress.CurrentStep = "Completed";
-                SetState(result.IsAllPassed ? InspectionState.CompletedPass : InspectionState.CompletedFail);
-
-                await _plcDevice.WriteFinalResultAsync(
+                var finalWriteResult = await _plcDevice.WriteFinalResultAsync(
                     result.IsAllPassed,
                     firstNgIndex >= 0 ? firstNgIndex : null,
                     _inspectionCts.Token).ConfigureAwait(false);
+
+                if (!finalWriteResult.IsSuccess)
+                {
+                    string failureMessage = $"PLC 最终结果写入失败：{finalWriteResult.Message}";
+                    _logger.LogError(
+                        "[FinalResultWriteFailed][检测异常] InspectionId={InspectionId}, Message={Message}",
+                        inspectionId,
+                        finalWriteResult.Message);
+
+                    await AbortCurrentRunAsync(
+                        result,
+                        failureMessage,
+                        InspectionState.Error,
+                        "FinalResultWriteFailed").ConfigureAwait(false);
+
+                    return result;
+                }
+
+                _progress.CurrentStep = "Completed";
+                SetState(result.IsAllPassed ? InspectionState.CompletedPass : InspectionState.CompletedFail);
 
                 // 正常完成时只写 DT304/DT305 最终结果。
                 // DT120/DT234 的正常完成收口必须等 TestPageViewModel 完成保存策略处理后执行。
