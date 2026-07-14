@@ -673,12 +673,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 var notificationService = _serviceProvider.GetService<INotificationService>();
                 if (notificationService != null)
                 {
-                    await Task.Run(() =>
-                    {
-                        notificationService.ShowError(
-                            $"导航到 {viewType.Name} 失败：{ex.Message}",
-                            "导航错误");
-                    });
+                    await notificationService.ShowErrorAsync(
+                        $"导航到 {viewType.Name} 失败：{ex.Message}",
+                        "导航错误");
                 }
             }
             catch

@@ -60,6 +60,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     private readonly INavigationService _navigationService;
     private readonly INotificationService _notificationService;
+    private readonly IDialogCoordinator _dialogCoordinator;
     private readonly ILogger<TestPageViewModel> _logger;
     private readonly IPlanStorageService _planStorageService;
     private readonly IOperatorStateService _operatorStateService;
@@ -269,6 +270,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     public TestPageViewModel(
         INavigationService navigationService,
         INotificationService notificationService,
+        IDialogCoordinator dialogCoordinator,
         IOperatorStateService operatorStateService,
         ILogger<TestPageViewModel> logger,
 
@@ -285,6 +287,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
         _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
+        _dialogCoordinator = dialogCoordinator ?? throw new ArgumentNullException(nameof(dialogCoordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
         _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
@@ -443,9 +446,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _clockTimer.Start();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanReconnectElectricalDevice))]
     private async Task ReconnectPlcAsync()
     {
+        if (!CanReconnectElectricalDevice())
+        {
+            _logger.LogWarning("[设备重连][PLC][拒绝] 检测正在启动或运行中，不允许手动重连");
+            return;
+        }
+
         await _deviceManager.ReconnectDeviceAsync("PLC");
     }
 
@@ -475,10 +484,34 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanReconnectElectricalDevice))]
     private async Task ReconnectDmmAsync()
     {
+        if (!CanReconnectElectricalDevice())
+        {
+            _logger.LogWarning("[设备重连][DMM][拒绝] 检测正在启动或运行中，不允许手动重连");
+            return;
+        }
+
         await _deviceManager.ReconnectDeviceAsync("DMM");
+    }
+
+    /// <summary>
+    /// 判断 PLC 和万用表是否允许手动重连。
+    /// 检测中禁止先断开再连接，避免旧检测继续使用不确定的设备连接。
+    /// </summary>
+    private bool CanReconnectElectricalDevice()
+        => !HasActiveInspectionContext();
+
+    /// <summary>
+    /// 判断当前是否存在需要设备断线收口的检测上下文。
+    /// 手动重连会产生 Connecting/Disconnected 短暂状态，不能再用旧的 wasConnected 单独判定异常。
+    /// </summary>
+    private bool HasActiveInspectionContext()
+    {
+        return _currentControlAction == InspectionControlAction.Starting
+            || _inspectionEngine?.IsRunning == true
+            || UiState is TestUIState.Testing or TestUIState.Paused;
     }
 
     #endregion
@@ -501,6 +534,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private bool ShowTechnicalDetails => IsFakeMode || IsSemiPhysicalDebugMode;
     /// <summary>调试面板可见（Fake 或半实物）</summary>
     public bool IsDebugControlPanelVisible => IsFakeMode || IsSemiPhysicalDebugMode;
+
     /// <summary>真实模式复位可见（非 Fake 且非半实物）</summary>
     public bool IsRealModeResetVisible => !IsFakeMode && !IsSemiPhysicalDebugMode;
 
@@ -582,6 +616,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         NotifyChangeOperatorCanExecuteChanged();
+        NotifyReconnectCommandsCanExecuteChanged();
     }
 
     /// <summary>
@@ -605,6 +640,27 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _ = dispatcher.BeginInvoke(
             new Action(ChangeOperatorCommand.NotifyCanExecuteChanged),
             DispatcherPriority.Normal);
+    }
+
+    /// <summary>
+    /// 刷新 PLC/DMM 手动重连命令状态，确保 Starting 一进入就禁用按钮。
+    /// </summary>
+    private void NotifyReconnectCommandsCanExecuteChanged()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null)
+            return;
+
+        void Notify()
+        {
+            ReconnectPlcCommand.NotifyCanExecuteChanged();
+            ReconnectDmmCommand.NotifyCanExecuteChanged();
+        }
+
+        if (dispatcher.CheckAccess())
+            Notify();
+        else
+            _ = dispatcher.BeginInvoke(new Action(Notify), DispatcherPriority.Normal);
     }
 
     /// <summary>
@@ -656,6 +712,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         Volatile.Write(ref _activeControlActionRequestId, actionRequestId);
         _currentControlAction = action;
         NotifyChangeOperatorCanExecuteChanged();
+        NotifyReconnectCommandsCanExecuteChanged();
         _logger.LogWarning(
             "[运行控制][进入] Action={Action}, ActionRequestId={ActionRequestId}, UiState={UiState}, InspectionRunVersion={InspectionRunVersion}, EngineIsRunning={EngineIsRunning}, ExecutionStage={ExecutionStage}, LockWaitElapsedMs={ElapsedMs}",
             action, actionRequestId, UiState, Volatile.Read(ref _inspectionRunVersion), _inspectionEngine?.IsRunning ?? false,
@@ -684,6 +741,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         Volatile.Write(ref _activeControlActionRequestId, 0);
         _currentControlAction = InspectionControlAction.None;
         NotifyChangeOperatorCanExecuteChanged();
+        NotifyReconnectCommandsCanExecuteChanged();
         _controlActionLock.Release();
     }
 
@@ -2024,11 +2082,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             await ExecuteEmergencyStopFlowAsync(InspectionActionSource.PlcPolling);
 
-            if (!_isShowingEmergencyDialog)
-            {
-                _isShowingEmergencyDialog = true;
-                ShowEmergencyStopDialog();
-            }
+            await ShowEmergencyStopDialogAsync();
             return; // 急停状态下不处理启动/停止/复位信号
         }
 
@@ -2576,7 +2630,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             _inspectionStarted = false;
             _startSignalHandled = true;
-            _isShowingEmergencyDialog = false;
             _emergencyDialogAcknowledged = false;
             _emergencyStopDialogVM?.StopPolling();
             _emergencyStopDialogVM = null;
@@ -2862,48 +2915,66 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 弹出急停模态弹窗。
     /// 弹窗只接收操作员解除请求；真正的清信号、读回确认和状态切换统一由 CompleteEmergencyStopReleaseAsync 完成。
     /// </summary>
-    private void ShowEmergencyStopDialog()
+    private async Task ShowEmergencyStopDialogAsync()
     {
-        bool isFake = _plcDevice is Devices.Fakes.FakeInspectionHardware;
-        bool canSimulateAlarmRelease = isFake || IsSemiPhysicalDebugMode;
+        _logger.LogWarning("[急停弹窗][显示请求]");
 
-        // 先创建 dialog，确保 closeDialog 回调能捕获 dialog 引用
-        var dialog = new Views.EmergencyStopDialog
+        if (_isShowingEmergencyDialog)
         {
-            Owner = Application.Current.MainWindow
-        };
+            _logger.LogDebug("[急停弹窗][跳过] 弹窗已经显示或正在等待显示");
+            return;
+        }
 
-        var vm = new ViewModels.EmergencyStopDialogViewModel(
-            _plcDevice,
-            releaseEmergencyStop: async () =>
+        _isShowingEmergencyDialog = true;
+        try
+        {
+            await using var dialogLease = await _dialogCoordinator.AcquireEmergencyDialogAsync();
+
+            bool isFake = _plcDevice is Devices.Fakes.FakeInspectionHardware;
+            bool canSimulateAlarmRelease = isFake || IsSemiPhysicalDebugMode;
+
+            // 先创建 dialog，确保 closeDialog 回调能捕获 dialog 引用。
+            var dialog = new Views.EmergencyStopDialog
             {
-                bool released = await CompleteEmergencyStopReleaseAsync(CancellationToken.None);
-                if (!released)
+                Owner = Application.Current.MainWindow
+            };
+
+            var vm = new ViewModels.EmergencyStopDialogViewModel(
+                _plcDevice,
+                releaseEmergencyStop: async () =>
                 {
-                    return false;
-                }
+                    bool released = await CompleteEmergencyStopReleaseAsync(CancellationToken.None);
+                    if (!released)
+                    {
+                        return false;
+                    }
 
-                dialog.AllowClose();
-                dialog.DialogResult = true;
-                dialog.Close();
-                _isShowingEmergencyDialog = false;
-                _emergencyDialogAcknowledged = true;
-                _emergencyStopDialogVM?.StopPolling();
-                _emergencyStopDialogVM = null;
-                return true;
-            },
-            canSimulateAlarmRelease: canSimulateAlarmRelease,
-            isSemiPhysicalDebugMode: IsSemiPhysicalDebugMode);
+                    dialog.AllowClose();
+                    dialog.DialogResult = true;
+                    dialog.Close();
+                    _emergencyDialogAcknowledged = true;
+                    return true;
+                },
+                canSimulateAlarmRelease: canSimulateAlarmRelease,
+                isSemiPhysicalDebugMode: IsSemiPhysicalDebugMode);
 
-        dialog.DataContext = vm;
-        _emergencyStopDialogVM = vm;
+            dialog.DataContext = vm;
+            _emergencyStopDialogVM = vm;
 
-        // 启动 DT303 后台轮询
-        vm.StartPolling();
+            // 启动 DT303 后台轮询。
+            vm.StartPolling();
 
-        // 模态显示弹窗（阻塞，直到用户点击"解除"）
-        _ = vm; // 保持引用
-        dialog.ShowDialog();
+            _logger.LogWarning("[急停弹窗][显示开始]");
+            // 模态显示弹窗（阻塞，直到用户点击“解除”）。安全动作已经在前序流程完成。
+            dialog.ShowDialog();
+        }
+        finally
+        {
+            _emergencyStopDialogVM?.StopPolling();
+            _emergencyStopDialogVM = null;
+            _isShowingEmergencyDialog = false;
+            _logger.LogWarning("[急停弹窗][显示结束]");
+        }
     }
 
     /// <summary>
@@ -3374,7 +3445,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             "PLC" => "PLC 通信已中断，本轮检测已停止。\n请检查 PLC 电源和网线，等待自动重连或点击“PLC重连”。\nPLC 恢复连接后，请点击“复位”重新准备检测。",
             "DMM" => "万用表通信已中断，本轮检测已停止。\n请检查万用表电源和网线，等待自动重连或点击“万用表重连”。\n设备恢复连接后，请点击“复位”重新准备检测。",
-            _ => "扫描枪通信已中断，本轮检测已停止。\n请检查 USB 连接，等待自动重连或点击“扫描枪重连”。\n设备恢复连接后，请点击“复位”重新准备检测。"
+            _ => "设备通信已中断，本轮检测已停止。\n请检查设备连接，恢复后点击“复位”重新准备检测。"
         };
 
     private void HandleDeviceDisconnected(string deviceType)
@@ -3387,6 +3458,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     private async Task HandleDeviceDisconnectedAsync(string deviceType)
     {
+        bool emergencyDialogPendingOrActive = IsEmergencyDialogPendingOrActive();
+
         try
         {
             if (deviceType == "DMM")
@@ -3399,7 +3472,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _ignoreInspectionCallbacksUntilNextStart = true;
             Interlocked.Increment(ref _inspectionRunVersion);
             _inspectionStarted = false;
-            SetUiState(TestUIState.AwaitingReset);
+            if (!emergencyDialogPendingOrActive && UiState != TestUIState.EmergencyStop)
+                SetUiState(TestUIState.AwaitingReset);
             _logger.LogWarning(
                 "[设备恢复][{DeviceType}] 通信中断，本轮检测已停止，等待复位；不自动续跑旧项目",
                 deviceType);
@@ -3419,6 +3493,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 }
             }
 
+            if (emergencyDialogPendingOrActive
+                || UiState == TestUIState.EmergencyStop
+                || _dialogCoordinator.IsEmergencyDialogPendingOrActive)
+            {
+                _logger.LogWarning(
+                    "[设备恢复][{DeviceType}][提示抑制] 急停对话框正在等待或显示，已抑制普通设备异常弹窗",
+                    deviceType);
+                return;
+            }
+
             await _notificationService.ShowWarningAsync(
                 BuildDeviceRecoveryMessage(deviceType),
                 "设备通信中断");
@@ -3426,12 +3510,20 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         catch (Exception ex)
         {
             _logger.LogError(ex, "[设备恢复][{DeviceType}] 断线收口异常，保持请复位状态", deviceType);
-            SetUiState(TestUIState.AwaitingReset);
+            if (!emergencyDialogPendingOrActive && UiState != TestUIState.EmergencyStop)
+                SetUiState(TestUIState.AwaitingReset);
         }
         finally
         {
             Volatile.Write(ref _deviceDisconnectHandling, 0);
         }
+    }
+
+    private bool IsEmergencyDialogPendingOrActive()
+    {
+        return _isShowingEmergencyDialog
+            || UiState == TestUIState.EmergencyStop
+            || _dialogCoordinator.IsEmergencyDialogPendingOrActive;
     }
 
     private void OnPlcConnectionStateChanged(
@@ -3447,13 +3539,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         void ApplyState()
         {
-            bool wasConnected = IsPlcConnected;
             IsPlcConnected = e.IsConnected;
             PlcStatusText = e.StatusText;
             PlcConnectionStatus = e.Status;
-            if (!e.IsConnected && (wasConnected || _inspectionStarted || _inspectionEngine?.IsRunning == true
-                || UiState is TestUIState.Testing or TestUIState.Paused))
+            if (e.Status == DeviceConnectionStatus.Disconnected && HasActiveInspectionContext())
                 HandleDeviceDisconnected("PLC");
+            else if (e.Status == DeviceConnectionStatus.Connecting)
+                _logger.LogInformation("[设备状态][PLC] 连接中，仅更新状态，不触发检测断线收口");
             UpdateUIState();
         }
 
@@ -3485,13 +3577,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         void ApplyState()
         {
-            bool wasConnected = IsDmmConnected;
             IsDmmConnected = e.IsConnected;
             DmmStatusText = e.StatusText;
             DmmConnectionStatus = e.Status;
-            if (!e.IsConnected && (wasConnected || _inspectionStarted || _inspectionEngine?.IsRunning == true
-                || UiState is TestUIState.Testing or TestUIState.Paused))
+            if (e.Status == DeviceConnectionStatus.Disconnected && HasActiveInspectionContext())
                 HandleDeviceDisconnected("DMM");
+            else if (e.Status == DeviceConnectionStatus.Connecting)
+                _logger.LogInformation("[设备状态][DMM] 连接中，仅更新状态，不触发检测断线收口");
             UpdateUIState();
         }
 
@@ -3523,13 +3615,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         void ApplyState()
         {
-            bool wasConnected = IsScannerConnected;
             IsScannerConnected = e.IsConnected;
             ScannerStatusText = e.StatusText;
             ScannerConnectionStatus = e.Status;
-            if (!e.IsConnected && (wasConnected || _inspectionStarted || _inspectionEngine?.IsRunning == true
-                || UiState is TestUIState.Testing or TestUIState.Paused))
-                HandleDeviceDisconnected("Scanner");
+            _logger.LogInformation(
+                "[设备状态][Scanner] 状态更新为 {Status}，扫描仪不参与电气检测断线收口",
+                e.Status);
             UpdateUIState();
         }
 

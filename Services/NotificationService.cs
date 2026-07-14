@@ -1,57 +1,122 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
+using Microsoft.Extensions.Logging;
 
+namespace GMandE7BUSBPoorSolderingInspectionDevice.Services;
 
-namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
+/// <summary>
+/// 统一管理普通提示、确认框和错误框，保证所有普通弹窗经过同一协调器。
+/// </summary>
+public sealed class NotificationService : INotificationService
 {
- public class NotificationService : INotificationService
+    private readonly IDialogCoordinator _dialogCoordinator;
+    private readonly ILogger<NotificationService> _logger;
+
+    public NotificationService(
+        IDialogCoordinator dialogCoordinator,
+        ILogger<NotificationService> logger)
     {
-        public void ShowInfo(string message, string title = "信息")
-        {
-            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
-        }
+        _dialogCoordinator = dialogCoordinator;
+        _logger = logger;
+    }
 
-        public void ShowWarning(string message, string title = "警告")
-        {
-            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
+    public void ShowInfo(string message, string title = "信息")
+    {
+        _ = ObserveNotificationAsync(ShowInfoAsync(message, title), "信息");
+    }
 
-        public void ShowError(string message, string title = "错误")
-        {
-            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+    public void ShowWarning(string message, string title = "警告")
+    {
+        _ = ObserveNotificationAsync(ShowWarningAsync(message, title), "警告");
+    }
 
-        public async Task<bool> ConfirmAsync(string message, string title = "确认")
-        {
-            return await Application.Current.Dispatcher.InvokeAsync(() =>
-            {
-                var result = MessageBox.Show(message, title, 
-                    MessageBoxButton.YesNo, MessageBoxImage.Question);
-                return result == MessageBoxResult.Yes;
-            }).Task;
-        }
+    public void ShowError(string message, string title = "错误")
+    {
+        _ = ObserveNotificationAsync(ShowErrorAsync(message, title), "错误");
+    }
 
-        public async Task ShowInfoAsync(string message, string title = "信息")
-        {
-            await Application.Current.Dispatcher.InvokeAsync(() => 
-                ShowInfo(message, title));
-        }
+    public async Task<bool> ConfirmAsync(string message, string title = "确认")
+    {
+        var dialogLease = await _dialogCoordinator
+            .AcquireOrdinaryDialogAsync()
+            .ConfigureAwait(false);
 
-        public async Task ShowWarningAsync(string message, string title = "警告")
+        try
         {
-            await Application.Current.Dispatcher.InvokeAsync(() => 
-                ShowWarning(message, title));
-        }
+            var result = await GetDispatcher()
+                .InvokeAsync(() => MessageBox.Show(
+                    message,
+                    title,
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question))
+                .Task
+                .ConfigureAwait(false);
 
-        public async Task ShowErrorAsync(string message, string title = "错误")
-        {
-            await Application.Current.Dispatcher.InvokeAsync(() => 
-                ShowError(message, title));
+            return result == MessageBoxResult.Yes;
         }
+        finally
+        {
+            await dialogLease.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    public Task ShowInfoAsync(string message, string title = "信息")
+    {
+        return ShowMessageAsync(message, title, MessageBoxImage.Information);
+    }
+
+    public Task ShowWarningAsync(string message, string title = "警告")
+    {
+        return ShowMessageAsync(message, title, MessageBoxImage.Warning);
+    }
+
+    public Task ShowErrorAsync(string message, string title = "错误")
+    {
+        return ShowMessageAsync(message, title, MessageBoxImage.Error);
+    }
+
+    private async Task ShowMessageAsync(
+        string displayMessage,
+        string title,
+        MessageBoxImage image)
+    {
+        var dialogLease = await _dialogCoordinator
+            .AcquireOrdinaryDialogAsync()
+            .ConfigureAwait(false);
+
+        try
+        {
+            await GetDispatcher()
+                .InvokeAsync(() => MessageBox.Show(
+                    displayMessage,
+                    title,
+                    MessageBoxButton.OK,
+                    image))
+                .Task
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            await dialogLease.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task ObserveNotificationAsync(Task notificationTask, string notificationType)
+    {
+        try
+        {
+            await notificationTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[普通弹窗][{NotificationType}] 显示失败", notificationType);
+        }
+    }
+
+    private static Dispatcher GetDispatcher()
+    {
+        return Application.Current?.Dispatcher
+            ?? throw new InvalidOperationException("WPF 应用尚未初始化，无法显示弹窗");
     }
 }

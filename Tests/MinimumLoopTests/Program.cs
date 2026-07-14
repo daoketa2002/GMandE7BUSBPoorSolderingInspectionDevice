@@ -35,6 +35,10 @@ Console.OutputEncoding = new UTF8Encoding(false);
 var tests = new List<(string Name, Action Body)>
 {
     ("CTRL-RECOVER-01 DMM measurement timeout disconnects immediately", TestDmmMeasurementTimeoutDisconnectsImmediately),
+    ("CTRL-RECOVER-01-PATCH-02 connection state contract", TestCtrlRecover01Patch02ConnectionStateContract),
+    ("CTRL-RECOVER-01-PATCH-02 dialog coordinator contract", TestCtrlRecover01Patch02DialogCoordinatorContract),
+    ("CTRL-RECOVER-01-PATCH-02 notification integration contract", TestCtrlRecover01Patch02NotificationIntegrationContract),
+    ("CTRL-RECOVER-01-PATCH-02-U1-FIX emergency dialog and U1-6 contract", TestCtrlRecover01Patch02U1FixContract),
     ("CTRL-RECOVER-01 measurement timeout closes the current item", TestMeasurementTimeoutItemStatusContract),
     ("CTRL-RECOVER-01 DMM recovery remains AwaitingReset", TestDmmRecoveryRemainsAwaitingReset),
     ("CTRL-RECOVER-01 running page button depth styles", TestRunningPageButtonDepthStylesContract),
@@ -2021,6 +2025,128 @@ static void TestDmmMeasurementTimeoutDisconnectsImmediately()
     var commandLock = GetPrivateField<SemaphoreSlim>(driver, "_commandLock");
     AssertEqual(true, commandLock.Wait(0));
     commandLock.Release();
+}
+
+static void TestCtrlRecover01Patch02ConnectionStateContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    AssertEqual(true, source.Contains("HasActiveInspectionContext", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("e.Status == DeviceConnectionStatus.Disconnected", StringComparison.Ordinal));
+    AssertEqual(false, source.Contains("if (!e.IsConnected && (wasConnected ||", StringComparison.Ordinal));
+
+    var scannerHandlerStart = source.IndexOf("private void OnScannerConnectionStateChanged", StringComparison.Ordinal);
+    var scannerHandlerEnd = source.IndexOf("private void OnScannerBarcodeParsed", scannerHandlerStart, StringComparison.Ordinal);
+    AssertEqual(true, scannerHandlerStart >= 0);
+    AssertEqual(true, scannerHandlerEnd > scannerHandlerStart);
+    var scannerHandler = source[scannerHandlerStart..scannerHandlerEnd];
+    AssertEqual(false, scannerHandler.Contains("HandleDeviceDisconnected(\"Scanner\")", StringComparison.Ordinal));
+}
+
+static void TestCtrlRecover01Patch02DialogCoordinatorContract()
+{
+    var coordinatorPath = Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "DialogCoordinator.cs");
+
+    AssertEqual(true, File.Exists(coordinatorPath));
+
+    if (!File.Exists(coordinatorPath))
+        return;
+
+    var source = File.ReadAllText(coordinatorPath);
+    AssertEqual(true, source.Contains("SemaphoreSlim", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("AcquireOrdinaryDialogAsync", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("AcquireEmergencyDialogAsync", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("IsEmergencyDialogPendingOrActive", StringComparison.Ordinal));
+
+    using var coordinator = new DialogCoordinator();
+    var ordinaryLease = coordinator.AcquireOrdinaryDialogAsync().GetAwaiter().GetResult();
+    var waitingOrdinary = coordinator.AcquireOrdinaryDialogAsync();
+    AssertEqual(false, waitingOrdinary.IsCompleted);
+    ((IDisposable)ordinaryLease).Dispose();
+    var secondOrdinaryLease = waitingOrdinary.GetAwaiter().GetResult();
+    ((IDisposable)secondOrdinaryLease).Dispose();
+
+    var ordinaryForEmergency = coordinator.AcquireOrdinaryDialogAsync().GetAwaiter().GetResult();
+    var waitingEmergency = coordinator.AcquireEmergencyDialogAsync();
+    AssertEqual(false, waitingEmergency.IsCompleted);
+    ((IDisposable)ordinaryForEmergency).Dispose();
+    var emergencyLease = waitingEmergency.GetAwaiter().GetResult();
+    AssertEqual(true, coordinator.IsEmergencyDialogPendingOrActive);
+    ((IDisposable)emergencyLease).Dispose();
+    AssertEqual(false, coordinator.IsEmergencyDialogPendingOrActive);
+}
+
+static void TestCtrlRecover01Patch02NotificationIntegrationContract()
+{
+    var notificationSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "NotificationService.cs"));
+    var navigationSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "NavigationService.cs"));
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    AssertEqual(true, notificationSource.Contains("AcquireOrdinaryDialogAsync", StringComparison.Ordinal));
+    AssertEqual(true, notificationSource.Contains("finally", StringComparison.Ordinal));
+    AssertEqual(false, notificationSource.Contains("MessageBox.Show(message", StringComparison.Ordinal));
+    AssertEqual(true, navigationSource.Contains("await notificationService.ShowErrorAsync", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("AcquireEmergencyDialogAsync", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("IsEmergencyDialogPendingOrActive", StringComparison.Ordinal));
+}
+
+static void TestCtrlRecover01Patch02U1FixContract()
+{
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    var emergencyCallerStart = viewModelSource.IndexOf(
+        "if (emergencyStopTriggered)",
+        StringComparison.Ordinal);
+    var emergencyCallerEnd = viewModelSource.IndexOf(
+        "if (inputs.IsEmergencyStop)",
+        emergencyCallerStart,
+        StringComparison.Ordinal);
+    AssertEqual(true, emergencyCallerStart >= 0);
+    AssertEqual(true, emergencyCallerEnd > emergencyCallerStart);
+    var emergencyCaller = viewModelSource[emergencyCallerStart..emergencyCallerEnd];
+    AssertEqual(false, emergencyCaller.Contains("_isShowingEmergencyDialog = true", StringComparison.Ordinal));
+    AssertEqual(true, emergencyCaller.Contains("await ShowEmergencyStopDialogAsync();", StringComparison.Ordinal));
+
+    var dialogMethodStart = viewModelSource.IndexOf(
+        "private async Task ShowEmergencyStopDialogAsync()",
+        StringComparison.Ordinal);
+    var dialogMethodEnd = viewModelSource.IndexOf(
+        "private async Task<bool> CompleteEmergencyStopReleaseAsync",
+        dialogMethodStart,
+        StringComparison.Ordinal);
+    AssertEqual(true, dialogMethodStart >= 0);
+    AssertEqual(true, dialogMethodEnd > dialogMethodStart);
+    var dialogMethod = viewModelSource[dialogMethodStart..dialogMethodEnd];
+    AssertEqual(true, dialogMethod.Contains("[急停弹窗][显示请求]", StringComparison.Ordinal));
+    AssertEqual(true, dialogMethod.Contains("[急停弹窗][显示开始]", StringComparison.Ordinal));
+    AssertEqual(true, dialogMethod.Contains("[急停弹窗][显示结束]", StringComparison.Ordinal));
+    AssertEqual(true, dialogMethod.Contains("[急停弹窗][跳过]", StringComparison.Ordinal));
+    AssertEqual(true, dialogMethod.Contains("try", StringComparison.Ordinal));
+    AssertEqual(true, dialogMethod.Contains("finally", StringComparison.Ordinal));
+    AssertEqual(true, dialogMethod.Contains("await using var dialogLease", StringComparison.Ordinal));
+
+    var sourceOutsideDialogMethod = viewModelSource[..dialogMethodStart]
+        + viewModelSource[dialogMethodEnd..];
+    AssertEqual(false, sourceOutsideDialogMethod.Contains("_isShowingEmergencyDialog = false", StringComparison.Ordinal));
+
 }
 
 static void TestMeasurementTimeoutItemStatusContract()

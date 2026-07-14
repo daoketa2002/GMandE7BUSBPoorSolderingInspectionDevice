@@ -213,6 +213,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddSingleton<ConfigManagerService>();
 
             // === 基础设施服务 ===
+            services.AddSingleton<IDialogCoordinator, DialogCoordinator>();
             services.AddSingleton<INotificationService, NotificationService>();
 
             // 作业员服务
