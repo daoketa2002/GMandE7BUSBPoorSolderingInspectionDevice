@@ -578,27 +578,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
                 if (portReappeared)
                 {
-                    _logger.LogInformation("热插拔检测：端口 {PortName} 重新出现，立即自动重连", _portName);
-                    Notify(NotificationType.Info, $"检测到扫描枪重新插入，正在重连...");
-
-                    // 同步执行重连（在 Timer 回调线程中，ConnectInternal 内部有锁保护）
-                    try
-                    {
-                        var reconnected = ConnectInternal(_portName, _baudRate);
-                        if (reconnected)
-                        {
-                            _logger.LogInformation("热插拔检测：自动重连成功！");
-                            Notify(NotificationType.Success, "扫描枪已重新连接");
-                        }
-                        else
-                        {
-                            _logger.LogWarning("热插拔检测：自动重连失败，将在下次检测周期重试");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "热插拔检测：自动重连异常");
-                    }
+                    _logger.LogInformation(
+                        "热插拔检测：端口 {PortName} 重新出现，等待 DeviceConnectionService 自动重连",
+                        _portName);
+                    Notify(NotificationType.Info, $"扫描枪端口 {_portName} 已重新出现，等待连接服务自动重连");
                 }
             }
         }

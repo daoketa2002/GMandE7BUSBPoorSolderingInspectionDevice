@@ -46,6 +46,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private readonly SemaphoreSlim _plcLock = new(1, 1);
         private readonly SemaphoreSlim _dmmLock = new(1, 1);
         private readonly SemaphoreSlim _scannerLock = new(1, 1);
+        private readonly SemaphoreSlim _scannerInitializationLock = new(1, 1);
 
         // 独立无状态临时测试器
         private readonly IPlcConnectionTester _plcConnectionTester;
@@ -908,14 +909,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         private async Task InitializeScannerBarcodeServiceAsync()
         {
+            await _scannerInitializationLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                if (!_scannerDevice.IsConnected)
+                {
+                    _logger.LogDebug("[设备连接][扫描枪] 硬件未连接，跳过条码服务初始化");
+                    return;
+                }
+
                 await _scannerBarcodeService.InitializeAsync().ConfigureAwait(false);
                 _logger.LogInformation("[设备连接][扫描枪] ScannerBarcodeService 初始化完成");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[设备连接][扫描枪] ScannerBarcodeService 初始化失败");
+            }
+            finally
+            {
+                _scannerInitializationLock.Release();
             }
         }
 
@@ -1128,6 +1140,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _plcLock.Dispose();
             _dmmLock.Dispose();
             _scannerLock.Dispose();
+            _scannerInitializationLock.Dispose();
 
             GC.SuppressFinalize(this);
         }

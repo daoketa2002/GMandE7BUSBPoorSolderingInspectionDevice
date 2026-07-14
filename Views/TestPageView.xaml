@@ -51,24 +51,87 @@
             <Setter Property="HorizontalAlignment" Value="Center"/>
         </Style>
 
-        <Style x:Key="ConnectionButtonStyle" TargetType="Button">
+        <Style x:Key="DeviceStatusButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="110"/>
             <Setter Property="Height" Value="40"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="BorderBrush" Value="#566573"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,4"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="6"
-                                Padding="8,4">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                            VerticalAlignment="Center"
-                                            TextBlock.FontWeight="Bold"/>
+                        <Border x:Name="buttonSurface"
+                                    Background="{TemplateBinding Background}"
+                                    CornerRadius="6">
+                            <Border x:Name="buttonBase"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,0,0,4"
+                                    CornerRadius="6">
+                                <ContentPresenter x:Name="buttonContent"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Margin="{TemplateBinding Padding}"/>
+                            </Border>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2"/>
+                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ClearCountButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="50"/>
+            <Setter Property="Height" Value="50"/>
+            <Setter Property="Background" Value="#E74C3C"/>
+            <Setter Property="BorderBrush" Value="#C0392B"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="clearButtonSurface"
+                                    Background="{TemplateBinding Background}"
+                                    CornerRadius="25">
+                            <Border x:Name="clearButtonBase"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,0,0,4"
+                                    CornerRadius="25">
+                                <ContentPresenter x:Name="clearButtonContent"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"/>
+                            </Border>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="clearButtonSurface" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="clearButtonBase" Property="BorderThickness" Value="0,0,0,2"/>
+                                <Setter TargetName="clearButtonContent" Property="Margin" Value="0,2,0,0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="clearButtonSurface" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -230,18 +293,11 @@
                             <TextBlock Text="不良数量" Style="{StaticResource StatLabelStyle}"/>
                         </StackPanel>
 
-                        <Button Grid.Column="3" Command="{Binding ClearCountersCommand}"
-                                Width="50" Height="50" VerticalAlignment="Center"
-                                ToolTip="清零计数器" Cursor="Hand">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border Background="#E74C3C" CornerRadius="25" BorderThickness="0">
-                                        <TextBlock Text="清零" Foreground="White" FontSize="13" FontWeight="Bold"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
+                        <Button Grid.Column="3" Content="清零"
+                                Command="{Binding ClearCountersCommand}"
+                                Style="{StaticResource ClearCountButtonStyle}"
+                                VerticalAlignment="Center"
+                                ToolTip="清零计数器" Cursor="Hand"/>
                     </Grid>
                 </Grid>
             </Border>
@@ -260,7 +316,7 @@
                     </Border>
 
                     <UniformGrid Grid.Row="1" Rows="1" Columns="4" HorizontalAlignment="Center">
-                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
                                 Command="{Binding ReconnectPlcCommand}" Margin="6">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
@@ -271,7 +327,7 @@
                             </StackPanel>
                         </Button>
 
-                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
                                 Command="{Binding ReconnectScannerCommand}" Margin="6">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
@@ -282,7 +338,7 @@
                             </StackPanel>
                         </Button>
 
-                        <Button Style="{StaticResource ConnectionButtonStyle}"
+                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
                                 Command="{Binding ReconnectDmmCommand}" Margin="6">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
@@ -293,7 +349,7 @@
                             </StackPanel>
                         </Button>
 
-                        <Button Style="{StaticResource ConnectionButtonStyle}" Margin="6" IsHitTestVisible="False">
+                        <Button Style="{StaticResource DeviceStatusButtonStyle}" Margin="6" IsHitTestVisible="False">
                             <Button.Background>
                                 <SolidColorBrush Color="#27AE60"/>
                             </Button.Background>

@@ -34,6 +34,10 @@ Console.OutputEncoding = new UTF8Encoding(false);
 
 var tests = new List<(string Name, Action Body)>
 {
+    ("CTRL-RECOVER-01 DMM measurement timeout disconnects immediately", TestDmmMeasurementTimeoutDisconnectsImmediately),
+    ("CTRL-RECOVER-01 measurement timeout closes the current item", TestMeasurementTimeoutItemStatusContract),
+    ("CTRL-RECOVER-01 DMM recovery remains AwaitingReset", TestDmmRecoveryRemainsAwaitingReset),
+    ("CTRL-RECOVER-01 running page button depth styles", TestRunningPageButtonDepthStylesContract),
     ("REF-CLEAN formal source contract", TestRefClean01ForbiddenSourceContract),
     ("测试控制台使用 UTF-8 输出编码", TestConsoleOutputEncodingIsUtf8),
     ("Stage D semi-physical logging contract", TestStageDSemiPhysicalLogContract),
@@ -62,6 +66,16 @@ var tests = new List<(string Name, Action Body)>
     ("DMM 模式初始化连接异常会标记断线", TestDmmModeFailureMarksDisconnected),
     ("阶段 C Modbus 日志包含拒绝、堆栈、慢请求和释放上下文", TestStageCModbusLogContract),
     ("CTRL-FIX-01 复位停止请求门禁与复位高电平轮询契约", TestCtrlFix01SourceContract),
+    ("CTRL-RECOVER-01 阶段 B 运行控制竞态契约", TestCtrlRecover01StageBSourceContract),
+    ("CTRL-RECOVER-01 阶段 C PLC 总周期超时和连接代次隔离契约", TestCtrlRecover01StageCSourceContract),
+    ("CTRL-RECOVER-01 阶段 C Write 阻塞取消并释放资源", TestCtrlRecover01WriteCancellation),
+    ("CTRL-RECOVER-01 阶段 C Flush 阻塞取消并释放资源", TestCtrlRecover01FlushCancellation),
+    ("CTRL-RECOVER-01 阶段 C 连接验证与轮询锁竞争不误断线", TestCtrlRecover01VerificationPollingCompetition),
+    ("CTRL-RECOVER-01 阶段 C WaitResponse 超时断线并可重新验证", TestCtrlRecover01VerificationResponseTimeout),
+    ("CTRL-RECOVER-01 阶段 D DMM 启动 Ping 与健康检查锁竞争隔离", TestCtrlRecover01StageDmmPingContract),
+    ("CTRL-RECOVER-01 阶段 D DMM 超时分级与旧 Socket 清理", TestCtrlRecover01DmmTimeoutContract),
+    ("CTRL-RECOVER-01 阶段 D 扫描枪只由连接服务负责重连", TestCtrlRecover01ScannerReconnectOwnerContract),
+    ("CTRL-RECOVER-01 阶段 D 断线提示与页面恢复状态", TestCtrlRecover01RecoveryExperienceContract),
     ("RESULT-UI-01 PLC 最终结果和系统设置源码契约", TestResultUi01SourceContract),
     ("CSV 日志根目录统一为根目录 TestLog", TestCsvLogRootPathContract),
     ("启动拒绝记录来源原因和是否清除启动请求", () =>
@@ -1668,6 +1682,503 @@ static void TestCtrlFix01SourceContract()
     AssertEqual(false, emergencyMethod.Contains("IsStopRequestInProgress()", StringComparison.Ordinal));
 }
 
+static void TestCtrlRecover01StageBSourceContract()
+{
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"))
+        .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    var engineSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "InspectionEngine.cs"))
+        .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    AssertEqual(true, viewModelSource.Contains("private int _plcPollingSuspendCount;", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("private bool _pendingResetAfterStop;", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("private int _emergencyStopPending;", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("private int _controlActionHeld;", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("bool waitForLock", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("await _controlActionLock.WaitAsync(ct)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("Interlocked.Exchange(ref _emergencyStopPending, 1)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("Interlocked.Increment(ref _plcPollingSuspendCount)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("Interlocked.Decrement(ref _plcPollingSuspendCount)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("WritePcReadyAsync(startingToken)", StringComparison.Ordinal));
+    AssertEqual(false, viewModelSource.Contains("[急停流程][失败] 无法获取控制锁", StringComparison.Ordinal));
+    AssertEqual(false, viewModelSource.Contains("if (_currentControlAction == InspectionControlAction.None)\n                return true;", StringComparison.Ordinal));
+
+    var modbusSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "TcpModbus",
+        "TcpClientPLCMotionService.cs"));
+    AssertEqual(true, modbusSource.Contains("RequestStage={RequestStage}", StringComparison.Ordinal));
+    AssertEqual(true, modbusSource.Contains("WaitRequestLock", StringComparison.Ordinal));
+    AssertEqual(true, modbusSource.Contains("WaitSendLock", StringComparison.Ordinal));
+    AssertEqual(true, modbusSource.Contains("ParseResponse", StringComparison.Ordinal));
+
+    AssertEqual(true, engineSource.Contains("if (!await _engineLock.WaitAsync(0)", StringComparison.Ordinal));
+    AssertEqual(false, engineSource.Contains("await _engineLock.WaitAsync(ct)", StringComparison.Ordinal));
+}
+
+static void TestCtrlRecover01StageCSourceContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "TcpModbus",
+        "TcpClientPLCMotionService.cs"))
+        .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    var pendingSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "TcpModbus",
+        "PendingModbusRequest.cs"))
+        .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    AssertEqual(true, source.Contains("private long _connectionGeneration;", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("CreateLinkedTokenSource", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs))", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("_requestLock.WaitAsync(requestToken)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("_sendLock.WaitAsync(requestToken)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("WriteAsync(data.AsMemory(), requestToken)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("FlushAsync(requestToken)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("WaitAsync(requestToken)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("RequestTimeout", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("CanceledByControlAction", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("SocketDisconnected", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("RemoteClosed", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("ProtocolError", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("MarkDisconnected(connectionGeneration", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("WaitForRequestLockExitAsync", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("PendingCount={PendingCount}", StringComparison.Ordinal));
+    AssertEqual(true, pendingSource.Contains("public long ConnectionGeneration", StringComparison.Ordinal));
+    AssertEqual(true, pendingSource.Contains("public required TaskCompletionSource<ModbusResponse> Completion", StringComparison.Ordinal));
+}
+
+static void TestCtrlRecover01WriteCancellation()
+{
+    var logger = new CapturingTestLogger<TcpClientPLCMotionService>();
+    using var stream = new CancellationBlockingStream(blockWrite: true, blockFlush: false);
+    using var service = new TcpClientPLCMotionService(logger, stream);
+
+    var response = service.ExecuteReadOperationAsync(0x03, 1, 120, 1, timeoutMs: 150)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(null, response);
+    AssertEqual(true, stream.WriteCalled);
+    AssertEqual(true, stream.WriteCancellationObserved);
+    AssertEqual(false, service.IsConnected);
+    AssertEqual(0, service.PendingCountForTesting);
+    AssertEqual(true, service.CanAcquireRequestLockForTesting());
+    AssertEqual(true, service.CanAcquireSendLockForTesting());
+    AssertEqual(true, logger.Contains("RequestStage=Write"));
+    AssertEqual(true, logger.Contains("RequestTimeout"));
+    AssertEqual(true, logger.Contains("PendingCount=0"));
+}
+
+static void TestCtrlRecover01FlushCancellation()
+{
+    var logger = new CapturingTestLogger<TcpClientPLCMotionService>();
+    using var stream = new CancellationBlockingStream(blockWrite: false, blockFlush: true);
+    using var service = new TcpClientPLCMotionService(logger, stream);
+
+    var response = service.ExecuteReadOperationAsync(0x03, 1, 120, 1, timeoutMs: 150)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(null, response);
+    AssertEqual(true, stream.WriteCalled);
+    AssertEqual(true, stream.FlushCalled);
+    AssertEqual(true, stream.FlushCancellationObserved);
+    AssertEqual(false, service.IsConnected);
+    AssertEqual(0, service.PendingCountForTesting);
+    AssertEqual(true, service.CanAcquireRequestLockForTesting());
+    AssertEqual(true, service.CanAcquireSendLockForTesting());
+    AssertEqual(true, logger.Contains("RequestStage=Flush"));
+    AssertEqual(true, logger.Contains("RequestTimeout"));
+    AssertEqual(true, logger.Contains("PendingCount=0"));
+}
+
+static void TestCtrlRecover01VerificationPollingCompetition()
+{
+    int port = GetAvailableTcpPort();
+    using var listener = new TcpListener(IPAddress.Loopback, port);
+    listener.Start();
+
+    var validationRequestReceived = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseValidationResponse = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    Task serverTask = Task.Run(async () =>
+    {
+        using var client = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+        using var stream = client.GetStream();
+
+        byte[] validationRequest = await ReadModbusFrameAsync(stream).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("验证请求未完整到达测试服务");
+        validationRequestReceived.TrySetResult(validationRequest);
+
+        await releaseValidationResponse.Task.ConfigureAwait(false);
+        await WriteFc03ResponseAsync(stream, validationRequest).ConfigureAwait(false);
+
+        byte[]? nextPollingRequest = await ReadModbusFrameAsync(stream).ConfigureAwait(false);
+        if (nextPollingRequest != null)
+            await WriteFc03ResponseAsync(stream, nextPollingRequest).ConfigureAwait(false);
+    });
+
+    var logger = new CapturingTestLogger<TcpClientPLCMotionService>();
+    using var service = new TcpClientPLCMotionService(logger)
+    {
+        Host = "127.0.0.1",
+        Port = port,
+        ConnectTimeoutMsDefault = 500
+    };
+
+    int disconnectedEventCount = 0;
+    service.ConnectionStateChanged += connected =>
+    {
+        if (!connected)
+            Interlocked.Increment(ref disconnectedEventCount);
+    };
+
+    Task startTask = service.StartAsync();
+    validationRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+    long generationBeforeBusyPolling = service.ConnectionGenerationForTesting;
+
+    var pollingResponse = service.ExecuteReadOperationAsync(0x03, 1, 121, 1, timeoutMs: 500)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(null, pollingResponse);
+    AssertEqual(true, service.IsConnected);
+    AssertEqual(0, disconnectedEventCount);
+    AssertEqual(generationBeforeBusyPolling, service.ConnectionGenerationForTesting);
+    AssertEqual(1, service.PendingCountForTesting);
+
+    releaseValidationResponse.TrySetResult(true);
+    startTask.GetAwaiter().GetResult();
+    AssertEqual(true, service.IsConnected);
+    AssertEqual(0, service.PendingCountForTesting);
+
+    var nextPollingResponse = service.ExecuteReadOperationAsync(0x03, 1, 121, 1, timeoutMs: 1000)
+        .GetAwaiter()
+        .GetResult();
+    AssertEqual(true, nextPollingResponse is not null && !nextPollingResponse.IsError);
+    AssertEqual(true, service.CanAcquireRequestLockForTesting());
+    AssertEqual(true, service.CanAcquireSendLockForTesting());
+
+    service.StopAsync().GetAwaiter().GetResult();
+    listener.Stop();
+    serverTask.GetAwaiter().GetResult();
+}
+
+static void TestCtrlRecover01VerificationResponseTimeout()
+{
+    int port = GetAvailableTcpPort();
+    using var listener = new TcpListener(IPAddress.Loopback, port);
+    listener.Start();
+
+    var firstRequestReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var keepSecondConnectionOpen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    Task serverTask = Task.Run(async () =>
+    {
+        using (var firstClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false))
+        using (var firstStream = firstClient.GetStream())
+        {
+            _ = await ReadModbusFrameAsync(firstStream).ConfigureAwait(false);
+            firstRequestReceived.TrySetResult(true);
+            var closeProbe = new byte[1];
+            _ = await firstStream.ReadAsync(closeProbe).ConfigureAwait(false);
+        }
+
+        using var secondClient = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+        using var secondStream = secondClient.GetStream();
+        byte[] secondRequest = await ReadModbusFrameAsync(secondStream).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("重连验证请求未完整到达测试服务");
+        await WriteFc03ResponseAsync(secondStream, secondRequest).ConfigureAwait(false);
+        // 保持第二条连接存活，避免读循环因测试服务立即关闭连接而把已成功验证的连接误判为断开。
+        await keepSecondConnectionOpen.Task.ConfigureAwait(false);
+    });
+
+    var logger = new CapturingTestLogger<TcpClientPLCMotionService>();
+    using var service = new TcpClientPLCMotionService(logger)
+    {
+        Host = "127.0.0.1",
+        Port = port,
+        ConnectTimeoutMsDefault = 500
+    };
+
+    Task firstStartTask = service.StartAsync();
+    firstRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+    AssertThrows<Exception>(() => firstStartTask.GetAwaiter().GetResult());
+    AssertEqual(false, service.IsConnected);
+    AssertEqual(0, service.PendingCountForTesting);
+    AssertEqual(true, service.CanAcquireRequestLockForTesting());
+    AssertEqual(true, service.CanAcquireSendLockForTesting());
+
+    try
+    {
+        service.StartAsync().GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        throw new InvalidOperationException(
+            $"重连验证失败: {ex.Message}; logs={logger.JoinEntries()}",
+            ex);
+    }
+    try
+    {
+        AssertEqual(true, service.IsConnected);
+        AssertEqual(0, service.PendingCountForTesting);
+        AssertEqual(true, service.ConnectionGenerationForTesting >= 2);
+    }
+    finally
+    {
+        keepSecondConnectionOpen.TrySetResult(true);
+    }
+
+    service.StopAsync().GetAwaiter().GetResult();
+    listener.Stop();
+    serverTask.GetAwaiter().GetResult();
+}
+
+static async Task<byte[]?> ReadModbusFrameAsync(NetworkStream stream)
+{
+    var header = new byte[6];
+    if (!await ReadExactNetworkAsync(stream, header).ConfigureAwait(false))
+        return null;
+
+    ushort bodyLength = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(4, 2));
+    if (bodyLength < 2 || bodyLength > 254)
+        throw new InvalidOperationException($"测试服务收到非法 MBAP Length={bodyLength}");
+
+    var frame = new byte[6 + bodyLength];
+    Buffer.BlockCopy(header, 0, frame, 0, header.Length);
+    if (!await ReadExactNetworkAsync(stream, frame.AsMemory(6)).ConfigureAwait(false))
+        return null;
+    return frame;
+}
+
+static void TestCtrlRecover01StageDmmPingContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "GwInstekGDM9060Driver.cs"));
+
+    AssertEqual(true, source.Contains("PingCommandLockWaitMs", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("CheckHealthAsync(CancellationToken ct, int commandLockWaitMs)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("CheckHealthAsync(ct, PingCommandLockWaitMs)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("SkippedBusy", StringComparison.Ordinal));
+    AssertEqual(false, source.Contains("=> (await CheckHealthAsync(ct).ConfigureAwait(false)).IsHealthy", StringComparison.Ordinal));
+}
+
+static void TestCtrlRecover01DmmTimeoutContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "GwInstekGDM9060Driver.cs"));
+
+    AssertEqual(true, source.Contains("ConsecutiveBusinessTimeouts", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("BusinessTimeoutDisconnectThreshold", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("catch (TimeoutException", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("ResetDmmModeCache();", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("CleanupConnectionAsync().ConfigureAwait(false)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("[DMM查询][连续超时断线]", StringComparison.Ordinal));
+}
+
+static void TestDmmMeasurementTimeoutDisconnectsImmediately()
+{
+    var pair = CreateDmmSocketPair();
+    using var driver = pair.Driver;
+    using var client = pair.Client;
+    using var server = pair.Server;
+    using var listener = pair.Listener;
+
+    var oldNetworkStream = pair.Client.GetStream();
+    driver.TimeoutMs = 100;
+    bool disconnected = false;
+    driver.ConnectionStateChanged += (_, connected) => disconnected = !connected;
+
+    var readTask = driver.ReadContinuityRawAsync();
+    ReadDmmRequest(pair.Server.GetStream());
+
+    AssertThrows<TimeoutException>(() => readTask.GetAwaiter().GetResult());
+    AssertEqual(false, driver.IsConnected);
+    AssertEqual(true, disconnected);
+    var networkStreamField = typeof(GwInstekGDM9060Driver).GetField(
+        "_networkStream",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("找不到 DMM 网络流字段");
+    AssertEqual<object?>(null, networkStreamField.GetValue(driver));
+    AssertEqual(false, oldNetworkStream.CanRead);
+
+    var commandLock = GetPrivateField<SemaphoreSlim>(driver, "_commandLock");
+    AssertEqual(true, commandLock.Wait(0));
+    commandLock.Release();
+}
+
+static void TestMeasurementTimeoutItemStatusContract()
+{
+    var item = new TestItemModel
+    {
+        CheckResult = "测试中",
+        RecordResult = string.Empty,
+        Judgment = string.Empty
+    };
+
+    var markFailureMethod = typeof(TestItemModel).GetMethod("MarkMeasurementFailed")
+        ?? throw new InvalidOperationException("TestItemModel 缺少测量失败收口方法");
+    markFailureMethod.Invoke(item, new object[] { "通信超时" });
+
+    AssertEqual("通信超时", item.CheckResult);
+    AssertEqual("通信超时", item.RecordResult);
+    AssertEqual("NG", item.Judgment);
+
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+    AssertEqual(true, viewModelSource.Contains("MarkMeasurementFailed(\"通信超时\")", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("CheckResult == \"测试中\"", StringComparison.Ordinal));
+}
+
+static void TestDmmRecoveryRemainsAwaitingReset()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    AssertEqual(true, source.Contains("SetUiState(TestUIState.AwaitingReset);", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("if (UiState == TestUIState.AwaitingReset)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("_ignoreInspectionCallbacksUntilNextStart = true;", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("ClearTestItemsForRestart();", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("MarkMeasurementFailed(\"通信超时\")", StringComparison.Ordinal));
+}
+
+static void TestRunningPageButtonDepthStylesContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Views",
+        "TestPageView.xaml"));
+
+    var mainOperationStyle = ExtractStyleBlock(source, "MainOperationButtonStyle");
+    AssertEqual(true, mainOperationStyle.Contains("x:Name=\"buttonSurface\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("x:Name=\"buttonBase\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("Background=\"{TemplateBinding Background}\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("BorderBrush=\"{TemplateBinding BorderBrush}\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("BorderThickness=\"0,0,0,4\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("Opacity\" Value=\"0.88\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("BorderThickness\" Value=\"0,0,0,2\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("Margin\" Value=\"0,2,0,0\"", StringComparison.Ordinal));
+    AssertEqual(true, mainOperationStyle.Contains("Opacity\" Value=\"0.45\"", StringComparison.Ordinal));
+    AssertEqual(false, mainOperationStyle.Contains("DropShadowEffect", StringComparison.Ordinal));
+    AssertEqual(false, mainOperationStyle.Contains("LinearGradientBrush", StringComparison.Ordinal));
+
+    var deviceStatusStyle = ExtractStyleBlock(source, "DeviceStatusButtonStyle");
+    AssertEqual(true, deviceStatusStyle.Contains("<Setter Property=\"Width\" Value=\"110\"/>", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("<Setter Property=\"Height\" Value=\"40\"/>", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("CornerRadius=\"6\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("Background=\"{TemplateBinding Background}\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("BorderBrush=\"{TemplateBinding BorderBrush}\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("BorderThickness=\"0,0,0,4\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("Property=\"IsPressed\" Value=\"True\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("Property=\"IsMouseOver\" Value=\"True\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("Property=\"IsEnabled\" Value=\"False\"", StringComparison.Ordinal));
+    AssertEqual(true, deviceStatusStyle.Contains("Margin\" Value=\"0,2,0,0\"", StringComparison.Ordinal));
+    AssertEqual(false, deviceStatusStyle.Contains("DropShadowEffect", StringComparison.Ordinal));
+    AssertEqual(false, deviceStatusStyle.Contains("LinearGradientBrush", StringComparison.Ordinal));
+    AssertEqual(false, deviceStatusStyle.Contains("#FFFFFF", StringComparison.OrdinalIgnoreCase));
+
+    var clearCountStyle = ExtractStyleBlock(source, "ClearCountButtonStyle");
+    AssertEqual(true, clearCountStyle.Contains("<Setter Property=\"Width\" Value=\"50\"/>", StringComparison.Ordinal));
+    AssertEqual(true, clearCountStyle.Contains("<Setter Property=\"Height\" Value=\"50\"/>", StringComparison.Ordinal));
+    AssertEqual(true, clearCountStyle.Contains("Background\" Value=\"#E74C3C\"", StringComparison.Ordinal));
+    AssertEqual(true, clearCountStyle.Contains("CornerRadius=\"25\"", StringComparison.Ordinal));
+    AssertEqual(true, clearCountStyle.Contains("BorderThickness=\"0,0,0,4\"", StringComparison.Ordinal));
+    AssertEqual(true, clearCountStyle.Contains("Property=\"IsPressed\" Value=\"True\"", StringComparison.Ordinal));
+    AssertEqual(true, clearCountStyle.Contains("Margin\" Value=\"0,2,0,0\"", StringComparison.Ordinal));
+    AssertEqual(false, clearCountStyle.Contains("DropShadowEffect", StringComparison.Ordinal));
+    AssertEqual(false, clearCountStyle.Contains("LinearGradientBrush", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("Content=\"清零\"", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("Command=\"{Binding ClearCountersCommand}\"", StringComparison.Ordinal));
+}
+
+static string ExtractStyleBlock(string source, string styleKey)
+{
+    var styleStart = source.IndexOf($"<Style x:Key=\"{styleKey}\"", StringComparison.Ordinal);
+    AssertEqual(true, styleStart >= 0);
+
+    var styleEnd = source.IndexOf("</Style>", styleStart, StringComparison.Ordinal);
+    AssertEqual(true, styleEnd >= 0);
+    return source[styleStart..(styleEnd + "</Style>".Length)];
+}
+
+static void TestCtrlRecover01ScannerReconnectOwnerContract()
+{
+    var scannerSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "HoneywellH1900Scanner.cs"));
+    var connectionSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "DeviceConnectionService.cs"));
+
+    AssertEqual(true, scannerSource.Contains("等待 DeviceConnectionService 自动重连", StringComparison.Ordinal));
+    AssertEqual(false, scannerSource.Contains("var reconnected = ConnectInternal(_portName, _baudRate)", StringComparison.Ordinal));
+    AssertEqual(true, connectionSource.Contains("_scannerInitializationLock", StringComparison.Ordinal));
+    AssertEqual(true, connectionSource.Contains("InitializeScannerBarcodeServiceAsync", StringComparison.Ordinal));
+}
+
+static void TestCtrlRecover01RecoveryExperienceContract()
+{
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    AssertEqual(true, viewModelSource.Contains("BuildDeviceRecoveryMessage", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("等待自动重连", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("点击“复位”", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("HandleDeviceDisconnected", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("SetUiState(TestUIState.AwaitingReset)", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("不自动续跑旧项目", StringComparison.Ordinal));
+}
+
+static async Task<bool> ReadExactNetworkAsync(NetworkStream stream, Memory<byte> buffer)
+{
+    int offset = 0;
+    while (offset < buffer.Length)
+    {
+        int bytesRead = await stream.ReadAsync(buffer[offset..]).ConfigureAwait(false);
+        if (bytesRead == 0)
+            return false;
+        offset += bytesRead;
+    }
+    return true;
+}
+
+static async Task WriteFc03ResponseAsync(NetworkStream stream, byte[] request)
+{
+    var response = new byte[11];
+    BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(0, 2), BinaryPrimitives.ReadUInt16BigEndian(request.AsSpan(0, 2)));
+    response[4] = 0;
+    response[5] = 5;
+    response[6] = request[6];
+    response[7] = 0x03;
+    response[8] = 2;
+    await stream.WriteAsync(response).ConfigureAwait(false);
+    await stream.FlushAsync().ConfigureAwait(false);
+}
+
 static void AssertMethodCallOrder(string source, string methodName, string guard, string request)
 {
     var signature = $"private async Task {methodName}()";
@@ -2290,6 +2801,114 @@ static void RunPlcTesterExceptionResponseTest()
     finally
     {
         listener.Stop();
+    }
+}
+
+sealed class CancellationBlockingStream : Stream
+{
+    private readonly bool _blockWrite;
+    private readonly bool _blockFlush;
+
+    public CancellationBlockingStream(bool blockWrite, bool blockFlush)
+    {
+        _blockWrite = blockWrite;
+        _blockFlush = blockFlush;
+    }
+
+    public bool WriteCalled { get; private set; }
+    public bool FlushCalled { get; private set; }
+    public bool WriteCancellationObserved { get; private set; }
+    public bool FlushCancellationObserved { get; private set; }
+
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length => 0;
+    public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+    public override void Flush() { }
+
+    public override async Task FlushAsync(CancellationToken cancellationToken)
+    {
+        FlushCalled = true;
+        if (!_blockFlush)
+            return;
+
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            FlushCancellationObserved = true;
+            throw;
+        }
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => 0;
+
+    public override void Write(byte[] buffer, int offset, int count)
+        => WriteCalled = true;
+
+    public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        WriteCalled = true;
+        if (!_blockWrite)
+            return;
+
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            WriteCancellationObserved = true;
+            throw;
+        }
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+}
+
+sealed class CapturingTestLogger<TCategory> : ILogger<TCategory>
+{
+    private readonly object _syncRoot = new();
+    private readonly List<string> _entries = new();
+
+    public bool Contains(string text)
+    {
+        lock (_syncRoot)
+            return _entries.Any(entry => entry.Contains(text, StringComparison.Ordinal));
+    }
+
+    public string JoinEntries()
+    {
+        lock (_syncRoot)
+            return string.Join(" | ", _entries);
+    }
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull
+        => NoopDisposable.Instance;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        string message = formatter(state, exception);
+        lock (_syncRoot)
+            _entries.Add(message);
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public static NoopDisposable Instance { get; } = new();
+        public void Dispose() { }
     }
 }
 

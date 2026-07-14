@@ -75,6 +75,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
         private string _judgment = string.Empty;
 
         /// <summary>
+        /// 将当前检测项目收口为通信测量失败，避免设备断线后仍停留在“测试中”。
+        /// </summary>
+        public void MarkMeasurementFailed(string message)
+        {
+            CheckResult = message;
+            RecordResult = message;
+            Judgment = "NG";
+        }
+
+        /// <summary>
         /// 判定是否完成（用于样式绑定）
         /// </summary>
         public bool IsJudged => !string.IsNullOrEmpty(Judgment);

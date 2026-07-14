@@ -35,6 +35,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private const int DrainMaxDurationMs = 250;
         private const int DrainQuietIntervalMs = 20;
         private const int DrainRequiredQuietChecks = 3;
+        private const int PingCommandLockWaitMs = 400;
+        private const int BusinessTimeoutDisconnectThreshold = 2;
 
         #endregion
 
@@ -52,6 +54,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private volatile bool _isConnected;
         private volatile bool _isDisposed;
         private volatile bool _receiveBufferPossiblyDirty;
+        // 业务连续超时计数（ConsecutiveBusinessTimeouts），仅用于超时分级，不作为连接状态本身。
+        private int _consecutiveBusinessTimeouts;
 
 #if DEBUG
         /// <summary>
@@ -217,6 +221,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
                 _receiveBufferPossiblyDirty = false;
                 _isConnected = true;
+                Interlocked.Exchange(ref _consecutiveBusinessTimeouts, 0);
                 ResetDmmModeCache(); // 新连接，设备模式不可确认，缓存置为 Unknown
                 _logger.LogInformation("万用表连接成功！设备信息: {IDN}", idn);
 
@@ -281,6 +286,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 // 连接已经失效，旧 Socket 的接收缓冲区状态不能带入下一次连接。
                 _receiveBufferPossiblyDirty = false;
+                Interlocked.Exchange(ref _consecutiveBusinessTimeouts, 0);
             }
         }
 
@@ -575,6 +581,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             try
             {
                 await SendSettingInternalAsync(command, ct).ConfigureAwait(false);
+                Interlocked.Exchange(ref _consecutiveBusinessTimeouts, 0);
+            }
+            catch (TimeoutException ex)
+            {
+                await HandleBusinessTimeoutAsync(command, ex).ConfigureAwait(false);
+                throw;
             }
             catch (Exception ex)
             {
@@ -614,10 +626,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                return await SendQueryInternalAsync(command, ct).ConfigureAwait(false);
+                var response = await SendQueryInternalAsync(command, ct).ConfigureAwait(false);
+                Interlocked.Exchange(ref _consecutiveBusinessTimeouts, 0);
+                return response;
             }
             catch (OperationCanceledException)
             {
+                throw;
+            }
+            catch (TimeoutException ex)
+            {
+                if (IsMeasurementTimeoutDisconnectCommand(command))
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "[DMM测量][超时断线] Command={Command}，正式测量响应超时，立即关闭当前连接",
+                        command);
+                    await MarkConnectionLostAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    await HandleBusinessTimeoutAsync(command, ex).ConfigureAwait(false);
+                }
                 throw;
             }
             catch (Exception ex)
@@ -1145,7 +1175,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         /// 通过 *IDN? 主动确认 DMM 的真实通信状态。健康探针与业务查询共用命令锁，
         /// 但只立即尝试取锁；业务测量繁忙时返回 SkippedBusy，不判定设备掉线。
         /// </summary>
-        public async Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
+        public Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
+            => CheckHealthAsync(ct, commandLockWaitMs: 0);
+
+        private async Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct, int commandLockWaitMs)
         {
             if (!IsConnected)
                 return DeviceHealthCheckResult.Unhealthy("万用表连接标志为断开");
@@ -1156,7 +1189,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             bool lockTaken = false;
             try
             {
-                lockTaken = await _commandLock.WaitAsync(0, linkedCts.Token).ConfigureAwait(false);
+                lockTaken = await _commandLock.WaitAsync(commandLockWaitMs, linkedCts.Token).ConfigureAwait(false);
                 if (!lockTaken)
                     return DeviceHealthCheckResult.SkippedBusy("DMM 正在执行业务命令，本轮健康检查跳过");
 
@@ -1167,6 +1200,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     return DeviceHealthCheckResult.Unhealthy("DMM *IDN? 未返回有效响应");
                 }
 
+                Interlocked.Exchange(ref _consecutiveBusinessTimeouts, 0);
                 return DeviceHealthCheckResult.Healthy("DMM *IDN? 响应正常");
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -1194,7 +1228,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>保留旧的启动复核入口，统一复用新的健康检查结果。</summary>
         public async Task<bool> PingAsync(CancellationToken ct = default)
-            => (await CheckHealthAsync(ct).ConfigureAwait(false)).IsHealthy;
+        {
+            var result = await CheckHealthAsync(ct, PingCommandLockWaitMs).ConfigureAwait(false);
+            // 启动复核遇到本地命令锁竞争时，连接仍然有效，不能把 SkippedBusy 误报为离线。
+            return result.IsHealthy || result.Status == DeviceHealthCheckStatus.SkippedBusy;
+        }
 
         #endregion
 
@@ -1231,6 +1269,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private static bool IsConnectionFailure(Exception ex)
             => ex is IOException or SocketException or ObjectDisposedException or InvalidOperationException;
 
+        /// <summary>
+        /// 对非正式测量查询超时做分级处理：单次超时保留连接，连续两次超时才清理旧连接。
+        /// 正式测量查询由 SendQueryAsync 单独按一次超时立即断线。
+        /// 调用方已经持有命令锁，因此可以安全清理当前 Socket。
+        /// </summary>
+        private async Task HandleBusinessTimeoutAsync(string command, TimeoutException ex)
+        {
+            var count = Interlocked.Increment(ref _consecutiveBusinessTimeouts);
+            _logger.LogWarning(ex,
+                "[DMM查询][单次超时] Command={Command}, ConsecutiveTimeouts={ConsecutiveTimeouts}, Threshold={Threshold}",
+                command, count, BusinessTimeoutDisconnectThreshold);
+
+            if (count < BusinessTimeoutDisconnectThreshold)
+                return;
+
+            _logger.LogWarning(
+                "[DMM查询][连续超时断线] Command={Command}, ConsecutiveTimeouts={ConsecutiveTimeouts}",
+                command, count);
+            await MarkConnectionLostAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 判断是否为正式测量读取命令。测量响应迟到会污染接收缓冲区，
+        /// 因此一次明确的读取超时就不能继续复用当前 Socket。
+        /// </summary>
+        private static bool IsMeasurementTimeoutDisconnectCommand(string command)
+            => command.Trim().Equals("READ?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS:RES?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS:CONT?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("FETC?", StringComparison.OrdinalIgnoreCase);
+
         #endregion
 
         #region 通知辅助
@@ -1264,7 +1333,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     || normalizedResponse.Contains("No error", StringComparison.OrdinalIgnoreCase),
                 "*TST?" => normalizedResponse == "0"
                     || normalizedResponse.Contains("PASS", StringComparison.OrdinalIgnoreCase),
-                "READ?" or "MEAS:CONT?" or "MEAS?" => IsMeasurementResponse(normalizedResponse),
+                "READ?" or "MEAS:RES?" or "MEAS:CONT?" or "FETC?" or "MEAS?" => IsMeasurementResponse(normalizedResponse),
                 _ => true
             };
 
@@ -1278,6 +1347,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private static bool IsMeasurementQuery(string command)
             => command.Trim().Equals("READ?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS:CONT?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS:RES?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("FETC?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS?", StringComparison.OrdinalIgnoreCase);
 
         private static bool IsIdentityResponse(string response)

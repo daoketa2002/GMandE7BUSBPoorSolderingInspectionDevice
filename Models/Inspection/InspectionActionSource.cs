@@ -10,5 +10,7 @@ public enum InspectionActionSource
     /// <summary>调试面板按钮直接触发（半实物/Fake 调试）</summary>
     DebugPanel,
     /// <summary>真实模式按钮（上位机界面按钮，非 PLC 轮询）</summary>
-    RealModeButton
+    RealModeButton,
+    /// <summary>停止收口后自动补执行的复位请求。</summary>
+    PendingAfterStop
 }

@@ -19,6 +19,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Views;
 using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
@@ -86,14 +87,29 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>PLC 轮询非阻塞门禁。上一轮未结束时跳过本轮，避免控制信号快照排队。</summary>
     private int _plcPollingInProgress;
 
-    /// <summary>PLC 轮询暂停标志。控制动作（Stop/Reset/EmergencyStop）执行期间为 true，暂停低优先级 UI 轮询。</summary>
-    private bool _plcPollingSuspended;
+    /// <summary>PLC 轮询嵌套暂停计数。只有计数回到 0 后才允许恢复低优先级轮询。</summary>
+    private int _plcPollingSuspendCount;
 
     /// <summary>当前轮询操作的取消令牌源。供控制动作取消正在进行的 Poll 请求。</summary>
     private CancellationTokenSource? _plcPollingOperationCts;
 
     /// <summary>Start/Stop/Reset/EmergencyStop/Finish 统一动作门禁。</summary>
     private readonly SemaphoreSlim _controlActionLock = new(1, 1);
+
+    /// <summary>控制动作请求编号，用于把同一动作的请求、等待、进入和退出日志串起来。</summary>
+    private long _controlActionRequestSequence;
+
+    /// <summary>当前控制动作的请求编号，供统一退出日志关联进入日志。</summary>
+    private long _activeControlActionRequestId;
+
+    /// <summary>控制锁租约是否已被当前动作持有，独立于动作分类状态，防止重复释放信号量。</summary>
+    private int _controlActionHeld;
+
+    /// <summary>急停请求锁存位。急停正在等待普通动作结束时，后续轮询不得再次丢弃该请求。</summary>
+    private int _emergencyStopPending;
+
+    /// <summary>停止流程期间收到的复位请求，停止收口后只补执行一次。</summary>
+    private bool _pendingResetAfterStop;
 
     /// <summary>当前正在执行的控制动作。它不是 UI 状态，只用于跨动作互斥和日志诊断。</summary>
     private InspectionControlAction _currentControlAction = InspectionControlAction.None;
@@ -148,6 +164,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 用于 RunInspectionAsync 返回时判断当前结果是否属于最新一轮，旧任务结果直接丢弃。
     /// </summary>
     private int _inspectionRunVersion;
+
+    /// <summary>设备断线恢复收口门禁，防止 PLC/DMM/扫描枪重复事件重复停止本轮检测。</summary>
+    private int _deviceDisconnectHandling;
 
     /// <summary>正常 OK 结果的延时清除任务取消源。</summary>
     private CancellationTokenSource? _finalResultAutoClearCts;
@@ -589,62 +608,80 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 进入运行控制动作门禁。Start/Stop/Reset/EmergencyStop/Finish 同一时间只允许一个动作收口。
+    /// 进入运行控制动作门禁。
+    /// Start 使用非排队尝试，Stop/Reset/EmergencyStop/Finish 在取消或锁存请求后直接等待信号量。
     /// </summary>
-    private async Task<bool> TryEnterControlActionAsync(InspectionControlAction action)
+    private async Task<bool> TryEnterControlActionAsync(
+        InspectionControlAction action,
+        bool waitForLock = false,
+        CancellationToken ct = default)
     {
-        if (!await _controlActionLock.WaitAsync(0))
+        long actionRequestId = Interlocked.Increment(ref _controlActionRequestSequence);
+        var waitStopwatch = Stopwatch.StartNew();
+        _logger.LogWarning(
+            "[运行控制][请求] Action={Action}, ActionRequestId={ActionRequestId}, CurrentAction={CurrentAction}, UiState={UiState}",
+            action, actionRequestId, _currentControlAction, UiState);
+
+        if (action == InspectionControlAction.Starting
+            && Volatile.Read(ref _emergencyStopPending) != 0)
         {
-            _logger.LogWarning("[运行控制][{Action}][拒绝] 当前已有动作 {CurrentAction} 正在执行，UiState={UiState}",
-                action, _currentControlAction, UiState);
+            _logger.LogWarning(
+                "[运行控制][拒绝] 急停请求已锁存，禁止新的 Starting 进入，ActionRequestId={ActionRequestId}",
+                actionRequestId);
             return false;
         }
 
+        bool entered;
+        if (waitForLock)
+        {
+            _logger.LogWarning(
+                "[运行控制][等待] Action={Action}, ActionRequestId={ActionRequestId}, CurrentAction={CurrentAction}",
+                action, actionRequestId, _currentControlAction);
+            await _controlActionLock.WaitAsync(ct).ConfigureAwait(false);
+            entered = true;
+        }
+        else
+        {
+            entered = await _controlActionLock.WaitAsync(0).ConfigureAwait(false);
+            if (!entered)
+            {
+                _logger.LogWarning(
+                    "[运行控制][拒绝] Action={Action}, ActionRequestId={ActionRequestId}, CurrentAction={CurrentAction}, UiState={UiState}, LockWaitElapsedMs={ElapsedMs}",
+                    action, actionRequestId, _currentControlAction, UiState, waitStopwatch.ElapsedMilliseconds);
+                return false;
+            }
+        }
+
+        Interlocked.Exchange(ref _controlActionHeld, 1);
+        Volatile.Write(ref _activeControlActionRequestId, actionRequestId);
         _currentControlAction = action;
         NotifyChangeOperatorCanExecuteChanged();
-        _logger.LogWarning("[运行控制][{Action}][进入] UiState={UiState}", action, UiState);
+        _logger.LogWarning(
+            "[运行控制][进入] Action={Action}, ActionRequestId={ActionRequestId}, UiState={UiState}, InspectionRunVersion={InspectionRunVersion}, EngineIsRunning={EngineIsRunning}, ExecutionStage={ExecutionStage}, LockWaitElapsedMs={ElapsedMs}",
+            action, actionRequestId, UiState, Volatile.Read(ref _inspectionRunVersion), _inspectionEngine?.IsRunning ?? false,
+            _inspectionEngine?.CurrentExecutionStage ?? "Unavailable", waitStopwatch.ElapsedMilliseconds);
         return true;
     }
 
     /// <summary>
-    /// 取消当前正在执行的控制动作并等待其让出锁。
-    /// 用于 EmergencyStop/Stop/Reset 在 Starting 持有锁时让其取消退出。
-    /// 超时返回 false，不阻塞调用方。
-    /// </summary>
-    private async Task<bool> CancelCurrentActionAndWaitLockAsync(CancellationToken ct = default)
-    {
-        // 取消 Starting（如有）
-        if (_currentControlAction == InspectionControlAction.Starting && _startingCts != null)
-        {
-            _logger.LogWarning("[运行控制][取消] 正在取消 Starting 以执行更高优先级动作");
-            await _startingCts.CancelAsync().ConfigureAwait(false);
-        }
-
-        // 释放锁需要等待 Starting 的 catch → ExitControlAction
-        for (int i = 0; i < 20; i++)
-        {
-            if (_currentControlAction == InspectionControlAction.None)
-                return true;
-            await Task.Delay(10, ct).ConfigureAwait(false);
-        }
-
-        _logger.LogWarning("[运行控制][取消] 等待当前动作退出超时（200ms），将尝试直接获取锁");
-        return false;
-    }
-
-    /// <summary>
-    /// 离开运行控制动作门禁，必须与 TryEnterControlActionAsync 成对出现。
-    /// 防御检查：如果 _currentControlAction 已是 None，不 Release 防止 SemaphoreFullException。
+    /// 离开运行控制动作门禁。是否持有信号量由独立租约标志保护，不能依据 CurrentAction 推断。
     /// </summary>
     private void ExitControlAction(InspectionControlAction action)
     {
-        if (_currentControlAction == InspectionControlAction.None)
+        if (Interlocked.Exchange(ref _controlActionHeld, 0) == 0)
         {
-            _logger.LogError("[运行控制][{Action}][防御] ExitControlAction 被重复调用（_currentControlAction 已是 None），已跳过 Release 防止 SemaphoreFullException", action);
+            _logger.LogError(
+                "[运行控制][退出][防御] Action={Action} 重复退出，未再次释放控制锁，CurrentAction={CurrentAction}",
+                action, _currentControlAction);
             return;
         }
 
-        _logger.LogWarning("[运行控制][{Action}][退出] UiState={UiState}", action, UiState);
+        _logger.LogWarning("[运行控制][退出] Action={Action}, UiState={UiState}", action, UiState);
+        _logger.LogWarning(
+            "[运行控制][退出] Action={Action}, ActionRequestId={ActionRequestId}, InspectionRunVersion={InspectionRunVersion}, EngineIsRunning={EngineIsRunning}, ExecutionStage={ExecutionStage}",
+            action, Volatile.Read(ref _activeControlActionRequestId), Volatile.Read(ref _inspectionRunVersion),
+            _inspectionEngine?.IsRunning ?? false, _inspectionEngine?.CurrentExecutionStage ?? "Unavailable");
+        Volatile.Write(ref _activeControlActionRequestId, 0);
         _currentControlAction = InspectionControlAction.None;
         NotifyChangeOperatorCanExecuteChanged();
         _controlActionLock.Release();
@@ -1690,7 +1727,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         var confirmed = await _notificationService.ConfirmAsync(confirmMsg, "确认返回");
         if (!confirmed) return;
 
-        if (!await TryEnterControlActionAsync(InspectionControlAction.Finishing))
+        if (_currentControlAction == InspectionControlAction.Starting && _startingCts != null)
+        {
+            _logger.LogWarning("[终止请求][抢占] Starting 中，取消启动后等待终止动作进入");
+            await _startingCts.CancelAsync().ConfigureAwait(false);
+        }
+
+        if (!await TryEnterControlActionAsync(InspectionControlAction.Finishing, waitForLock: true))
         {
             AddLog("终止请求已拒绝：当前已有运行控制动作正在执行。");
             return;
@@ -1833,24 +1876,31 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>
     /// 暂停低优先级 UI 轮询并取消当前正在进行的轮询请求。
-    /// 控制动作（Stop/Reset/EmergencyStop）执行前调用。
+    /// 使用计数保证嵌套控制动作不会由内层动作提前恢复轮询。
     /// </summary>
     private void SuspendPlcPolling()
     {
-        _plcPollingSuspended = true;
+        int suspendCount = Interlocked.Increment(ref _plcPollingSuspendCount);
         _plcPollingOperationCts?.Cancel();
         _plcPollingOperationCts?.Dispose();
         _plcPollingOperationCts = null;
-        _logger.LogDebug("[PLC轮询] 已暂停");
+        _logger.LogDebug("[PLC轮询] 已暂停，SuspendCount={SuspendCount}", suspendCount);
     }
 
     /// <summary>
-    /// 恢复低优先级 UI 轮询。控制动作完成后调用。
+    /// 恢复低优先级 UI 轮询。计数回到 0 后才真正恢复。
     /// </summary>
     private void ResumePlcPolling()
     {
-        _plcPollingSuspended = false;
-        _logger.LogDebug("[PLC轮询] 已恢复");
+        int suspendCount = Interlocked.Decrement(ref _plcPollingSuspendCount);
+        if (suspendCount < 0)
+        {
+            _logger.LogError("[PLC轮询][防御] 暂停计数异常为负数：{SuspendCount}，已重置为 0", suspendCount);
+            Interlocked.Exchange(ref _plcPollingSuspendCount, 0);
+            suspendCount = 0;
+        }
+
+        _logger.LogDebug("[PLC轮询] 收到恢复请求，SuspendCount={SuspendCount}", suspendCount);
     }
 
     /// <summary>
@@ -1859,7 +1909,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private async Task PollPlcInputsAsync()
     {
         // 控制动作执行期间暂停低优先级轮询
-        if (_plcPollingSuspended)
+        if (Volatile.Read(ref _plcPollingSuspendCount) > 0)
         {
             _logger.LogDebug("[PLC轮询][暂停] 控制动作执行中，跳过本轮");
             return;
@@ -2276,7 +2326,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             startingToken.ThrowIfCancellationRequested();
 
-            var pcReadyResult = await _plcDevice.WritePcReadyAsync(CancellationToken.None).ConfigureAwait(false);
+            var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken).ConfigureAwait(false);
             if (!pcReadyResult.IsSuccess)
             {
                 await RejectStartAsync(CreateStartFailureResult("启动允许信号发送失败，请检查 PLC 通信状态后重试。",
@@ -2351,8 +2401,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         if (_currentControlAction == InspectionControlAction.Stopping)
         {
-            _logger.LogInformation("[复位请求][忽略] 当前正在停止，忽略复位请求，来源={Source}", source);
-            AddLog($"[复位请求][忽略] 当前正在停止，忽略复位请求，来源={source}");
+            _pendingResetAfterStop = true;
+            _logger.LogWarning("[复位请求][保留] 当前正在停止，停止收口后补执行复位，来源={Source}", source);
+            AddLog($"[复位请求][保留] 当前正在停止，完成停止后自动执行复位，来源={source}");
             return;
         }
 
@@ -2363,12 +2414,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (_startingCts != null)
                 await _startingCts.CancelAsync().ConfigureAwait(false);
 
-            for (int i = 0; i < 100; i++)
-            {
-                await Task.Delay(10).ConfigureAwait(false);
-                if (_currentControlAction == InspectionControlAction.None)
-                    break;
-            }
         }
 
         if (_currentControlAction == InspectionControlAction.EmergencyStopping)
@@ -2400,9 +2445,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        if (!await TryEnterControlActionAsync(InspectionControlAction.Resetting))
+        if (!await TryEnterControlActionAsync(
+                InspectionControlAction.Resetting,
+                waitForLock: true,
+                ct: CancellationToken.None))
         {
-            _logger.LogInformation("[复位请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
+            _logger.LogError("[复位流程][失败] 等待控制锁后仍未能进入复位动作");
             return;
         }
 
@@ -2622,17 +2670,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (_startingCts != null)
                 await _startingCts.CancelAsync().ConfigureAwait(false);
 
-            for (int i = 0; i < 100; i++)
-            {
-                await Task.Delay(10).ConfigureAwait(false);
-                if (_currentControlAction == InspectionControlAction.None)
-                    break;
-            }
         }
 
-        if (!await TryEnterControlActionAsync(InspectionControlAction.Stopping))
+        if (!await TryEnterControlActionAsync(
+                InspectionControlAction.Stopping,
+                waitForLock: true,
+                ct: CancellationToken.None))
         {
-            _logger.LogInformation("[停止请求][忽略] 当前已有控制动作正在执行，来源={Source}", source);
+            _logger.LogError("[停止流程][失败] 等待控制锁后仍未能进入停止动作");
             return;
         }
 
@@ -2701,6 +2746,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             ResumePlcPolling();
             ExitControlAction(InspectionControlAction.Stopping);
+
+            if (_pendingResetAfterStop)
+            {
+                if (Volatile.Read(ref _emergencyStopPending) != 0)
+                {
+                    _pendingResetAfterStop = false;
+                    _logger.LogWarning("[复位请求][让路] 急停已锁存，停止后的待处理复位让路给急停，待急停解除后由操作员复位");
+                }
+                else
+                {
+                    _pendingResetAfterStop = false;
+                    _logger.LogWarning("[复位请求][补执行] 停止流程已释放控制锁，开始执行待处理复位");
+                    await ExecuteResetFlowAsync(InspectionActionSource.PendingAfterStop).ConfigureAwait(false);
+                }
+            }
         }
 
     }
@@ -2723,70 +2783,77 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        // 急停最高优先级：取消当前 Starting（如有），等待锁释放
-        if (_currentControlAction != InspectionControlAction.None)
+        // 急停最高优先级：先锁存请求，再等待控制锁，不能因当前动作占锁而丢弃。
+        if (Interlocked.Exchange(ref _emergencyStopPending, 1) == 1)
         {
-            _logger.LogWarning("[急停流程][抢占] 当前有 {CurrentAction}，将取消后执行急停", _currentControlAction);
-            if (_currentControlAction == InspectionControlAction.Starting && _startingCts != null)
-                await _startingCts.CancelAsync().ConfigureAwait(false);
-
-            // 等待当前动作退让锁
-            for (int i = 0; i < 100; i++)
-            {
-                await Task.Delay(10).ConfigureAwait(false);
-                if (_currentControlAction == InspectionControlAction.None)
-                    break;
-            }
-        }
-
-        // 无论引擎是否正在运行，强制发中止
-        if (_inspectionEngine?.IsRunning == true)
-            _inspectionEngine.StopForEmergencyStop();
-
-        if (!await TryEnterControlActionAsync(InspectionControlAction.EmergencyStopping))
-        {
-            _logger.LogWarning("[急停流程][失败] 无法获取控制锁（可能是 Finishing 进行中）");
+            _logger.LogWarning("[急停流程][锁存] 已有急停流程正在等待或执行，合并本次请求，来源={Source}", source);
             return;
         }
 
-        // 暂停低优先级 UI 轮询，减少请求并发
-        SuspendPlcPolling();
-
-        _logger.LogWarning("[急停流程][审计] 急停信号 DT123，来源={Source}，执行急停收口", source);
-        AddLog($"[急停流程] 急停信号，来源={source}，正在停止检测...");
-
         try
         {
-            _ignoreInspectionCallbacksUntilNextStart = true;
-            Interlocked.Increment(ref _inspectionRunVersion);
-            await CancelFinalResultAutoClearAsync("EmergencyStop开始").ConfigureAwait(false);
-            SetUiState(TestUIState.EmergencyStop);
+            if (_currentControlAction == InspectionControlAction.Starting && _startingCts != null)
+            {
+                _logger.LogWarning("[急停流程][抢占] Starting 中，取消启动后等待控制锁");
+                await _startingCts.CancelAsync().ConfigureAwait(false);
+            }
 
-            if (_inspectionEngine!.IsRunning)
+            // 无论引擎是否正在运行，先发出急停中止请求，避免等待控制锁期间继续测量。
+            if (_inspectionEngine?.IsRunning == true)
                 _inspectionEngine.StopForEmergencyStop();
 
-            // 统一调用运行输出清理替换手写序列
-            await ClearTransientRunOutputsAsync(CancellationToken.None);
-            var finalResult = await ClearFinalResultWithAuditAsync("EmergencyStop", CancellationToken.None);
-            if (!finalResult.IsSuccess)
-                _logger.LogError("[急停流程][审计] 产品结果信号清除失败，保持急停状态并等待复位");
+            if (!await TryEnterControlActionAsync(
+                    InspectionControlAction.EmergencyStopping,
+                    waitForLock: true,
+                    ct: CancellationToken.None))
+            {
+                _logger.LogError("[急停流程][失败] 等待控制锁后仍未能进入急停动作");
+                return;
+            }
 
-            _inspectionEngine.ClearResetState();
-            _inspectionStarted = false;
-            IsPlcStartRequested = false;
-            SetUiState(TestUIState.EmergencyStop);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[急停流程] 急停过程发生异常");
-            SetUiState(TestUIState.EmergencyStop);
-            AddLog($"急停收口异常：{ex.Message}，请确认现场安全后执行急停解除/复位");
+            // 暂停低优先级 UI 轮询，减少请求并发
+            SuspendPlcPolling();
+
+            _logger.LogWarning("[急停流程][进入] 急停信号 DT123，来源={Source}，执行急停收口", source);
+            AddLog($"[急停流程] 急停信号，来源={source}，正在停止检测...");
+
+            try
+            {
+                _ignoreInspectionCallbacksUntilNextStart = true;
+                Interlocked.Increment(ref _inspectionRunVersion);
+                await CancelFinalResultAutoClearAsync("EmergencyStop开始").ConfigureAwait(false);
+                SetUiState(TestUIState.EmergencyStop);
+
+                if (_inspectionEngine!.IsRunning)
+                    _inspectionEngine.StopForEmergencyStop();
+
+                // 统一调用运行输出清理替换手写序列
+                await ClearTransientRunOutputsAsync(CancellationToken.None);
+                var finalResult = await ClearFinalResultWithAuditAsync("EmergencyStop", CancellationToken.None);
+                if (!finalResult.IsSuccess)
+                    _logger.LogError("[急停流程][审计] 产品结果信号清除失败，保持急停状态并等待复位");
+
+                _inspectionEngine.ClearResetState();
+                _inspectionStarted = false;
+                IsPlcStartRequested = false;
+                SetUiState(TestUIState.EmergencyStop);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[急停流程] 急停过程发生异常");
+                SetUiState(TestUIState.EmergencyStop);
+                AddLog($"急停收口异常：{ex.Message}，请确认现场安全后执行急停解除/复位");
+            }
+            finally
+            {
+                // 急停后恢复轮询，检测后续 DT123 急停解除信号
+                ResumePlcPolling();
+                ExitControlAction(InspectionControlAction.EmergencyStopping);
+            }
         }
         finally
         {
-            // 急停后恢复轮询，检测后续 DT123 急停解除信号
-            ResumePlcPolling();
-            ExitControlAction(InspectionControlAction.EmergencyStopping);
+            Volatile.Write(ref _emergencyStopPending, 0);
         }
     }
     #endregion
@@ -3206,6 +3273,17 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
+            // DMM 断线事件会先将页面切到 AwaitingReset；检测任务随后返回时不得覆盖成 Error。
+            if (UiState == TestUIState.AwaitingReset)
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    AddLog($"⚠️ {result.ErrorMessage ?? "本轮检测因设备通信中断停止"}，请复位后重新开始。");
+                });
+                _logger.LogWarning("[运行页][审计] 页面已进入 AwaitingReset，忽略检测任务异常结果，不自动续跑");
+                return;
+            }
+
             // 非控制类异常（PLC写失败/安全清理失败/RelayTimeout/DMM异常/未分类异常）:
             // 先切 UI 为 Error 状态，再弹窗告知操作员，避免弹窗时顶部仍显示"测试中"
             await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -3288,6 +3366,74 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _logger.LogInformation("[运行页收尾] 已退订硬件和检测引擎事件，避免旧页面重复响应完成事件");
     }
 
+    /// <summary>
+    /// 设备断线后的统一恢复提示。设备恢复连接只恢复通信能力，不自动续跑旧项目，必须由操作员复位。
+    /// </summary>
+    private static string BuildDeviceRecoveryMessage(string deviceType)
+        => deviceType switch
+        {
+            "PLC" => "PLC 通信已中断，本轮检测已停止。\n请检查 PLC 电源和网线，等待自动重连或点击“PLC重连”。\nPLC 恢复连接后，请点击“复位”重新准备检测。",
+            "DMM" => "万用表通信已中断，本轮检测已停止。\n请检查万用表电源和网线，等待自动重连或点击“万用表重连”。\n设备恢复连接后，请点击“复位”重新准备检测。",
+            _ => "扫描枪通信已中断，本轮检测已停止。\n请检查 USB 连接，等待自动重连或点击“扫描枪重连”。\n设备恢复连接后，请点击“复位”重新准备检测。"
+        };
+
+    private void HandleDeviceDisconnected(string deviceType)
+    {
+        if (Interlocked.CompareExchange(ref _deviceDisconnectHandling, 1, 0) != 0)
+            return;
+
+        _ = HandleDeviceDisconnectedAsync(deviceType);
+    }
+
+    private async Task HandleDeviceDisconnectedAsync(string deviceType)
+    {
+        try
+        {
+            if (deviceType == "DMM")
+            {
+                TestItems.FirstOrDefault(item => item.CheckResult == "测试中")
+                    ?.MarkMeasurementFailed("通信超时");
+            }
+
+            // 设备恢复后不自动续跑旧项目，先屏蔽旧检测回调并要求操作员复位。
+            _ignoreInspectionCallbacksUntilNextStart = true;
+            Interlocked.Increment(ref _inspectionRunVersion);
+            _inspectionStarted = false;
+            SetUiState(TestUIState.AwaitingReset);
+            _logger.LogWarning(
+                "[设备恢复][{DeviceType}] 通信中断，本轮检测已停止，等待复位；不自动续跑旧项目",
+                deviceType);
+
+            if (_inspectionEngine?.IsRunning == true)
+            {
+                var stopResult = await _inspectionEngine.StopAndWaitAsync(
+                    TimeSpan.FromSeconds(2),
+                    InspectionStopReason.Canceled,
+                    CancellationToken.None);
+                if (stopResult == InspectionStopWaitResult.Timeout)
+                {
+                    _logger.LogWarning(
+                        "[设备恢复][{DeviceType}] 检测引擎停止未完全确认，仍保持请复位状态；Reason={Reason}",
+                        deviceType,
+                        stopResult);
+                }
+            }
+
+            await _notificationService.ShowWarningAsync(
+                BuildDeviceRecoveryMessage(deviceType),
+                "设备通信中断");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[设备恢复][{DeviceType}] 断线收口异常，保持请复位状态", deviceType);
+            SetUiState(TestUIState.AwaitingReset);
+        }
+        finally
+        {
+            Volatile.Write(ref _deviceDisconnectHandling, 0);
+        }
+    }
+
     private void OnPlcConnectionStateChanged(
         object? sender,
         DeviceConnectionStateChangedEventArgs? e)
@@ -3301,9 +3447,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         void ApplyState()
         {
+            bool wasConnected = IsPlcConnected;
             IsPlcConnected = e.IsConnected;
             PlcStatusText = e.StatusText;
             PlcConnectionStatus = e.Status;
+            if (!e.IsConnected && (wasConnected || _inspectionStarted || _inspectionEngine?.IsRunning == true
+                || UiState is TestUIState.Testing or TestUIState.Paused))
+                HandleDeviceDisconnected("PLC");
             UpdateUIState();
         }
 
@@ -3335,9 +3485,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         void ApplyState()
         {
+            bool wasConnected = IsDmmConnected;
             IsDmmConnected = e.IsConnected;
             DmmStatusText = e.StatusText;
             DmmConnectionStatus = e.Status;
+            if (!e.IsConnected && (wasConnected || _inspectionStarted || _inspectionEngine?.IsRunning == true
+                || UiState is TestUIState.Testing or TestUIState.Paused))
+                HandleDeviceDisconnected("DMM");
             UpdateUIState();
         }
 
@@ -3369,9 +3523,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         void ApplyState()
         {
+            bool wasConnected = IsScannerConnected;
             IsScannerConnected = e.IsConnected;
             ScannerStatusText = e.StatusText;
             ScannerConnectionStatus = e.Status;
+            if (!e.IsConnected && (wasConnected || _inspectionStarted || _inspectionEngine?.IsRunning == true
+                || UiState is TestUIState.Testing or TestUIState.Paused))
+                HandleDeviceDisconnected("Scanner");
             UpdateUIState();
         }
 
@@ -3599,6 +3757,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _duplicateCheckCts = null;
         await CancelFinalResultAutoClearAsync("离开运行页").ConfigureAwait(false);
         StopPlcPolling();
+        if (Volatile.Read(ref _plcPollingSuspendCount) != 0)
+            _logger.LogError("[PLC轮询][生命周期] 离开运行页时暂停计数为 {SuspendCount}，已重置", _plcPollingSuspendCount);
+        Interlocked.Exchange(ref _plcPollingSuspendCount, 0);
         UnsubscribeFromHardwareEvents();
 
         // ★ 终了流程已提前完成 PLC 清理，此处只做非 PLC 的页面离开收尾
@@ -3785,6 +3946,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         _ = CancelFinalResultAutoClearAsync("Dispose");
         StopPlcPolling();
+        if (Volatile.Read(ref _plcPollingSuspendCount) != 0)
+            _logger.LogError("[PLC轮询][生命周期] Dispose 时暂停计数为 {SuspendCount}，已重置", _plcPollingSuspendCount);
+        Interlocked.Exchange(ref _plcPollingSuspendCount, 0);
         UnsubscribeFromHardwareEvents();
         _controlActionLock.Dispose();
 

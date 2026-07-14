@@ -39,10 +39,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// </summary>
         private TcpClient? _tcpClient;
 
+        /// <summary>当前 TCP 连接代次；每次建立新 TCP 连接后递增。</summary>
+        private long _connectionGeneration;
+
         /// <summary>
         /// 网络流
         /// </summary>
-        private NetworkStream? _networkStream;
+        private Stream? _networkStream;
 
         /// <summary>
         /// 心跳检测定时器任务
@@ -162,8 +165,52 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <param name="logger">日志记录器</param>
         public TcpClientPLCMotionService(
             ILogger<TcpClientPLCMotionService> logger)
+            : this(logger, testStream: null)
+        {
+        }
+
+        /// <summary>
+        /// 仅供最小回归测试注入可控 Stream；不作为正式业务构造入口。
+        /// </summary>
+        internal TcpClientPLCMotionService(
+            ILogger<TcpClientPLCMotionService> logger,
+            Stream? testStream)
         {
             _logger = logger;
+
+            if (testStream is not null)
+            {
+                _networkStream = testStream;
+                _isRunning = true;
+                _isConnected = true;
+                _connectionGeneration = 1;
+            }
+        }
+
+        /// <summary>仅供阶段 C 自动化测试读取 Pending 数量。</summary>
+        internal int PendingCountForTesting => _pendingRequests.Count;
+
+        /// <summary>仅供阶段 C 自动化测试确认连接代次未被本地繁忙误改。</summary>
+        internal long ConnectionGenerationForTesting => Volatile.Read(ref _connectionGeneration);
+
+        /// <summary>仅供阶段 C 自动化测试确认请求锁可再次取得。</summary>
+        internal bool CanAcquireRequestLockForTesting()
+        {
+            if (!_requestLock.Wait(0))
+                return false;
+
+            _requestLock.Release();
+            return true;
+        }
+
+        /// <summary>仅供阶段 C 自动化测试确认发送锁可再次取得。</summary>
+        internal bool CanAcquireSendLockForTesting()
+        {
+            if (!_sendLock.Wait(0))
+                return false;
+
+            _sendLock.Release();
+            return true;
         }
 
         /// <summary>
@@ -229,7 +276,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                     // ⭐ 先启动数据接收循环（Modbus验证需要读循环接收应答）
                     _readLoopCts = new CancellationTokenSource();
-                    _ = Task.Run(() => ReadDataAsync(_readLoopCts.Token), _readLoopCts.Token);
+                    var connectionGeneration = Volatile.Read(ref _connectionGeneration);
+                    _ = Task.Run(
+                        () => ReadDataAsync(_readLoopCts.Token, connectionGeneration),
+                        _readLoopCts.Token);
 
                     // ⭐ Modbus验证：读保持寄存器确认对方是真正的PLC，2秒超时
                     await VerifyDeviceRespondsAsync().ConfigureAwait(false);
@@ -308,7 +358,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 await tempTcpClient.ConnectAsync(Host, Port, timeoutCts.Token).ConfigureAwait(false);
                 _tcpClient = tempTcpClient;
                 _networkStream = _tcpClient.GetStream();
-                _logger.LogInformation("TCP连接建立成功");
+                var connectionGeneration = Interlocked.Increment(ref _connectionGeneration);
+                _logger.LogInformation("TCP连接建立成功，ConnectionGeneration={ConnectionGeneration}", connectionGeneration);
             }
             catch
             {
@@ -323,16 +374,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// </summary>
         /// <param name="ct">取消令牌</param>
         /// <returns>表示异步读取操作的任务</returns>
-        private async Task ReadDataAsync(CancellationToken ct)
+        private async Task ReadDataAsync(CancellationToken ct, long connectionGeneration)
         {
             var buffer = new byte[4096]; // 增大缓冲区以处理大数据包
+            var connectionStream = _networkStream;
             try
             {
-                _logger.LogInformation("开始Modbus数据接收循环");
+                _logger.LogInformation("开始Modbus数据接收循环，ConnectionGeneration={ConnectionGeneration}", connectionGeneration);
 
-                while (!ct.IsCancellationRequested && _isConnected && _isRunning)
+                while (!ct.IsCancellationRequested
+                    && _isConnected
+                    && _isRunning
+                    && IsCurrentConnection(connectionGeneration))
                 {
-                    if (_networkStream == null)
+                    if (connectionStream == null)
                     {
                         _logger.LogWarning("网络流为null，无法读取数据");
                         break;
@@ -340,29 +395,33 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                     try
                     {
-                        int bytesRead = await _networkStream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false);
+                        int bytesRead = await connectionStream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false);
                         if (bytesRead > 0)
                         {
+                            if (!IsCurrentConnection(connectionGeneration))
+                                break;
+
                             _logger.LogDebug($"接收到 {bytesRead} 字节数据");
 
                             // 将新数据添加到接收缓冲区
                             _receiveBuffer.Write(buffer, 0, bytesRead);
 
                             // 处理缓冲区中的完整报文
-                            ProcessBufferedData();
+                            ProcessBufferedData(connectionGeneration);
                         }
                         else
                         {
                             // 连接已关闭
                             _logger.LogInformation("TCP连接已关闭，停止读取循环");
-                            MarkDisconnected();
+                            MarkDisconnected(connectionGeneration, "RemoteClosed");
                             break;
                         }
                     }
                     catch (ObjectDisposedException)
                     {
                         _logger.LogDebug("网络流已被释放");
-                        if (!ct.IsCancellationRequested && _isRunning) MarkDisconnected();
+                        if (!ct.IsCancellationRequested && _isRunning)
+                            MarkDisconnected(connectionGeneration, "SocketDisconnected");
                         break;
                     }
                 }
@@ -374,10 +433,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             catch (Exception ex)
             {
                 _logger.LogError(ex, "读取Modbus数据失败");
-                if (!ct.IsCancellationRequested && _isRunning)
+                if (!ct.IsCancellationRequested && _isRunning && IsCurrentConnection(connectionGeneration))
                 {
                     Notify(NotificationType.Warning, "数据读取异常，已标记断线", "ReadData");
-                    MarkDisconnected();
+                    MarkDisconnected(
+                        connectionGeneration,
+                        ex is IOException or SocketException ? "SocketDisconnected" : "ProtocolError");
                 }
             }
 
@@ -387,7 +448,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// <summary>
         /// 处理接收缓冲区中的数据，尝试解析完整的Modbus报文
         /// </summary>
-        private void ProcessBufferedData()
+        private void ProcessBufferedData(long connectionGeneration)
         {
             var bufferArray = _receiveBuffer.ToArray();
             int offset = 0;
@@ -399,8 +460,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                 if (response != null)
                 {
-                    _logger.LogDebug($"成功解析Modbus响应: 事务ID={response.TransactionId}, 功能码={response.FunctionCode}");
-                    HandleModbusResponse(response);
+                    _logger.LogDebug(
+                        "[Modbus诊断][响应解析] RequestStage=ParseResponse, TID={TID}, FC={FC}, PendingCount={PendingCount}",
+                        response.TransactionId, response.FunctionCode, _pendingRequests.Count);
+                    HandleModbusResponse(response, connectionGeneration);
 
                     // 移动偏移量到下一个可能的报文
                     var responseLength = CalculateModbusResponseLength(bufferArray, offset, bufferArray.Length - offset);
@@ -629,11 +692,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// 处理Modbus响应 - 使用事务ID匹配
         /// </summary>
         /// <param name="response">Modbus响应对象</param>
-        private void HandleModbusResponse(ModbusResponse response)
+        private void HandleModbusResponse(ModbusResponse response, long connectionGeneration)
         {
 
             // 首先尝试通过事务ID找到对应的等待任务
-            if (_pendingRequests.TryRemove(response.TransactionId, out var pendingReq))
+            if (_pendingRequests.TryGetValue(response.TransactionId, out var pendingReq)
+                && pendingReq.ConnectionGeneration == connectionGeneration
+                && IsCurrentConnection(connectionGeneration)
+                && _pendingRequests.TryRemove(response.TransactionId, out _))
             {
                 // 设置结果
                 pendingReq.Completion.TrySetResult(response);
@@ -710,12 +776,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             Notify(NotificationType.Warning, "所有操作被强制中断", "InterruptAllOperations");
         }
 
-        /// <summary>真实通信失败后只发布断线；自动重连统一由 DeviceConnectionService 负责。</summary>
-        private void MarkDisconnected()
+        /// <summary>判断响应或读循环是否仍属于当前连接代次。</summary>
+        private bool IsCurrentConnection(long connectionGeneration)
+            => Volatile.Read(ref _connectionGeneration) == connectionGeneration;
+
+        /// <summary>
+        /// 真实通信失败后只处理当前连接代次并发布断线；自动重连统一由 DeviceConnectionService 负责。
+        /// </summary>
+        private void MarkDisconnected(long connectionGeneration, string reason)
         {
+            if (!IsCurrentConnection(connectionGeneration))
+            {
+                _logger.LogWarning(
+                    "[Modbus连接][过时代次] ConnectionGeneration={ConnectionGeneration}, CurrentGeneration={CurrentGeneration}, Reason={Reason}",
+                    connectionGeneration, Volatile.Read(ref _connectionGeneration), reason);
+                return;
+            }
+
             var wasConnected = _isConnected;
             InterruptAllOperations();
             CleanupConnection();
+            _logger.LogWarning(
+                "[Modbus连接][断线] ConnectionGeneration={ConnectionGeneration}, Reason={Reason}",
+                connectionGeneration, reason);
             if (wasConnected)
             {
                 ConnectionStateChanged?.Invoke(false);
@@ -743,6 +826,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
                 CleanupConnection();
 
+                if (!await WaitForRequestLockExitAsync(1000).ConfigureAwait(false))
+                {
+                    _logger.LogCritical(
+                        "[Modbus连接][停止未收口] RequestLock 在限定时间内仍未释放，禁止静默复用旧连接");
+                }
+
                 // 关键修复：停止时明确设置连接状态为 false，并触发事件
                 _isConnected = false;
                 ConnectionStateChanged?.Invoke(false);
@@ -754,6 +843,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             finally
             {
                 _syncLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// 等待旧请求释放生命周期锁，避免重连后旧请求继续占用请求通道。
+        /// </summary>
+        private async Task<bool> WaitForRequestLockExitAsync(int timeoutMs)
+        {
+            try
+            {
+                if (!await _requestLock.WaitAsync(timeoutMs).ConfigureAwait(false))
+                    return false;
+
+                _requestLock.Release();
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return true;
             }
         }
 
@@ -834,12 +942,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             ushort? transactionId = null;
             string operation = "Read";
             var totalSw = Stopwatch.StartNew();
+            string requestStage = "WaitRequestLock";
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            var requestToken = requestCts.Token;
+            var connectionGeneration = Volatile.Read(ref _connectionGeneration);
 
             try
             {
                 // Phase E1: 完整生命周期串行化 — 在锁内创建 TID/Pending、发送、等待响应
-                await _requestLock.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    await _requestLock.WaitAsync(requestToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    totalSw.Stop();
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][LocalBusyTimeout] FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                            functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                        Notify(NotificationType.Warning, "PLC通信繁忙，本次读取请求跳过", "ExecuteReadOperation");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds);
+                    }
+                    return null;
+                }
                 lockTaken = true;
+                requestStage = "Pending";
 
                 // 获取锁后再次检查连接状态（等待期间可能变化）
                 if (!IsConnected || !_isRunning)
@@ -853,6 +988,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var tcs = new TaskCompletionSource<ModbusResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
                 var pendingRequest = new PendingModbusRequest
                 {
+                    ConnectionGeneration = connectionGeneration,
                     Completion = tcs,
                 };
                 _pendingRequests[transactionId.Value] = pendingRequest;
@@ -865,8 +1001,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var sendSw = Stopwatch.StartNew();
                 try
                 {
-                    await SendRawDataAsync(request).ConfigureAwait(false);
+                    await SendRawDataAsync(
+                        request,
+                        requestToken,
+                        connectionGeneration,
+                        stage => requestStage = stage).ConfigureAwait(false);
                     sendSw.Stop();
+                }
+                catch (OperationCanceledException)
+                {
+                    sendSw.Stop();
+                    totalSw.Stop();
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        if (string.Equals(requestStage, "WaitSendLock", StringComparison.Ordinal))
+                        {
+                            _logger.LogWarning(
+                                "[Modbus请求][LocalBusyTimeout] TID={TID}, FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                                transactionId.Value, functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                            Notify(NotificationType.Warning, "PLC通信繁忙，本次读取请求跳过", "ExecuteReadOperation");
+                        }
+                        else
+                        {
+                            _logger.LogError(
+                                "[Modbus请求][RequestTimeout] TID={TID}, FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                                transactionId.Value, functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                            MarkDisconnected(connectionGeneration, "RequestTimeout");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] TID={TID}, FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            transactionId.Value, functionCode, requestStage, totalSw.ElapsedMilliseconds);
+                    }
+                    return null;
                 }
                 catch (Exception ex)
                 {
@@ -875,14 +1044,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         ex,
                         "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}",
                         transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds);
+                    _logger.LogWarning(
+                        "[Modbus诊断][发送阶段失败] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                        transactionId.Value, requestStage, _pendingRequests.Count);
                     return null;
                 }
 
                 // 等待响应：使用 WaitAsync 明确区分 正常响应 / 超时 / 取消
                 try
                 {
+                    requestStage = "WaitResponse";
                     response = await pendingRequest.Completion.Task
-                        .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs), ct)
+                        .WaitAsync(requestToken)
                         .ConfigureAwait(false);
                     totalSw.Stop();
 
@@ -911,21 +1084,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         }
                     }
                 }
-                catch (TimeoutException)
-                {
-                    totalSw.Stop();
-                    _logger.LogError(
-                        "[Modbus诊断][读取超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
-                        transactionId.Value, functionCode, unitId, startAddress,
-                        totalSw.ElapsedMilliseconds, timeoutMs,
-                        _isConnected, _isRunning);
-                    Notify(NotificationType.Warning, "Modbus读取超时", "ExecuteReadOperation");
-                }
                 catch (OperationCanceledException)
                 {
                     totalSw.Stop();
-                    _logger.LogWarning("读取操作被取消，TID={TID}, ElapsedMs={ElapsedMs}", transactionId.Value, totalSw.ElapsedMilliseconds);
-                    Notify(NotificationType.Warning, "读取操作被取消", "ExecuteReadOperation");
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        _logger.LogError(
+                            "[Modbus诊断][读取超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                            transactionId.Value, functionCode, unitId, startAddress, requestStage,
+                            totalSw.ElapsedMilliseconds, timeoutMs,
+                            _isConnected, _isRunning);
+                        _logger.LogWarning(
+                            "[Modbus请求][RequestTimeout] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                            transactionId.Value, requestStage, _pendingRequests.Count);
+                        MarkDisconnected(connectionGeneration, "RequestTimeout");
+                        Notify(NotificationType.Warning, "Modbus读取超时", "ExecuteReadOperation");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] TID={TID}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            transactionId.Value, requestStage, totalSw.ElapsedMilliseconds);
+                        Notify(NotificationType.Warning, "读取操作被取消", "ExecuteReadOperation");
+                    }
                 }
 
                 return response;
@@ -934,7 +1115,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             {
                 // finally: 幂等清理 Pending 并释放 requestLock（任意出口均不漏）
                 if (transactionId.HasValue)
-                    _pendingRequests.TryRemove(transactionId.Value, out _);
+                {
+                    if (_pendingRequests.TryRemove(transactionId.Value, out var removedPending))
+                        removedPending.Completion.TrySetCanceled();
+                    _logger.LogDebug(
+                        "[Modbus诊断][请求收口] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                        transactionId.Value, requestStage, _pendingRequests.Count);
+                }
 
                 if (lockTaken)
                     _requestLock.Release();
@@ -965,12 +1152,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             ushort? transactionId = null;
             string operation = "Write";
             var totalSw = Stopwatch.StartNew();
+            string requestStage = "WaitRequestLock";
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            var requestToken = requestCts.Token;
+            var connectionGeneration = Volatile.Read(ref _connectionGeneration);
 
             try
             {
                 // Phase E1: 完整生命周期串行化 — 在锁内创建 TID/Pending、发送、等待响应
-                await _requestLock.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    await _requestLock.WaitAsync(requestToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    totalSw.Stop();
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][LocalBusyTimeout] FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                            functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                        Notify(NotificationType.Warning, "PLC通信繁忙，本次写入请求跳过", "ExecuteWriteOperation");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds);
+                    }
+                    return null;
+                }
                 lockTaken = true;
+                requestStage = "Pending";
 
                 // 获取锁后再次检查连接状态
                 if (!IsConnected || !_isRunning)
@@ -987,6 +1201,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var tcs = new TaskCompletionSource<ModbusResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
                 var pendingRequest = new PendingModbusRequest
                 {
+                    ConnectionGeneration = connectionGeneration,
                     Completion = tcs,
                 };
                 _pendingRequests[transactionId.Value] = pendingRequest;
@@ -1022,8 +1237,41 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var sendSw = Stopwatch.StartNew();
                 try
                 {
-                    await SendRawDataAsync(request).ConfigureAwait(false);
+                    await SendRawDataAsync(
+                        request,
+                        requestToken,
+                        connectionGeneration,
+                        stage => requestStage = stage).ConfigureAwait(false);
                     sendSw.Stop();
+                }
+                catch (OperationCanceledException)
+                {
+                    sendSw.Stop();
+                    totalSw.Stop();
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        if (string.Equals(requestStage, "WaitSendLock", StringComparison.Ordinal))
+                        {
+                            _logger.LogWarning(
+                                "[Modbus请求][LocalBusyTimeout] TID={TID}, FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                                transactionId.Value, functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                            Notify(NotificationType.Warning, "PLC通信繁忙，本次写入请求跳过", "ExecuteWriteOperation");
+                        }
+                        else
+                        {
+                            _logger.LogError(
+                                "[Modbus请求][RequestTimeout] TID={TID}, FC={FC}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                                transactionId.Value, functionCode, startAddress, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                            MarkDisconnected(connectionGeneration, "RequestTimeout");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] TID={TID}, FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            transactionId.Value, functionCode, requestStage, totalSw.ElapsedMilliseconds);
+                    }
+                    return null;
                 }
                 catch (Exception ex)
                 {
@@ -1032,14 +1280,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         ex,
                         "[Modbus诊断][发送失败] TID={TID}, FC={FC}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}",
                         transactionId.Value, functionCode, startAddress, sendSw.ElapsedMilliseconds);
+                    _logger.LogWarning(
+                        "[Modbus诊断][发送阶段失败] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                        transactionId.Value, requestStage, _pendingRequests.Count);
                     return null;
                 }
 
                 // 等待响应：使用 WaitAsync 明确区分 正常响应 / 超时 / 取消
                 try
                 {
+                    requestStage = "WaitResponse";
                     response = await pendingRequest.Completion.Task
-                        .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs), ct)
+                        .WaitAsync(requestToken)
                         .ConfigureAwait(false);
                     totalSw.Stop();
 
@@ -1083,21 +1335,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                         Notify(NotificationType.Warning, "接收到空响应", "ExecuteWriteOperation");
                     }
                 }
-                catch (TimeoutException)
-                {
-                    totalSw.Stop();
-                    _logger.LogError(
-                        "[Modbus诊断][写入超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
-                        transactionId.Value, functionCode, unitId, startAddress,
-                        totalSw.ElapsedMilliseconds, timeoutMs,
-                        _isConnected, _isRunning);
-                    Notify(NotificationType.Warning, "Modbus写入超时", "ExecuteWriteOperation");
-                }
                 catch (OperationCanceledException)
                 {
                     totalSw.Stop();
-                    _logger.LogWarning("写入操作被取消，TID={TID}, ElapsedMs={ElapsedMs}", transactionId.Value, totalSw.ElapsedMilliseconds);
-                    Notify(NotificationType.Warning, "写入操作被取消", "ExecuteWriteOperation");
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        _logger.LogError(
+                            "[Modbus诊断][写入超时] TID={TID}, FC={FC}, UnitId={UnitId}, StartAddress={StartAddress}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                            transactionId.Value, functionCode, unitId, startAddress, requestStage,
+                            totalSw.ElapsedMilliseconds, timeoutMs,
+                            _isConnected, _isRunning);
+                        _logger.LogWarning(
+                            "[Modbus请求][RequestTimeout] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                            transactionId.Value, requestStage, _pendingRequests.Count);
+                        MarkDisconnected(connectionGeneration, "RequestTimeout");
+                        Notify(NotificationType.Warning, "Modbus写入超时", "ExecuteWriteOperation");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] TID={TID}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            transactionId.Value, requestStage, totalSw.ElapsedMilliseconds);
+                        Notify(NotificationType.Warning, "写入操作被取消", "ExecuteWriteOperation");
+                    }
                 }
 
                 return response;
@@ -1106,7 +1366,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             {
                 // finally: 幂等清理 Pending 并释放 requestLock（任意出口均不漏）
                 if (transactionId.HasValue)
-                    _pendingRequests.TryRemove(transactionId.Value, out _);
+                {
+                    if (_pendingRequests.TryRemove(transactionId.Value, out var removedPending))
+                        removedPending.Completion.TrySetCanceled();
+                    _logger.LogDebug(
+                        "[Modbus诊断][请求收口] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                        transactionId.Value, requestStage, _pendingRequests.Count);
+                }
 
                 if (lockTaken)
                     _requestLock.Release();
@@ -1118,25 +1384,43 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
         /// </summary>
         /// <param name="data">要发送的数据</param>
         /// <returns>表示异步发送操作的任务</returns>
-        private async Task SendRawDataAsync(byte[] data)
+        private async Task SendRawDataAsync(
+            byte[] data,
+            CancellationToken requestToken,
+            long connectionGeneration,
+            Action<string>? reportStage = null)
         {
-            if (!IsConnected || _networkStream == null || !_isRunning)
+            var networkStream = _networkStream;
+            if (!IsConnected || networkStream == null || !_isRunning || !IsCurrentConnection(connectionGeneration))
             {
                 _logger.LogWarning("无法发送数据: TCP未连接或服务已停止");
                 throw new InvalidOperationException("TCP未连接或服务已停止");
             }
 
             _logger.LogDebug($"发送 {data.Length} 字节的Modbus请求: {BitConverter.ToString(data)}");
-            await _sendLock.WaitAsync().ConfigureAwait(false);
+            reportStage?.Invoke("WaitSendLock");
+            await _sendLock.WaitAsync(requestToken).ConfigureAwait(false);
             try
             {
-                await _networkStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
-                await _networkStream.FlushAsync().ConfigureAwait(false);
+                if (!IsConnected || !_isRunning || !IsCurrentConnection(connectionGeneration))
+                    throw new InvalidOperationException("PLC连接代次已变化，禁止向旧连接发送数据");
+
+                reportStage?.Invoke("Write");
+                await networkStream.WriteAsync(data.AsMemory(), requestToken).ConfigureAwait(false);
+                reportStage?.Invoke("Flush");
+                await networkStream.FlushAsync(requestToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
             {
-                _logger.LogWarning(ex, "PLC 写入发生连接级异常，已标记断线");
-                MarkDisconnected();
+                _logger.LogWarning(
+                    ex,
+                    "[Modbus请求][SocketDisconnected] PLC 写入发生连接级异常，已标记断线，ConnectionGeneration={ConnectionGeneration}",
+                    connectionGeneration);
+                MarkDisconnected(connectionGeneration, "SocketDisconnected");
                 throw;
             }
             finally
@@ -1181,7 +1465,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             try
             {
                 var data = Encoding.UTF8.GetBytes(command);
-                await SendRawDataAsync(data).ConfigureAwait(false);
+                await SendRawDataAsync(
+                    data,
+                    CancellationToken.None,
+                    Volatile.Read(ref _connectionGeneration)).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -1426,11 +1713,37 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
 
             bool lockTaken = false;
             ushort? transactionId = null;
+            string requestStage = "WaitRequestLock";
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            var requestToken = requestCts.Token;
+            var connectionGeneration = Volatile.Read(ref _connectionGeneration);
 
             try
             {
                 // Phase E1: 完整生命周期串行化 — Custom 也必须入 Gate
-                await _requestLock.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    await _requestLock.WaitAsync(requestToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    totalSw.Stop();
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][LocalBusyTimeout] FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                            functionCode, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                        Notify(NotificationType.Warning, "PLC通信繁忙，本次自定义请求跳过", "SendCustomModbusRequest");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            functionCode, requestStage, totalSw.ElapsedMilliseconds);
+                    }
+                    return null;
+                }
                 lockTaken = true;
 
                 // 获取锁后再次检查连接状态
@@ -1448,32 +1761,84 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
                 var tcs = new TaskCompletionSource<ModbusResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
                 var pendingRequest = new PendingModbusRequest
                 {
+                    ConnectionGeneration = connectionGeneration,
                     Completion = tcs,
                 };
                 _pendingRequests[transactionId.Value] = pendingRequest;
 
-                await SendRawDataAsync(customRequestFrame).ConfigureAwait(false);
-
-                // 等待响应：使用 WaitAsync 明确区分 正常响应 / 超时 / 取消
                 try
                 {
-                    var response = await pendingRequest.Completion.Task
-                        .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs), ct)
-                        .ConfigureAwait(false);
-                    return response;
-                }
-                catch (TimeoutException)
-                {
-                    totalSw.Stop();
-                    _logger.LogWarning(
-                        "[Modbus诊断][自定义请求超时] TID={TID}, FC={FC}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
-                        transactionId.Value, functionCode, totalSw.ElapsedMilliseconds, timeoutMs, _isConnected, _isRunning);
-                    return null;
+                    await SendRawDataAsync(
+                        customRequestFrame,
+                        requestToken,
+                        connectionGeneration,
+                        stage => requestStage = stage).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     totalSw.Stop();
-                    _logger.LogWarning("自定义请求被取消，TID={TID}", transactionId.Value);
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        if (string.Equals(requestStage, "WaitSendLock", StringComparison.Ordinal))
+                        {
+                            _logger.LogWarning(
+                                "[Modbus请求][LocalBusyTimeout] TID={TID}, FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                                transactionId.Value, functionCode, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                            Notify(NotificationType.Warning, "PLC通信繁忙，本次自定义请求跳过", "SendCustomModbusRequest");
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "[Modbus请求][RequestTimeout] TID={TID}, FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                                transactionId.Value, functionCode, requestStage, totalSw.ElapsedMilliseconds, timeoutMs);
+                            MarkDisconnected(connectionGeneration, "RequestTimeout");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] TID={TID}, FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                            transactionId.Value, functionCode, requestStage, totalSw.ElapsedMilliseconds);
+                    }
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "[Modbus诊断][发送失败] TID={TID}, FC={FC}, RequestStage={RequestStage}, ElapsedMs={ElapsedMs}",
+                        transactionId.Value, functionCode, requestStage, totalSw.ElapsedMilliseconds);
+                    return null;
+                }
+
+                // 等待响应：使用 WaitAsync 明确区分 正常响应 / 超时 / 取消
+                try
+                {
+                    requestStage = "WaitResponse";
+                    var response = await pendingRequest.Completion.Task
+                        .WaitAsync(requestToken)
+                        .ConfigureAwait(false);
+                    return response;
+                }
+                catch (OperationCanceledException)
+                {
+                    totalSw.Stop();
+                    if (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "[Modbus诊断][自定义请求超时] TID={TID}, FC={FC}, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, IsConnected={IsConnected}, IsRunning={IsRunning}",
+                            transactionId.Value, functionCode, totalSw.ElapsedMilliseconds, timeoutMs, _isConnected, _isRunning);
+                        _logger.LogWarning(
+                            "[Modbus请求][RequestTimeout] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                            transactionId.Value, requestStage, _pendingRequests.Count);
+                        MarkDisconnected(connectionGeneration, "RequestTimeout");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[Modbus请求][CanceledByControlAction] TID={TID}, RequestStage={RequestStage}",
+                            transactionId.Value, requestStage);
+                    }
                     return null;
                 }
             }
@@ -1481,7 +1846,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services.TcpModbus
             {
                 // finally: 幂等清理 Pending 并释放 requestLock
                 if (transactionId.HasValue)
-                    _pendingRequests.TryRemove(transactionId.Value, out _);
+                {
+                    if (_pendingRequests.TryRemove(transactionId.Value, out var removedPending))
+                        removedPending.Completion.TrySetCanceled();
+                    _logger.LogDebug(
+                        "[Modbus诊断][请求收口] TID={TID}, RequestStage={RequestStage}, PendingCount={PendingCount}",
+                        transactionId.Value, requestStage, _pendingRequests.Count);
+                }
 
                 if (lockTaken)
                     _requestLock.Release();

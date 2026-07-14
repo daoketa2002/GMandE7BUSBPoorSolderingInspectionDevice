@@ -68,10 +68,13 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         string operatorName,
         CancellationToken ct = default)
     {
-        if (_isRunning)
-            throw new InvalidOperationException("检测引擎正在运行中");
+        // 入口采用非排队语义：已有运行或已有调用持有/等待执行锁时，第二次调用立即拒绝。
+        if (!await _engineLock.WaitAsync(0).ConfigureAwait(false))
+        {
+            _logger.LogWarning("[检测引擎][拒绝] 已有检测调用正在运行或等待执行，不排队启动第二轮");
+            throw new InvalidOperationException("检测引擎正在运行中或已有调用等待执行");
+        }
 
-        await _engineLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             _isRunning = true;
@@ -221,13 +224,43 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     _currentExecutionStage = "ReadMultimeter";
                     var measureSw = Stopwatch.StartNew();
                     string rawText;
-                    if (testPoint.CheckMode == CheckModeConstants.Continuity)
+                    try
                     {
-                        rawText = await _multimeterDevice.ReadContinuityRawAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        if (testPoint.CheckMode == CheckModeConstants.Continuity)
+                        {
+                            rawText = await _multimeterDevice.ReadContinuityRawAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            rawText = await _multimeterDevice.ReadResistanceRawAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        }
                     }
-                    else
+                    catch (TimeoutException ex)
                     {
-                        rawText = await _multimeterDevice.ReadResistanceRawAsync(_inspectionCts.Token).ConfigureAwait(false);
+                        measureSw.Stop();
+                        dmmTotalSw.Stop();
+                        InspectionMeasurementEvaluator.MarkNg(testPoint, "通信超时");
+                        var failedMeasurement = InspectionMeasurementEvaluator.Failed("通信超时", ex.Message);
+                        StepCompleted?.Invoke(this, new StepCompletedEventArgs(i, testPoint, failedMeasurement));
+                        _progress.CurrentItemIndex = i;
+                        _progress.LastUpdatedTime = DateTime.Now;
+                        result.StopPointIndex = i;
+                        result.StopPointName = testPoint.Name;
+
+                        _logger.LogWarning(
+                            ex,
+                            "[检测流程][DMM测量超时] INS={INS}, Index={Index}, Point={Point}, ElapsedMs={ElapsedMs}，当前点位标记失败并停止本轮",
+                            inspectionId,
+                            i,
+                            testPoint.Name,
+                            measureSw.ElapsedMilliseconds);
+
+                        await AbortCurrentRunAsync(
+                            result,
+                            $"万用表测量超时：点位 {testPoint.Name}",
+                            InspectionState.Error,
+                            "DmmMeasurementTimeout").ConfigureAwait(false);
+                        return result;
                     }
                     measureSw.Stop();
                     dmmTotalSw.Stop();
