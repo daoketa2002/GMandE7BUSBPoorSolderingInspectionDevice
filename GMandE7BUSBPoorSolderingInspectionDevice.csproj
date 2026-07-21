@@ -21,6 +21,8 @@
 		<GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
 		<GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
 		<GenerateTargetPlatformAttribute>false</GenerateTargetPlatformAttribute>
+
+		<InterceptorsNamespaces>$(InterceptorsNamespaces);Microsoft.Extensions.Configuration.Binder.SourceGeneration</InterceptorsNamespaces>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -50,5 +52,14 @@
       <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </None>
   </ItemGroup>
+
+	<ItemGroup>
+		<!-- 从编译中排除 Tests 文件夹及其所有子文件夹和文件 -->
+		<Compile Remove="Tests\**" />
+		<!-- 从发布/复制输出中排除 Tests 文件夹 -->
+		<Content Remove="Tests\**" />
+		<EmbeddedResource Remove="Tests\**" />
+		<None Remove="Tests\**" />
+	</ItemGroup>
 
 </Project>
