@@ -238,7 +238,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                     }
                     else
                     {
-                        requestedMode = "Resistance";
+                        requestedMode = "Resistance4Wire";
                         modeReady = await _multimeterDevice.InitializeResistanceModeAsync(
                             _inspectionCts.Token).ConfigureAwait(false);
                     }

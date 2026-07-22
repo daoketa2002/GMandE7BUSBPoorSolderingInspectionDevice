@@ -390,7 +390,7 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
 
     public Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
     {
-        _logger.LogDebug("[Fake][DMM] 模拟切换为电阻模式");
+        _logger.LogDebug("[Fake][DMM] 模拟切换为四线电阻模式，Mode=Resistance4Wire");
         return Task.FromResult(true);
     }
 
@@ -404,12 +404,12 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
     }
 
     /// <summary>
-    /// Fake：恢复万用表为远程 2 线电阻空闲态。
+    /// Fake：恢复万用表为远程 4 线电阻空闲态。
     /// 只记录日志，不操作真实硬件。
     /// </summary>
     public Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
     {
-        _logger.LogDebug("[Fake][DMM] 模拟恢复为远程 2 线电阻空闲态");
+        _logger.LogDebug("[Fake][DMM] 模拟恢复为远程 4 线电阻空闲态，Mode=Resistance4Wire");
         return Task.FromResult(true);
     }
 

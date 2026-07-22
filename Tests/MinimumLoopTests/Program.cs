@@ -1370,7 +1370,7 @@ static void TestP2ModeCacheHitStillDrainsDirtyBuffer()
     using var server = pair.Server;
     using var listener = pair.Listener;
     SetPrivateField(driver, "_receiveBufferPossiblyDirty", true);
-    SetPrivateField(driver, "_cachedMode", GetDmmCachedMode("Resistance"));
+    SetPrivateField(driver, "_cachedMode", GetDmmCachedMode("Resistance4Wire"));
     WriteDmmResponse(server.GetStream(), "GWInstek,GDM9060,STALE,CACHE");
 
     AssertEqual(true, driver.InitializeResistanceModeAsync().GetAwaiter().GetResult());
@@ -1627,7 +1627,8 @@ static void TestDmmModeFailureMarksDisconnected()
     var task = (Task<bool>)(method.Invoke(driver, new object?[]
     {
         "测试模式",
-        "CONF:RES",
+        "CONF:FRES",
+        "SENS:FRES:RANG:AUTO ON",
         null,
         CancellationToken.None,
         false

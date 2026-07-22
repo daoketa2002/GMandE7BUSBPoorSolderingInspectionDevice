@@ -21,7 +21,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
     /// 默认端口：5025
     /// 
     /// 【指令发送架构】
-    /// SendSettingAsync  — 公共设置命令（只写不读），用于 *CLS、CONF:RES、TRIG:SOUR IMM 等
+    /// SendSettingAsync  — 公共设置命令（只写不读），用于 *CLS、CONF:FRES、CONF:CONT、TRIG:SOUR IMM 等
     /// SendQueryAsync    — 公共查询命令（写后读取），用于 *IDN?、READ?、MEAS:CONT?、*OPC?、SYST:ERR? 等
     /// 内部不再有自动分发逻辑，调用方明确意图。
     /// </summary>
@@ -74,8 +74,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         {
             /// <summary>未知/缓存不可信（首次或断线后）</summary>
             Unknown,
-            /// <summary>2 线电阻模式</summary>
-            Resistance,
+            /// <summary>4 线电阻模式</summary>
+            Resistance4Wire,
             /// <summary>导通测量模式</summary>
             Continuity
         }
@@ -564,7 +564,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 发送 SCPI 设置命令（只写不读）。
-        /// 用于 *CLS、CONF:RES、CONF:CONT、SENS:xxx、SAMP:xxx、TRIG:xxx、SYST:LOC 等。
+        /// 用于 *CLS、CONF:FRES、CONF:CONT、SENS:xxx、SAMP:xxx、TRIG:xxx、SYST:LOC 等。
         /// 实际 I/O 失败只标记断线；重连由 DeviceConnectionService 统一管理。
         /// </summary>
         /// <param name="command">SCPI 设置命令（不以 ? 结尾）</param>
@@ -753,69 +753,80 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 初始化为 2 线电阻测量模式。
-        /// 如果缓存命中（当前已是 Resistance 模式），跳过完整初始化。
-        /// SCPI 序列：ABOR → *CLS → CONF:RES → 自动量程 → 采样/触发配置
+        /// 初始化为 4 线电阻测量模式。
+        /// 如果缓存命中（当前已是 Resistance4Wire 模式），跳过完整初始化。
+        /// SCPI 序列：ABOR → *CLS → CONF:FRES → 四线自动量程 → 采样/触发配置
         /// 完成后用 *OPC? + SYST:ERR? 验证切换成功。
         /// 整个初始化在单次锁内完成，内部使用 SendSettingInternalAsync 避免重复加锁。
         /// </summary>
         public async Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default)
         {
-            // ── 缓存命中：当前已是 Resistance，跳过完整初始化 ──
-            if (_cachedMode == DmmCachedMode.Resistance)
+            // ── 缓存命中：当前已是 Resistance4Wire，跳过完整初始化 ──
+            if (_cachedMode == DmmCachedMode.Resistance4Wire)
             {
                 await DrainReceiveBufferForCachedModeAsync(ct).ConfigureAwait(false);
                 _logger.LogDebug(
-                    "[DMM模式][缓存命中] Requested=Resistance, Current=Resistance, Reconfigured=false");
+                    "[DMM模式][缓存命中] Requested=Resistance4Wire, Current=Resistance4Wire, Reconfigured=false");
                 return true;
             }
 
             var sw = Stopwatch.StartNew();
             var previousMode = _cachedMode;
             _logger.LogInformation(
-                "[DMM模式][配置开始] From={From}, To=Resistance, ThresholdOhm=null",
+                "[DMM模式][配置开始] From={From}, To=Resistance4Wire, ThresholdOhm=null",
                 previousMode);
 
-            bool result = await ConfigureResistanceModeInternalAsync("电阻模式", "CONF:RES", null, ct).ConfigureAwait(false);
+            bool result = await ConfigureResistanceModeInternalAsync(
+                "电阻模式",
+                "CONF:FRES",
+                "SENS:FRES:RANG:AUTO ON",
+                null,
+                ct).ConfigureAwait(false);
 
             sw.Stop();
             if (result)
             {
-                _cachedMode = DmmCachedMode.Resistance;
+                _cachedMode = DmmCachedMode.Resistance4Wire;
                 _cachedContinuityThresholdOhm = null;
                 _logger.LogInformation(
-                    "[DMM模式][配置完成] From={From}, To=Resistance, ThresholdOhm=null, ElapsedMs={ElapsedMs}",
+                    "[DMM模式][配置完成] From={From}, To=Resistance4Wire, ThresholdOhm=null, ElapsedMs={ElapsedMs}",
                     previousMode, sw.ElapsedMilliseconds);
             }
             else
             {
                 ResetDmmModeCache();
                 _logger.LogWarning(
-                    "[DMM模式][配置失败] From={From}, To=Resistance, ThresholdOhm=null, ElapsedMs={ElapsedMs}, CacheReset=Unknown",
+                    "[DMM模式][配置失败] From={From}, To=Resistance4Wire, ThresholdOhm=null, ElapsedMs={ElapsedMs}, CacheReset=Unknown",
                     previousMode, sw.ElapsedMilliseconds);
             }
             return result;
         }
 
         /// <summary>
-        /// 恢复万用表为远程可控的 2 线电阻空闲态。
+        /// 恢复万用表为远程可控的 4 线电阻空闲态。
         /// SCPI 序列与 InitializeResistanceModeAsync 相同，但不执行验证。
-        /// 成功后更新模式缓存为 Resistance。
+        /// 成功后更新模式缓存为 Resistance4Wire。
         /// </summary>
         public async Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default)
         {
-            // 如果缓存已经是 Resistance，但 PrepareIdle 是显式请求，仍执行配置
+            // 如果缓存已经是 Resistance4Wire，但 PrepareIdle 是显式请求，仍执行配置
             // （调用方不期望跳过，因为 PrepareIdle 目的就是确保设备处于电阻模式）
             var sw = Stopwatch.StartNew();
-            bool result = await ConfigureResistanceModeInternalAsync("空闲态(电阻)", "CONF:RES", null, ct, verify: false).ConfigureAwait(false);
+            bool result = await ConfigureResistanceModeInternalAsync(
+                "空闲态(电阻)",
+                "CONF:FRES",
+                "SENS:FRES:RANG:AUTO ON",
+                null,
+                ct,
+                verify: false).ConfigureAwait(false);
             sw.Stop();
 
             if (result)
             {
-                _cachedMode = DmmCachedMode.Resistance;
+                _cachedMode = DmmCachedMode.Resistance4Wire;
                 _cachedContinuityThresholdOhm = null;
                 _logger.LogInformation(
-                    "[DMM模式][配置完成] From=*, To=Resistance(空闲态), ElapsedMs={ElapsedMs}",
+                    "[DMM模式][配置完成] From=*, To=Resistance4Wire(空闲态), ElapsedMs={ElapsedMs}",
                     sw.ElapsedMilliseconds);
             }
             else
@@ -858,6 +869,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             bool result = await ConfigureResistanceModeInternalAsync(
                 $"导通模式(阈值={normalizedThreshold:F2}Ω)",
                 "CONF:CONT",
+                "SENS:RES:RANG:AUTO ON",
                 $"SENS:CONT:THR {normalizedThreshold:F2}",
                 ct,
                 verify: true).ConfigureAwait(false);
@@ -883,10 +895,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
         /// <summary>
         /// 内部：配置万用表公共 SCPI 序列。
-        /// SYST:REM → ABOR → *CLS → CONF → 量程 → 单次采样/触发
+        /// SYST:REM → ABOR → *CLS → CONF → 指定自动量程 → 单次采样/触发
         /// </summary>
         private async Task<bool> ConfigureResistanceModeInternalAsync(
-            string modeLabel, string confCommand, string? extraCommand, CancellationToken ct, bool verify = true)
+            string modeLabel,
+            string confCommand,
+            string rangeAutoCommand,
+            string? extraCommand,
+            CancellationToken ct,
+            bool verify = true)
         {
             await _commandLock.WaitAsync(ct).ConfigureAwait(false);
             try
@@ -896,7 +913,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 await SendSettingInternalAsync("ABOR", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync("*CLS", ct).ConfigureAwait(false);
                 await SendSettingInternalAsync(confCommand, ct).ConfigureAwait(false);
-                await SendSettingInternalAsync("SENS:RES:RANG:AUTO ON", ct).ConfigureAwait(false);
+                await SendSettingInternalAsync(rangeAutoCommand, ct).ConfigureAwait(false);
                 await ConfigureSingleImmediateTriggerInternalAsync(ct).ConfigureAwait(false);
 
                 if (extraCommand != null)
@@ -958,7 +975,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
 
                 sw.Stop();
                 _logger.LogInformation(
-                    "[DMM测量][完成] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, RawText={RawText}",
+                    "[DMM测量][完成] Command=READ?, Mode=Resistance4Wire, ElapsedMs={ElapsedMs}, RawText={RawText}",
                     sw.ElapsedMilliseconds, result);
                 return result;
             }
@@ -967,7 +984,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 sw.Stop();
                 _logger.LogError(
                     ex,
-                    "[DMM测量][无响应] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
+                    "[DMM测量][无响应] Command=READ?, Mode=Resistance4Wire, ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}",
                     sw.ElapsedMilliseconds, _timeoutMs);
                 throw;
             }
@@ -975,7 +992,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             {
                 sw.Stop();
                 _logger.LogInformation(
-                    "[DMM测量][取消] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}",
+                    "[DMM测量][取消] Command=READ?, Mode=Resistance4Wire, ElapsedMs={ElapsedMs}",
                     sw.ElapsedMilliseconds);
                 throw;
             }
@@ -984,7 +1001,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                 sw.Stop();
                 _logger.LogError(
                     ex,
-                    "[DMM测量][失败] Command=READ?, Mode=Resistance, ElapsedMs={ElapsedMs}",
+                    "[DMM测量][失败] Command=READ?, Mode=Resistance4Wire, ElapsedMs={ElapsedMs}",
                     sw.ElapsedMilliseconds);
                 throw;
             }
@@ -1103,7 +1120,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         }
 
         /// <summary>
-        /// 测量电阻（2线制）— 用于焊接不良检查
+        /// 兼容通用二线电阻测量接口；正式焊接不良检查流程使用 InitializeResistanceModeAsync 的四线模式。
         /// </summary>
         public async Task<MeasurementResult> MeasureResistanceAsync(CancellationToken ct = default)
         {
@@ -1297,6 +1314,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
         private static bool IsMeasurementTimeoutDisconnectCommand(string command)
             => command.Trim().Equals("READ?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS:RES?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS:FRES?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS:CONT?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("FETC?", StringComparison.OrdinalIgnoreCase);
 
@@ -1333,7 +1351,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
                     || normalizedResponse.Contains("No error", StringComparison.OrdinalIgnoreCase),
                 "*TST?" => normalizedResponse == "0"
                     || normalizedResponse.Contains("PASS", StringComparison.OrdinalIgnoreCase),
-                "READ?" or "MEAS:RES?" or "MEAS:CONT?" or "FETC?" or "MEAS?" => IsMeasurementResponse(normalizedResponse),
+                "READ?" or "MEAS:RES?" or "MEAS:FRES?" or "MEAS:CONT?" or "FETC?" or "MEAS?" => IsMeasurementResponse(normalizedResponse),
                 _ => true
             };
 
@@ -1348,6 +1366,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter
             => command.Trim().Equals("READ?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS:CONT?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS:RES?", StringComparison.OrdinalIgnoreCase)
+                || command.Trim().Equals("MEAS:FRES?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("FETC?", StringComparison.OrdinalIgnoreCase)
                 || command.Trim().Equals("MEAS?", StringComparison.OrdinalIgnoreCase);
 

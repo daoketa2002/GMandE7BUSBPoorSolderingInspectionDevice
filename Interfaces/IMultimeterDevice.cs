@@ -14,7 +14,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
     public interface IMultimeterDevice : ICommunicationDevice
     {
         /// <summary>
-        /// 初始化为电阻测量模式。最小闭环统一使用电阻模式读取原始值。
+        /// 初始化为四线电阻测量模式。最小闭环统一使用四线电阻模式读取原始值。
         /// </summary>
         Task<bool> InitializeResistanceModeAsync(CancellationToken ct = default);
 
@@ -38,8 +38,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
         Task<string> ReadContinuityRawAsync(CancellationToken ct = default);
 
         /// <summary>
-        /// 恢复万用表为远程可控的 2 线电阻空闲态。
-        /// 指令：ABOR; *CLS; CONF:RES; SENS:RES:RANG:AUTO ON; SAMP:COUN 1; TRIG:COUN 1; TRIG:SOUR IMM
+        /// 恢复万用表为远程可控的 4 线电阻空闲态。
+        /// 指令：ABOR; *CLS; CONF:FRES; SENS:FRES:RANG:AUTO ON; SAMP:COUN 1; TRIG:COUN 1; TRIG:SOUR IMM
         /// 调用时机：正常检测结束且保存/取消弹窗关闭后。
         /// </summary>
         Task<bool> PrepareIdleResistanceModeAsync(CancellationToken ct = default);
