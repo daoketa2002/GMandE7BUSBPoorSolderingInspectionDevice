@@ -3365,10 +3365,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             string message = string.IsNullOrWhiteSpace(result.ErrorMessage)
                 ? "检测已中止，请查看运行日志。"
-                : $"检测中止：{result.ErrorMessage}";
+                : result.ErrorMessage;
 
-            _logger.LogWarning("[运行页][审计] {Message}", message);
-            await _notificationService.ShowWarningAsync(message, "检测中止").ConfigureAwait(false);
+            // 文件日志保留“检测中止”分类，弹窗标题已经是“检测中止”，正文不重复添加前缀。
+            _logger.LogWarning("[运行页][审计] 检测中止：{Message}", message);
+            await _notificationService
+                .ShowWarningAsync(message, "检测中止")
+                .ConfigureAwait(false);
         }
         else
         {
