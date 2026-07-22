@@ -179,11 +179,45 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         relaySw.Stop();
                         LogBeat(inspectionId, $"点位 {testPoint.Name} 等待 DT302", relaySw.ElapsedMilliseconds);
 
+                        if (relayResult?.IsCancelled == true)
+                        {
+                            // 兼容其他 IPlcDevice 实现返回 Cancelled 的情况，不把取消转换为 RelayTimeout。
+                            throw new OperationCanceledException(_inspectionCts.Token);
+                        }
+
                         if (relayResult == null || !relayResult.IsSuccess)
                         {
+                            // 技术原因写入日志，操作员提示使用业务语言，避免暴露 DT302、ReadCount 和 Modbus 细节。
+                            string technicalMessage = string.IsNullOrWhiteSpace(relayResult?.Message)
+                                ? "等待继电器动作完成失败，底层未返回具体原因"
+                                : relayResult.Message;
+
+                            _logger.LogWarning(
+                                "[检测流程][继电器等待失败] INS={INS}, Point={Point}, Detail={Detail}",
+                                inspectionId,
+                                testPoint.Name,
+                                technicalMessage);
+
+                            bool isReadFailure =
+                                technicalMessage.Contains("读取 DT302 失败", StringComparison.OrdinalIgnoreCase)
+                                || technicalMessage.Contains("读取DT302失败", StringComparison.OrdinalIgnoreCase);
+
                             result.StopReason = InspectionStopReason.RelayTimeout;
-                            result.ErrorMessage = $"等待 DT302 = 1 超时（点位 {testPoint.Name}）";
-                            await AbortCurrentRunAsync(result, result.ErrorMessage, InspectionState.Aborted, "RelayTimeout").ConfigureAwait(false);
+                            result.ErrorMessage = isReadFailure
+                                ? "PLC通信异常\n\n"
+                                  + "当前检测已停止。\n"
+                                  + "无法确认继电器动作状态。\n\n"
+                                  + "请检查PLC连接，恢复后执行复位。"
+                                : "继电器切换未完成\n\n"
+                                  + "当前检测已停止。\n"
+                                  + $"检测项目：{testPoint.Name}\n\n"
+                                  + "请检查设备动作状态，异常解除后执行复位。";
+
+                            await AbortCurrentRunAsync(
+                                result,
+                                result.ErrorMessage,
+                                InspectionState.Aborted,
+                                isReadFailure ? "PlcReadFailed" : "RelayTimeout").ConfigureAwait(false);
                             return result;
                         }
                     }

@@ -293,55 +293,90 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     /// </summary>
     public async Task<PlcOperationResult> WaitRelaySwitchCompletedAsync(TimeSpan timeout, CancellationToken ct = default)
     {
-        ushort addr = PlcAddressMap.RelayActionCompleted;
-        var deadline = DateTime.UtcNow + timeout;
         var stopwatch = Stopwatch.StartNew();
+        var readCount = 0;
+        bool? lastSuccessfulReadValue = null;
+        string? lastReadError = null;
 
-        while (!ct.IsCancellationRequested)
+        try
         {
-            if (DateTime.UtcNow >= deadline)
+            while (stopwatch.Elapsed < timeout)
             {
-                stopwatch.Stop();
-                _logger.LogWarning(
-                    "[PLC动作][DT302] 等待继电器动作完成超时，上限={TimeoutMs}ms，实际耗时={ElapsedMs}ms",
-                    (int)timeout.TotalMilliseconds, stopwatch.ElapsedMilliseconds);
-                return PlcOperationResult.Failure($"等待 DT302=1 超时 ({timeout.TotalSeconds}s)");
-            }
+                ct.ThrowIfCancellationRequested();
 
-            try
-            {
-                var response = await _modbusClient.ReadHoldingRegistersAsync(
-                    ConfiguredUnitId, addr, 1, ct, ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
+                // 统一复用 DT302 读取方法，让 Modbus 异常、无响应和格式错误在单一位置分类。
+                var readResult = await ReadRelayCompletedAsync(ct).ConfigureAwait(false);
+                readCount++;
 
-                if (response?.Data != null && response.Data.Length >= 2
-                    && BinaryPrimitives.ReadUInt16BigEndian(response.Data.AsSpan(0)) == 1)
+                if (!readResult.IsSuccess)
                 {
-                    stopwatch.Stop();
+                    lastReadError = string.IsNullOrWhiteSpace(readResult.Message)
+                        ? "未知读取失败"
+                        : readResult.Message;
+                    _logger.LogWarning(
+                        "[PLC动作][DT302] 读取失败，ReadCount={ReadCount}，ElapsedMs={ElapsedMs}，Error={Error}",
+                        readCount,
+                        stopwatch.ElapsedMilliseconds,
+                        lastReadError);
+
+                    return PlcOperationResult.Failure(lastReadError, readResult.RawResponse);
+                }
+
+                lastSuccessfulReadValue = readResult.Value;
+                _logger.LogDebug(
+                    "[PLC动作][DT302] 单次读取值={Value}，ReadCount={ReadCount}，ElapsedMs={ElapsedMs}",
+                    readResult.Value == true ? 1 : 0,
+                    readCount,
+                    stopwatch.ElapsedMilliseconds);
+
+                if (readResult.Value == true)
+                {
                     long elapsedMilliseconds = stopwatch.ElapsedMilliseconds;
                     if (elapsedMilliseconds > 1000)
                     {
                         _logger.LogWarning(
-                            "[PLC动作][DT302] 继电器动作完成耗时较长，实际耗时={ElapsedMs}ms",
-                            elapsedMilliseconds);
+                            "[PLC动作][DT302] 继电器动作完成耗时较长，实际耗时={ElapsedMs}ms，ReadCount={ReadCount}",
+                            elapsedMilliseconds,
+                            readCount);
                     }
 
-                    return PlcOperationResult.Success("DT302=1 继电器动作完成", response);
+                    _logger.LogInformation(
+                        "[PLC动作][DT302] 检测到 DT302=1，ReadCount={ReadCount}，ElapsedMs={ElapsedMs}",
+                        readCount,
+                        elapsedMilliseconds);
+
+                    return PlcOperationResult.Success("DT302=1 继电器动作完成", readResult.RawResponse);
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                return PlcOperationResult.Failure("等待继电器切换被取消");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[PLC动作] 读取 DT302 状态异常");
-                return PlcOperationResult.Failure($"读取 DT302 状态异常: {ex.Message}");
+
+                var remaining = timeout - stopwatch.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                    break;
+
+                var delay = remaining < TimeSpan.FromMilliseconds(100)
+                    ? remaining
+                    : TimeSpan.FromMilliseconds(100);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
             }
 
-            await Task.Delay(100, ct).ConfigureAwait(false);
+            _logger.LogWarning(
+                "[PLC动作][DT302] 等待超时，DT302持续为0，ReadCount={ReadCount}，TimeoutMs={TimeoutMs}，ElapsedMs={ElapsedMs}，LastReadValue={LastReadValue}，LastReadError={LastReadError}",
+                readCount,
+                (int)timeout.TotalMilliseconds,
+                stopwatch.ElapsedMilliseconds,
+                lastSuccessfulReadValue.HasValue ? (lastSuccessfulReadValue.Value ? 1 : 0) : null,
+                lastReadError);
+
+            return PlcOperationResult.Failure(
+                $"DT302持续为0，等待超时，累计读取{readCount}次");
         }
-
-        return PlcOperationResult.Failure("等待继电器切换被取消");
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation(
+                "[PLC动作][DT302] 等待已取消，ReadCount={ReadCount}，ElapsedMs={ElapsedMs}",
+                readCount,
+                stopwatch.ElapsedMilliseconds);
+            throw;
+        }
     }
 
     /// <summary>写入上位机允许开始检测信号（写 DT234 = 1）。</summary>
@@ -571,14 +606,22 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
             if (response.IsError)
                 return PlcOperationResult<bool>.Failure($"读取 DT302 失败: Modbus错误码 {response.ErrorCode}", response);
 
-            bool completed = response.Data != null && response.Data.Length >= 2
-                && BinaryPrimitives.ReadUInt16BigEndian(response.Data.AsSpan(0)) == 1;
+            int dataLength = response.Data?.Length ?? 0;
+            if (dataLength != 2)
+            {
+                return PlcOperationResult<bool>.Failure(
+                    $"读取 DT302 失败: 响应数据格式错误（DataLength={dataLength}，期望2字节）",
+                    response);
+            }
+
+            bool completed = BinaryPrimitives.ReadUInt16BigEndian(response.Data!.AsSpan(0)) == 1;
 
             return PlcOperationResult<bool>.Success(completed, $"DT302={(completed ? 1 : 0)}", response);
         }
         catch (OperationCanceledException)
         {
-            return PlcOperationResult<bool>.Failure("读取 DT302 被取消");
+            // 取消必须保留原始取消语义，由等待层和检测引擎进入停止/复位/急停收口。
+            throw;
         }
         catch (Exception ex)
         {
