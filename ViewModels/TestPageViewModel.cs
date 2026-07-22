@@ -2956,7 +2956,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     return true;
                 },
                 canSimulateAlarmRelease: canSimulateAlarmRelease,
-                isSemiPhysicalDebugMode: IsSemiPhysicalDebugMode);
+                isSemiPhysicalDebugMode: IsSemiPhysicalDebugMode,
+                logger: _serviceProvider.GetService<ILogger<EmergencyStopDialogViewModel>>());
 
             dialog.DataContext = vm;
             _emergencyStopDialogVM = vm;
@@ -3047,9 +3048,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             SetUiState(TestUIState.EmergencyStop);
             AddLog("急停解除失败：DT123 未确认释放，请检查 PLC/急停按钮状态后重试");
-            _ = _notificationService.ShowWarningAsync(
-                "急停信号未确认释放，请检查 PLC/急停按钮状态后再次解除。",
-                "急停解除失败");
         });
 
         _logger.LogWarning("[急停解除][失败] DT123 未确认释放，保持 EmergencyStop");
