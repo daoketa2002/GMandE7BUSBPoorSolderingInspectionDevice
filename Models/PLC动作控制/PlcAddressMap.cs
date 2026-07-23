@@ -12,6 +12,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 /// - DT304：产品 OK
 /// - DT305：产品 NG
 /// - DT306：终了（上位机写，PLC 读）。返回主菜单后延时清 0。
+/// - DT307：本次检测流程结束通知（上位机写，PLC 读）。保持约 500ms 后清 0。
 /// </summary>
 public sealed class PlcAddressMap
 {
@@ -46,6 +47,13 @@ public sealed class PlcAddressMap
 
     /// <summary>DT306：终了（上位机写，PLC 读）。返回主菜单后延时清 0。</summary>
     public const ushort TerminateSignal = 306;
+
+    /// <summary>
+    /// DT307：本次检测流程结束通知。
+    /// 检测真正启动后，除停止、复位、急停、终了主动中断外，
+    /// 其他任何结束路径均写 1，保持约 500ms 后清 0。
+    /// </summary>
+    public const ushort InspectionEndedSignal = 307;
 
     // ── 引脚输出范围 ──
 

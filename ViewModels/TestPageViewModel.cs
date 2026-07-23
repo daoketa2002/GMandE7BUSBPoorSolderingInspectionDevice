@@ -770,7 +770,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         return reason is InspectionStopReason.PlcStop
             or InspectionStopReason.Reset
             or InspectionStopReason.EmergencyStop
-            or InspectionStopReason.Canceled;
+            or InspectionStopReason.Terminate;
     }
 
     /// <summary>
@@ -1786,7 +1786,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 清所有运行信号：DT120/DT121/DT122/DT123/DT234/DT302/DT303/DT130~185/DT304/DT305/DT306。
+    /// 清所有运行信号：DT120/DT121/DT122/DT123/DT234/DT302/DT303/
+    /// DT304/DT305/DT306/DT307/DT130~DT185。
     /// 进入/离开页面、终了、复位时调用。
     /// 真实模式下跳过 DT122/DT123/DT306（PLC 只读信号）。
     /// </summary>
@@ -1799,6 +1800,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         await _plcDevice.ClearPinOutputsAsync(ct).ConfigureAwait(false);
         await _plcDevice.ClearFinalResultAsync(ct).ConfigureAwait(false);
         await _plcDevice.ClearAlarmReleasedAsync(ct).ConfigureAwait(false);
+        await _plcDevice.ClearInspectionEndedAsync(ct).ConfigureAwait(false);
 
         // Fake 模式下额外清除 PLC 只读信号
         if (_plcDevice is Devices.Fakes.FakeInspectionHardware fake)
@@ -1859,7 +1861,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             if (UiState == TestUIState.Testing && _inspectionEngine != null)
             {
-                var stopResult = await _inspectionEngine.StopAndWaitAsync(TimeSpan.FromSeconds(2), InspectionStopReason.Canceled, CancellationToken.None);
+                var stopResult = await _inspectionEngine.StopAndWaitAsync(TimeSpan.FromSeconds(2), InspectionStopReason.Terminate, CancellationToken.None);
                 if (stopResult == InspectionStopWaitResult.Timeout)
                 {
                     SetUiState(TestUIState.Error);
@@ -1925,6 +1927,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             "DT303" => "报警解除信号",
             "DT304" or "DT305" => "检测结果信号",
             "DT306" => "终止信号",
+            "DT307" => "检测流程结束信号",
             _ when int.TryParse(match.Value.AsSpan(2), out int address)
                    && address is >= 130 and <= 185 => "引脚控制输出",
             _ => "设备内部信号"
@@ -3608,7 +3611,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 var stopResult = await _inspectionEngine.StopAndWaitAsync(
                     TimeSpan.FromSeconds(2),
-                    InspectionStopReason.Canceled,
+                    InspectionStopReason.DeviceDisconnected,
                     CancellationToken.None);
                 if (stopResult == InspectionStopWaitResult.Timeout)
                 {

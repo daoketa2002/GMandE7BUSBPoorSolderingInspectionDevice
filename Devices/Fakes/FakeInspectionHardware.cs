@@ -185,6 +185,22 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT306 已清除"));
     }
 
+    /// <summary>Fake PLC：写入本次检测流程结束通知 DT307=1。</summary>
+    public Task<PlcOperationResult> WriteInspectionEndedAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.InspectionEndedSignal, 1);
+        _logger.LogInformation("[Fake][PLC][流程结束] DT307=1");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT307=1"));
+    }
+
+    /// <summary>Fake PLC：清除本次检测流程结束通知 DT307=0。</summary>
+    public Task<PlcOperationResult> ClearInspectionEndedAsync(CancellationToken ct = default)
+    {
+        WriteRegister(PlcAddressMap.InspectionEndedSignal, 0);
+        _logger.LogInformation("[Fake][PLC][流程结束] DT307=0");
+        return Task.FromResult(PlcOperationResult.Success("Fake DT307=0"));
+    }
+
     /// <summary>
     /// 写入当前测试点的两个引脚到 Fake PLC（最新地址表：每引脚独立选择区）。
     /// 模拟写入引脚选择区，200ms 后置 DT302=1 表示继电器动作完成。

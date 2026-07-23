@@ -75,6 +75,10 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             throw new InvalidOperationException("检测引擎正在运行中或已有调用等待执行");
         }
 
+        InspectionResult? result = null;
+        bool flowStarted = false;
+        bool flowEndedPulseAttempted = false;
+
         try
         {
             _isRunning = true;
@@ -83,7 +87,7 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             string inspectionId = CreateInspectionId();
             _currentInspectionId = inspectionId;
 
-            var result = new InspectionResult
+            result = new InspectionResult
             {
                 InspectionId = inspectionId,
                 Barcode = barcode,
@@ -98,6 +102,8 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
             try
             {
                 SetState(InspectionState.Testing);
+                // Testing 状态建立后才算本轮检测真正启动，启动前失败不发送 DT307。
+                flowStarted = true;
                 LogInfo($"开始检测 - INS:{inspectionId}, 序列号:{barcode}, 机种:{modelName}, 测试点数:{_config.TestPoints.Count}");
 
                 await InitializeInspectionAsync(_inspectionCts.Token).ConfigureAwait(false);
@@ -479,10 +485,175 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
         }
         finally
         {
-            _isRunning = false;
-            _currentInspectionId = null;
-            _abortReason = InspectionStopReason.None; // ★ 重置中断原因
-            _engineLock.Release();
+            try
+            {
+                if (flowStarted && !flowEndedPulseAttempted)
+                {
+                    InspectionStopReason finalStopReason = ResolveFinalStopReason(result);
+                    string inspectionId = _currentInspectionId ?? "-";
+                    string executionStage = _currentExecutionStage;
+
+                    if (ShouldSuppressFlowEndedPulse(finalStopReason))
+                    {
+                        _logger.LogInformation(
+                            "[DT307流程结束通知][抑制] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}",
+                            inspectionId,
+                            finalStopReason,
+                            executionStage);
+                    }
+                    else
+                    {
+                        flowEndedPulseAttempted = true;
+                        await TryPulseFlowEndedAsync(
+                            inspectionId,
+                            finalStopReason,
+                            executionStage).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // DT307 通知异常不得覆盖原检测结果，也不得阻止引擎释放锁。
+                _logger.LogError(
+                    ex,
+                    "[DT307流程结束通知][统一出口异常] INS={InspectionId}",
+                    _currentInspectionId ?? "-");
+            }
+            finally
+            {
+                _isRunning = false;
+                _currentInspectionId = null;
+                _abortReason = InspectionStopReason.None; // ★ 重置中断原因
+                _engineLock.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 解析本轮最终停止原因。主动控制动作优先于检测结果，避免控制动作与取消异常竞态时误发 DT307。
+    /// </summary>
+    private InspectionStopReason ResolveFinalStopReason(InspectionResult? result)
+    {
+        InspectionStopReason abortReason = _abortReason;
+        if (abortReason is InspectionStopReason.PlcStop
+            or InspectionStopReason.Reset
+            or InspectionStopReason.EmergencyStop
+            or InspectionStopReason.Terminate)
+        {
+            return abortReason;
+        }
+
+        if (result?.StopReason is { } resultReason
+            && resultReason != InspectionStopReason.None)
+        {
+            return resultReason;
+        }
+
+        return abortReason;
+    }
+
+    /// <summary>主动停止、复位、急停、终了不产生 DT307=1 流程结束脉冲。</summary>
+    private static bool ShouldSuppressFlowEndedPulse(InspectionStopReason reason)
+    {
+        return reason is InspectionStopReason.PlcStop
+            or InspectionStopReason.Reset
+            or InspectionStopReason.EmergencyStop
+            or InspectionStopReason.Terminate;
+    }
+
+    /// <summary>
+    /// 尽力发送 DT307 流程结束脉冲。通知失败只记录日志，不改变原检测结果、不重试。
+    /// 写 1 失败后仍等待约 500ms 尝试清 0，避免 PLC 可能已执行但应答丢失时信号残留。
+    /// </summary>
+    private async Task TryPulseFlowEndedAsync(
+        string inspectionId,
+        InspectionStopReason stopReason,
+        string executionStage)
+    {
+        var pulseStopwatch = Stopwatch.StartNew();
+        PlcOperationResult? highResult = null;
+
+        _logger.LogWarning(
+            "[DT307流程结束通知][尝试] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}",
+            inspectionId,
+            stopReason,
+            executionStage);
+
+        try
+        {
+            highResult = await _plcDevice
+                .WriteInspectionEndedAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+
+            if (!highResult.IsSuccess)
+            {
+                _logger.LogError(
+                    "[DT307流程结束通知][写1失败] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}, Message={Message}",
+                    inspectionId,
+                    stopReason,
+                    executionStage,
+                    highResult.Message);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "[DT307流程结束通知][写1成功] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}",
+                    inspectionId,
+                    stopReason,
+                    executionStage);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "[DT307流程结束通知][写1异常] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}",
+                inspectionId,
+                stopReason,
+                executionStage);
+        }
+
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500), CancellationToken.None)
+                .ConfigureAwait(false);
+
+            PlcOperationResult lowResult = await _plcDevice
+                .ClearInspectionEndedAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+
+            pulseStopwatch.Stop();
+            if (!lowResult.IsSuccess)
+            {
+                _logger.LogError(
+                    "[DT307流程结束通知][清0失败] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}, HoldElapsedMs={HoldElapsedMs}, Message={Message}",
+                    inspectionId,
+                    stopReason,
+                    executionStage,
+                    pulseStopwatch.ElapsedMilliseconds,
+                    lowResult.Message);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "[DT307流程结束通知][完成] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}, HighWriteSuccess={HighWriteSuccess}, HoldElapsedMs={HoldElapsedMs}",
+                    inspectionId,
+                    stopReason,
+                    executionStage,
+                    highResult?.IsSuccess == true,
+                    pulseStopwatch.ElapsedMilliseconds);
+            }
+        }
+        catch (Exception ex)
+        {
+            pulseStopwatch.Stop();
+            _logger.LogError(
+                ex,
+                "[DT307流程结束通知][清0异常] INS={InspectionId}, StopReason={StopReason}, Stage={Stage}, HoldElapsedMs={HoldElapsedMs}",
+                inspectionId,
+                stopReason,
+                executionStage,
+                pulseStopwatch.ElapsedMilliseconds);
         }
     }
 

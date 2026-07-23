@@ -170,6 +170,16 @@ public interface IPlcDevice : ICommunicationDevice
     Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// 写 DT307=1，通知 PLC 本次检测流程已经结束。
+    /// 正常 OK、正常 NG、单项 NG 后不继续、程序或设备异常结束均使用该通知；
+    /// 停止、复位、急停、终了主动中断不得写 1。写 1 后约保持 500ms，再调用清除接口。
+    /// </summary>
+    Task<PlcOperationResult> WriteInspectionEndedAsync(CancellationToken ct = default);
+
+    /// <summary>清除检测流程结束通知，写 DT307=0。</summary>
+    Task<PlcOperationResult> ClearInspectionEndedAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 向上位机异常状态写入 PLC。
     /// 通信失败、万用表无响应等异常时调用。
     /// </summary>

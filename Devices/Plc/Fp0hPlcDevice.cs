@@ -231,6 +231,14 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     public Task<PlcOperationResult> ClearTerminateRequestAsync(CancellationToken ct = default)
         => WriteSignalAsync("DT306(终了)", PlcAddressMap.TerminateSignal, 0, ct);
 
+    /// <summary>写入本次检测流程结束通知（DT307=1）。</summary>
+    public Task<PlcOperationResult> WriteInspectionEndedAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT307(本次检测流程结束)", PlcAddressMap.InspectionEndedSignal, 1, ct);
+
+    /// <summary>清除本次检测流程结束通知（DT307=0）。</summary>
+    public Task<PlcOperationResult> ClearInspectionEndedAsync(CancellationToken ct = default)
+        => WriteSignalAsync("DT307(本次检测流程结束)", PlcAddressMap.InspectionEndedSignal, 0, ct);
+
     /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：每引脚独立选择区）。
     /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。
@@ -247,10 +255,10 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
         var (leftSelectAddr, leftPolarAddr) = PlcAddressMap.GetPinAddresses(leftPinName);
         var (rightSelectAddr, rightPolarAddr) = PlcAddressMap.GetPinAddresses(rightPinName);
 
-        _logger.LogInformation(
-            "[PLC动作][审计] 写入测试点引脚: {LeftPin}(DT{LeftSel}=1,DT{LeftPol}={LeftPolVal}), {RightPin}(DT{RightSel}=1,DT{RightPol}={RightPolVal})",
-            leftPinName, leftSelectAddr, leftPolarAddr, leftPolarityCode,
-            rightPinName, rightSelectAddr, rightPolarAddr, rightPolarityCode);
+        //_logger.LogInformation(
+        //    "[PLC动作][审计] 写入测试点引脚: {LeftPin}(DT{LeftSel}=1,DT{LeftPol}={LeftPolVal}), {RightPin}(DT{RightSel}=1,DT{RightPol}={RightPolVal})",
+        //    leftPinName, leftSelectAddr, leftPolarAddr, leftPolarityCode,
+        //    rightPinName, rightSelectAddr, rightPolarAddr, rightPolarityCode);
 
         try
         {
@@ -273,6 +281,11 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
                 return PlcOperationResult.Failure("写入右引脚失败: 无响应");
             if (rightResp.IsError)
                 return PlcOperationResult.Failure($"写入右引脚失败: Modbus错误码 {rightResp.ErrorCode}", rightResp);
+
+            _logger.LogInformation(
+            "[PLC动作][审计] 写入测试点引脚: {LeftPin}(DT{LeftSel}=1,DT{LeftPol}={LeftPolVal}), {RightPin}(DT{RightSel}=1,DT{RightPol}={RightPolVal})",
+            leftPinName, leftSelectAddr, leftPolarAddr, leftPolarityCode,
+            rightPinName, rightSelectAddr, rightPolarAddr, rightPolarityCode);
 
             return PlcOperationResult.Success($"测试点已写入: {leftPinName}(DT{leftSelectAddr}/DT{leftPolarAddr}) / {rightPinName}(DT{rightSelectAddr}/DT{rightPolarAddr})");
         }

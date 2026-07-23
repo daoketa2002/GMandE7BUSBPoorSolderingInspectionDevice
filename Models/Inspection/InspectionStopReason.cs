@@ -13,6 +13,10 @@ public enum InspectionStopReason
     Reset,
     /// <summary>PLC 急停信号 DT123</summary>
     EmergencyStop,
+    /// <summary>终了按钮或终了控制动作主动结束本轮</summary>
+    Terminate,
+    /// <summary>检测过程中 PLC 或 DMM 断线导致本轮结束</summary>
+    DeviceDisconnected,
     /// <summary>DT302 继电器动作完成超时</summary>
     RelayTimeout,
     /// <summary>无法恢复的异常</summary>
