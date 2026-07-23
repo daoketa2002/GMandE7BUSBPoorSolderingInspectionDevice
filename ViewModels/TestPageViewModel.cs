@@ -3851,9 +3851,20 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return InspectionMeasurementEvaluator.ResolveContinuityState(value, testPoint.ContinuityThresholdOhm);
         }
 
-        // 电阻模式统一把正向超量程显示为业务文本，避免超长数字进入界面。
+        // 电阻模式有限超量程显示万用表原始返回值；CSV 使用独立 RecordResult，不受界面显示影响。
         if (measurement.ValueKind == MeasurementValueKind.PositiveInfinityOrOverRange)
-            return "超量程";
+        {
+            if (double.IsPositiveInfinity(measurement.Value))
+                return "+Infinity";
+
+            string rawValue = measurement.RawValue?.Trim() ?? string.Empty;
+
+            return !string.IsNullOrWhiteSpace(rawValue)
+                ? $"{rawValue} Ω"
+                : $"{measurement.Value.ToString(
+                    "0.00000000E+00",
+                    System.Globalization.CultureInfo.InvariantCulture)} Ω";
+        }
 
         // NaN、负无穷等异常继续保留原有异常文本。
         if (!string.IsNullOrWhiteSpace(measurement.DisplayTextOverride))

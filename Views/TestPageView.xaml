@@ -604,7 +604,7 @@
                             <ColumnDefinition x:Name="HeaderCol0" Width="80"/>
                             <ColumnDefinition x:Name="HeaderCol1" Width="200"/>
                             <ColumnDefinition x:Name="HeaderCol2" Width="420"/>
-                            <ColumnDefinition x:Name="HeaderCol5" Width="230"/>
+                            <ColumnDefinition x:Name="HeaderCol5" Width="280"/>
                             <ColumnDefinition x:Name="HeaderCol6" Width="180"/>
                         </Grid.ColumnDefinitions>
 
@@ -720,13 +720,16 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTextColumn Binding="{Binding CheckResult}" Width="230">
+                    <DataGridTextColumn Binding="{Binding CheckResult}" Width="280">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
                                 <Setter Property="HorizontalAlignment" Value="Center"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                                 <Setter Property="FontSize" Value="18"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="TextWrapping" Value="NoWrap"/>
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                <Setter Property="ToolTip" Value="{Binding CheckResult}"/>
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
