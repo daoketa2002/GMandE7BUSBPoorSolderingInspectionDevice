@@ -1222,7 +1222,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 全部 Pin 检测完成后触发。
      /// 使用当前 ModelName + SchemeName 精确匹配方案，不再 allPlans.FirstOrDefault()。
     /// </summary>
-    private async Task OnAllPinsTestedAsync()
+    private async Task OnAllPinsTestedAsync(bool isSingleItemNgStopped = false)
     {
         if (_inspectionCompletionInProgress)
         {
@@ -1234,7 +1234,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         try
         {
             var finalResult = TestItems.All(i => i.Judgment == "OK") ? "OK" : "NG";
-            AddLog($"所有检查项目已执行完成，正在处理检测结果，综合判定：{finalResult}");
+            AddLog(isSingleItemNgStopped
+                ? $"本轮因单项 NG 提前结束，正在处理最终结果，综合判定：{finalResult}"
+                : $"所有检查项目已执行完成，正在处理检测结果，综合判定：{finalResult}");
 
             TotalCount++;
             if (finalResult == "OK") PassCount++;
@@ -3452,21 +3454,25 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
+        bool isSingleItemNgNormalCompletion =
+            result.StopReason == InspectionStopReason.SingleItemNg
+            && !result.IsAborted
+            && !result.IsAllPassed;
+
+        if (isSingleItemNgNormalCompletion)
+        {
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                AddLog($"❎ {result.ErrorMessage}");
+            });
+            _logger.LogWarning("[运行页][审计] 单项 NG 后按设置结束本轮，进入最终 NG 收口: {ErrorMessage}", result.ErrorMessage);
+            await CompleteInspectionResultOnUiAsync(result, isSingleItemNgStopped: true).ConfigureAwait(false);
+        }
+        else if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
         {
             if (IsExpectedControlStopReason(result.StopReason))
             {
                 _logger.LogWarning("[运行页][审计] 检测因 {StopReason} 收口，中止提示交由对应流程处理", result.StopReason);
-                return;
-            }
-
-            if (result.StopReason == InspectionStopReason.SingleItemNg)
-            {
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    AddLog($"❎ {result.ErrorMessage}");
-                });
-                _logger.LogWarning("[运行页][审计] 单项 NG 停止: {ErrorMessage}", result.ErrorMessage);
                 return;
             }
 
@@ -3513,12 +3519,27 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             // 正常完成 → 自动保存、PLC 收口，最后再显示 OK/NG
-            await Application.Current.Dispatcher.InvokeAsync(async () =>
-            {
-                AddLog($"所有检查项目已执行完成，正在处理结果... (耗时{result.Duration.TotalSeconds:F1}s)");
-                await OnAllPinsTestedAsync();
-            });
+            await CompleteInspectionResultOnUiAsync(result, isSingleItemNgStopped: false).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// 切回 UI 线程执行检测完成收口，并完整等待内部异步任务结束。
+    /// </summary>
+    private async Task CompleteInspectionResultOnUiAsync(
+        InspectionResult result,
+        bool isSingleItemNgStopped)
+    {
+        var dispatcherOperation = Application.Current.Dispatcher.InvokeAsync(async () =>
+        {
+            AddLog(isSingleItemNgStopped
+                ? $"本轮因单项 NG 提前结束，正在处理最终结果... (耗时{result.Duration.TotalSeconds:F1}s)"
+                : $"所有检查项目已执行完成，正在处理结果... (耗时{result.Duration.TotalSeconds:F1}s)");
+
+            await OnAllPinsTestedAsync(isSingleItemNgStopped);
+        });
+
+        await dispatcherOperation.Task.Unwrap().ConfigureAwait(false);
     }
 
     #endregion

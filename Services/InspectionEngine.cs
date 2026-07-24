@@ -382,10 +382,79 @@ public partial class InspectionEngine : IAsyncDisposable, IDisposable
                         result.EndTime = DateTime.Now;
 
                         _currentExecutionStage = "ClearPointOutputs";
-                        await ClearPlcOutputsAndRelayFlagAsync("Stop", _inspectionCts.Token).ConfigureAwait(false);
+                        var singleNgCleanupResult = await ClearPlcOutputsAndRelayFlagAsync(
+                            "SingleItemNg",
+                            _inspectionCts.Token).ConfigureAwait(false);
+                        if (!singleNgCleanupResult.pinCleared || !singleNgCleanupResult.relayCleared)
+                        {
+                            string cleanupFailureMessage =
+                                $"单项 NG 后 PLC 安全清理失败：点位 {testPoint.Name}，" +
+                                $"引脚清理={singleNgCleanupResult.pinCleared}，" +
+                                $"DT302 清理={singleNgCleanupResult.relayCleared}";
+
+                            _logger.LogError(
+                                "[SingleItemNgCleanupFailed][检测异常] INS={INS}, Point={Point}, PinCleared={PinCleared}, RelayCleared={RelayCleared}",
+                                inspectionId,
+                                testPoint.Name,
+                                singleNgCleanupResult.pinCleared,
+                                singleNgCleanupResult.relayCleared);
+
+                            await AbortCurrentRunAsync(
+                                result,
+                                cleanupFailureMessage,
+                                InspectionState.Error,
+                                "SingleItemNgCleanupFailed").ConfigureAwait(false);
+
+                            return result;
+                        }
+
+                        _currentExecutionStage = "WriteFinalNgResult";
+                        var finalNgWriteResult = await _plcDevice.WriteFinalResultAsync(
+                            isOk: false,
+                            ngPointIndex: firstNgIndex >= 0 ? firstNgIndex : i,
+                            _inspectionCts.Token).ConfigureAwait(false);
+                        if (!finalNgWriteResult.IsSuccess)
+                        {
+                            string finalNgFailureMessage =
+                                $"单项 NG 后 PLC 最终 NG 结果写入失败：{finalNgWriteResult.Message}";
+
+                            _logger.LogError(
+                                "[SingleItemNgFinalResultFailed][检测异常] INS={INS}, Point={Point}, Message={Message}",
+                                inspectionId,
+                                testPoint.Name,
+                                finalNgWriteResult.Message);
+
+                            await AbortCurrentRunAsync(
+                                result,
+                                finalNgFailureMessage,
+                                InspectionState.Error,
+                                "SingleItemNgFinalResultFailed").ConfigureAwait(false);
+
+                            return result;
+                        }
+
                         _currentExecutionStage = "ClearPcReady";
-                        await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
-                        // 单项 NG 不写 DT304/DT305，等待复位或终了
+                        var clearPcReadyResult = await _plcDevice
+                            .ClearPcReadyAsync(CancellationToken.None)
+                            .ConfigureAwait(false);
+                        if (!clearPcReadyResult.IsSuccess)
+                        {
+                            string clearPcReadyFailureMessage =
+                                $"单项 NG 后清除 PLC 允许检测信号 DT234 失败：{clearPcReadyResult.Message}";
+
+                            _logger.LogError(
+                                "[SingleItemNgClearPcReadyFailed][检测异常] INS={INS}, Message={Message}",
+                                inspectionId,
+                                clearPcReadyResult.Message);
+
+                            await AbortCurrentRunAsync(
+                                result,
+                                clearPcReadyFailureMessage,
+                                InspectionState.Error,
+                                "SingleItemNgClearPcReadyFailed").ConfigureAwait(false);
+
+                            return result;
+                        }
 
                         SetState(InspectionState.StoppedBySingleItemNg);
                         return result;

@@ -215,7 +215,8 @@ public partial class EmergencyStopDialogViewModel : ObservableObject
 
         if (alarmReleased)
         {
-            StatusText = "已收到报警解除信号，可以解除弹窗";
+            //StatusText = "已收到报警解除信号，可以解除弹窗";
+            StatusText = "";
             _logger?.LogWarning("[急停弹窗] DT303 从 0→1，解除按钮已启用");
         }
         else
