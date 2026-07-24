@@ -40,35 +40,45 @@
             <Setter Property="Margin" Value="4"/>
         </Style>
 
-        <Style x:Key="StatNumberStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="36"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="HorizontalAlignment" Value="Center"/>
+        <!-- 计数数值框：只读显示框外观 -->
+        <Style x:Key="StatBoxStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#CED4DA"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="MinWidth" Value="130"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
-        <Style x:Key="StatLabelStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="Foreground" Value="#6C757D"/>
-            <Setter Property="HorizontalAlignment" Value="Center"/>
+        <!-- 计数值：等宽、加粗、右对齐 -->
+        <Style x:Key="StatValueStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Right"/>
         </Style>
 
         <!-- ============================================================
      设备状态指示灯按钮样式（优化版）
      改动说明：
-       1. 按钮尺寸 110×40 → 120×48，容纳更大字号
-       2. 主标签 14px → 16px，状态标签 11px → 12px
+       1. 按钮尺寸调整为 110×46，适配顶部区域高度
+       2. 主标签 15px，状态标签 11px，保持紧凑可读
        3. 移除状态标签 Opacity="0.9"，消除光晕效应
        4. 增加底部阴影 BorderThickness="0,0,0,4"，参照"终了"按钮立体感
        5. 圆角 6px → 8px，保持层次感
        6. 内部布局由 StackPanel 改为 Grid + RowDefinitions，行距更舒展
      ============================================================ -->
         <Style x:Key="DeviceStatusButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="120"/>
-            <Setter Property="Height" Value="48"/>
+            <Setter Property="Width" Value="110"/>
+            <Setter Property="Height" Value="46"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Padding" Value="8,2"/>
+            <Setter Property="Padding" Value="6,1"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -236,7 +246,7 @@
 
     <Grid Background="#FFFFFF">
         <Grid.RowDefinitions>
-            <RowDefinition Height="160"/>
+            <RowDefinition Height="180"/>
             <RowDefinition Height="70"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="180"/>
@@ -250,7 +260,7 @@
                 <ColumnDefinition Width="260"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 1-1 左侧：生产统计面板 -->
+            <!-- 1-1 左侧：生产统计面板（纵向计数布局） -->
             <Border Grid.Column="0" Style="{StaticResource TopPanelBorder}">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -258,14 +268,20 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
+                    <!-- 方案名称：原绑定和校验逻辑保持不变 -->
                     <DockPanel Grid.Row="0" Margin="0,0,0,8">
-                        <TextBlock Text="方案名称：" FontSize="14" Foreground="#495057" VerticalAlignment="Center"/>
+                        <TextBlock Text="方案名称："
+                                   FontSize="14"
+                                   Foreground="#495057"
+                                   VerticalAlignment="Center"/>
                         <ComboBox IsEditable="True"
                                   Text="{Binding SchemeName, UpdateSourceTrigger=PropertyChanged}"
                                   ItemsSource="{Binding PlanNameOptions}"
                                   SelectedItem="{Binding SelectedPlanName}"
-                                  FontSize="14" FontWeight="Bold"
-                                  Height="32" VerticalContentAlignment="Center"
+                                  FontSize="14"
+                                  FontWeight="Bold"
+                                  Height="32"
+                                  VerticalContentAlignment="Center"
                                   x:Name="SchemeNameComboBox">
                             <ComboBox.Style>
                                 <Style TargetType="ComboBox">
@@ -284,34 +300,106 @@
                         </ComboBox>
                     </DockPanel>
 
-                    <Grid Grid.Row="1">
+                    <!-- 三行计数：标签、数值框、单位按列对齐，清零按钮跨三行 -->
+                    <Grid Grid.Row="1" VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="60"/>
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                        </Grid.RowDefinitions>
 
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding TotalCount}" Style="{StaticResource StatNumberStyle}" Foreground="#3498DB"/>
-                            <TextBlock Text="检查数量" Style="{StaticResource StatLabelStyle}"/>
-                        </StackPanel>
+                        <!-- 检查数量 -->
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="检查数量："
+                                   FontSize="14"
+                                   Foreground="#495057"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0"/>
+                        <Border Grid.Row="0" Grid.Column="1"
+                                Style="{StaticResource StatBoxStyle}"
+                                ToolTip="{Binding TotalCount}">
+                            <Viewbox Stretch="Uniform"
+                                     StretchDirection="DownOnly"
+                                     HorizontalAlignment="Right">
+                                <TextBlock Text="{Binding TotalCount}"
+                                           Style="{StaticResource StatValueStyle}"
+                                           Foreground="#3498DB"/>
+                            </Viewbox>
+                        </Border>
+                        <TextBlock Grid.Row="0" Grid.Column="2"
+                                   Text="台"
+                                   FontSize="13"
+                                   Foreground="#6C757D"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,0,0"/>
 
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding PassCount}" Style="{StaticResource StatNumberStyle}" Foreground="#27AE60"/>
-                            <TextBlock Text="良品数量" Style="{StaticResource StatLabelStyle}"/>
-                        </StackPanel>
+                        <!-- 良品数量 -->
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Text="良品数量："
+                                   FontSize="14"
+                                   Foreground="#495057"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0"/>
+                        <Border Grid.Row="1" Grid.Column="1"
+                                Style="{StaticResource StatBoxStyle}"
+                                ToolTip="{Binding PassCount}">
+                            <Viewbox Stretch="Uniform"
+                                     StretchDirection="DownOnly"
+                                     HorizontalAlignment="Right">
+                                <TextBlock Text="{Binding PassCount}"
+                                           Style="{StaticResource StatValueStyle}"
+                                           Foreground="#27AE60"/>
+                            </Viewbox>
+                        </Border>
+                        <TextBlock Grid.Row="1" Grid.Column="2"
+                                   Text="台"
+                                   FontSize="13"
+                                   Foreground="#6C757D"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,0,0"/>
 
-                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding FailCount}" Style="{StaticResource StatNumberStyle}" Foreground="#E74C3C"/>
-                            <TextBlock Text="不良数量" Style="{StaticResource StatLabelStyle}"/>
-                        </StackPanel>
+                        <!-- 不良数量 -->
+                        <TextBlock Grid.Row="2" Grid.Column="0"
+                                   Text="不良数量："
+                                   FontSize="14"
+                                   Foreground="#495057"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0"/>
+                        <Border Grid.Row="2" Grid.Column="1"
+                                Style="{StaticResource StatBoxStyle}"
+                                ToolTip="{Binding FailCount}">
+                            <Viewbox Stretch="Uniform"
+                                     StretchDirection="DownOnly"
+                                     HorizontalAlignment="Right">
+                                <TextBlock Text="{Binding FailCount}"
+                                           Style="{StaticResource StatValueStyle}"
+                                           Foreground="#E74C3C"/>
+                            </Viewbox>
+                        </Border>
+                        <TextBlock Grid.Row="2" Grid.Column="2"
+                                   Text="台"
+                                   FontSize="13"
+                                   Foreground="#6C757D"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,0,0"/>
 
-                        <Button Grid.Column="3" Content="清零"
+                        <!-- 清零按钮：命令和样式保持不变 -->
+                        <Button Grid.Row="0"
+                                Grid.Column="3"
+                                Grid.RowSpan="3"
+                                Content="清零"
                                 Command="{Binding ClearCountersCommand}"
                                 Style="{StaticResource ClearCountButtonStyle}"
                                 VerticalAlignment="Center"
-                                ToolTip="清零计数器" Cursor="Hand"/>
+                                HorizontalAlignment="Center"
+                                ToolTip="清零计数器"
+                                Cursor="Hand"/>
                     </Grid>
                 </Grid>
             </Border>
@@ -329,10 +417,14 @@
                                    Foreground="#ECF0F1" HorizontalAlignment="Center" FontFamily="Consolas"/>
                     </Border>
 
-                    <UniformGrid Grid.Row="1" Rows="1" Columns="4" HorizontalAlignment="Center">
+                    <UniformGrid Grid.Row="1"
+                                 Rows="1"
+                                 Columns="4"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center">
                         <!-- ═══════════ PLC 按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Command="{Binding ReconnectPlcCommand}" Margin="6">
+                                Command="{Binding ReconnectPlcCommand}" Margin="4">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
@@ -341,15 +433,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="26"/>
-                                    <RowDefinition Height="18"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="16"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="PLC"
-                                           FontSize="16" FontWeight="Bold"
+                                           FontSize="15" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="{Binding PlcStatusText}"
-                                           FontSize="12"
+                                           FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
@@ -357,7 +449,7 @@
 
                         <!-- ═══════════ 扫描仪按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Command="{Binding ReconnectScannerCommand}" Margin="6">
+                                Command="{Binding ReconnectScannerCommand}" Margin="4">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
@@ -366,15 +458,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="26"/>
-                                    <RowDefinition Height="18"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="16"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="扫描仪"
-                                           FontSize="16" FontWeight="Bold"
+                                           FontSize="15" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="{Binding ScannerStatusText}"
-                                           FontSize="12"
+                                           FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
@@ -382,7 +474,7 @@
 
                         <!-- ═══════════ 万用表按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Command="{Binding ReconnectDmmCommand}" Margin="6">
+                                Command="{Binding ReconnectDmmCommand}" Margin="4">
                             <Button.Background>
                                 <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
                             </Button.Background>
@@ -391,15 +483,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="26"/>
-                                    <RowDefinition Height="18"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="16"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="万用表"
-                                           FontSize="16" FontWeight="Bold"
+                                           FontSize="15" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="{Binding DmmStatusText}"
-                                           FontSize="12"
+                                           FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
@@ -407,7 +499,7 @@
 
                         <!-- ═══════════ PC 按钮 ═══════════ -->
                         <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Margin="6" IsHitTestVisible="False">
+                                Margin="4" IsHitTestVisible="False">
                             <Button.Background>
                                 <SolidColorBrush Color="#27AE60"/>
                             </Button.Background>
@@ -417,15 +509,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="26"/>
-                                    <RowDefinition Height="18"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="16"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="PC"
-                                           FontSize="16" FontWeight="Bold"
+                                           FontSize="15" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="就绪"
-                                           FontSize="12"
+                                           FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
