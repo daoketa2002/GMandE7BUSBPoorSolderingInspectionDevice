@@ -222,6 +222,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private int _resetFailureNotificationShown;
 
+    /// <summary>复位失败后，旧 DT121 尚未确认回到 0，实体复位入口暂不重新武装。</summary>
+    private bool _resetRearmPending;
+
+    /// <summary>后台清理旧 DT121 的任务门禁，防止同一时间重复写入。</summary>
+    private int _resetRearmInProgress;
+
+    /// <summary>上一次清理旧 DT121 的时间，用于限制轮询重试频率。</summary>
+    private DateTime _lastResetRearmAttemptUtc = DateTime.MinValue;
+
     /// <summary>
     /// 启动请求决策枚举。在完整启动校验前，先按当前状态做分类。
     /// </summary>
@@ -2097,23 +2106,35 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private async Task UpdateUiStateFromPlcInputsAsync(PlcControlSignals? previousInputs, PlcControlSignals inputs)
     {
-        // DT121=0 只有在当前复位动作已经收口或没有复位动作时，才允许重新武装下一次复位。
-        // 复位主体、成功弹窗和弹窗后的最终清除期间必须保持已处理标志，吸收重复请求。
-        if (!inputs.IsResetRequested
+        // ResetFailed 下先处理旧 DT121 的重新武装；DT121=0 只开放下一次入口，
+        // 不代表上一次完整复位成功，也不能自动恢复 Ready/CanStart。
+        if (UiState == TestUIState.ResetFailed
+            && _resetRearmPending
+            && !_isResetting
+            && _currentControlAction == InspectionControlAction.None)
+        {
+            if (!inputs.IsResetRequested)
+            {
+                _resetRearmPending = false;
+                _resetSignalHandled = false;
+                _isResetting = false;
+                _lastResetRearmAttemptUtc = DateTime.MinValue;
+                _logger.LogWarning("[复位重新武装] 已确认 DT121=0，复位入口重新开放");
+                AddLog("复位入口已重新开放，请再次执行复位");
+            }
+            else
+            {
+                await TryRearmResetAfterFailureAsync();
+            }
+        }
+        // 普通状态下 DT121=0 才重置旧请求门禁。ResetFailed 的重新武装由上方分支负责。
+        else if (!inputs.IsResetRequested
             && !_isResetting
             && _currentControlAction != InspectionControlAction.Resetting)
         {
+            // DT121=0 只负责释放旧请求门禁，稳定轮询不重复输出运行页日志。
             _resetSignalHandled = false;
             _isResetting = false;
-            Interlocked.Exchange(ref _resetFailureNotificationShown, 0);
-
-            // DT121=0 只表示复位请求信号释放，不代表旧检测引擎已经退出。
-            // ResetFailed 必须等下一次完整复位成功后才能恢复 Ready/CanStart。
-            if (UiState == TestUIState.ResetFailed)
-            {
-                _logger.LogWarning("[复位状态] DT121 已释放，但当前仍为 ResetFailed，不自动恢复 CanStart");
-                AddLog("复位请求信号已释放，但上次复位未完成，请重新执行复位");
-            }
         }
 
         // ── DT123 回到 0，重置弹窗确认标志 ──
@@ -2180,7 +2201,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             // 当前复位期间的重复请求只吸收，不重复停止引擎、清理输出或弹窗。
             _logger.LogDebug("[复位请求][吸收] 当前复位尚未收口，忽略重复 DT121 请求");
-            return;
         }
 
         // ════════════════════════════════════════════════════════
@@ -2579,6 +2599,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _ignoreInspectionCallbacksUntilNextStart = true;
         _isResetting = true;
         _waitDt120ReleaseAfterReset = true;
+
+        // 已取得复位控制锁，代表一轮新的完整复位正式开始，允许本轮失败提示再次显示。
+        Interlocked.Exchange(ref _resetFailureNotificationShown, 0);
+
         Interlocked.Increment(ref _inspectionRunVersion);
         SetUiState(TestUIState.Resetting);
         _logger.LogInformation("[复位请求][执行] 开始执行复位流程，来源={Source}", source);
@@ -2625,35 +2649,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                             "[复位流程][停止-硬超时] UiState={UiState}, Action={Action}, EngineState={EngineState}, EngineStage={Stage}, EngineIsRunning={IsRunning}, RunVersion={Version}",
                             UiState, _currentControlAction, _inspectionEngine.CurrentState, hardStage, hardIsRunning, _inspectionRunVersion);
 
-                        SetUiState(TestUIState.ResetFailed);
-
-                        // 硬超时：清 DT121 标记为失败清理
-                        try
-                        {
-                            await _plcDevice.ClearResetRequestAsync(CancellationToken.None);
-                            _logger.LogWarning("[复位流程][审计][硬超时] 复位硬超时后清理 DT121");
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "[复位流程][硬超时] 清除 DT121 失败");
-                        }
-
-                        // 只弹一次错误
-                        if (Interlocked.Exchange(ref _resetFailureNotificationShown, 1) == 0)
-                        {
-                            AddLog("复位操作超时：检测引擎未能安全停止，请确认设备就绪后重新尝试复位。");
-                            await _notificationService.ShowErrorAsync(
-                                "复位操作超时：检测引擎未能安全停止。\n请确认设备就绪后重新尝试复位。",
-                                "复位超时");
-                        }
-                        else
-                        {
-                            _logger.LogWarning("[复位流程][审计] 复位失败弹窗已显示过，跳过重复弹窗");
-                            AddLog("复位超时：检测引擎未能停止（弹窗已显示）");
-                        }
-
-                        _isResetting = false;
-                        // 不在此处 ExitControlAction，统一由 finally 释放一次
+                        await EnterResetFailedAsync(
+                            "复位操作超时：检测引擎未能安全停止。\n请确认设备就绪后重新尝试复位。",
+                            $"检测引擎硬超时未退出，Stage={hardStage}，IsRunning={hardIsRunning}").ConfigureAwait(false);
                         return;
                     }
 
@@ -2668,12 +2666,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var finalResultClear = await ClearFinalResultWithAuditAsync("Reset", CancellationToken.None);
             if (!finalResultClear.IsSuccess)
             {
-                SetUiState(TestUIState.ResetFailed);
-                _isResetting = false;
-                AddLog("复位未完成：产品结果信号未能清除，请检查 PLC 通信后重新复位。");
-                await _notificationService.ShowWarningAsync(
+                await EnterResetFailedAsync(
                     "复位未完成：产品结果信号未能清除。\n请检查 PLC 通信后重新执行复位。",
-                    "复位失败").ConfigureAwait(false);
+                    $"产品结果信号清除失败：{finalResultClear.Message}").ConfigureAwait(false);
                 return;
             }
 
@@ -2704,13 +2699,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             bool stopSignalReleased = await CompleteResetStopSignalFinalizationAsync(CancellationToken.None).ConfigureAwait(false);
             if (!stopSignalReleased)
             {
-                SetUiState(TestUIState.ResetFailed);
-                _isResetting = false;
-                AddLog("复位未完成：停止信号 DT122 无法清除，请检查 PLC 通信后重新复位");
-                _logger.LogWarning("[复位流程][DT122] 最终确认失败，禁止进入 CanStart");
-                await _notificationService.ShowWarningAsync(
+                await EnterResetFailedAsync(
                     "复位未完成：停止信号 DT122 无法清除，请检查 PLC 通信后重新复位。",
-                    "复位失败").ConfigureAwait(false);
+                    "停止信号 DT122 清理或最终确认失败").ConfigureAwait(false);
                 return;
             }
 
@@ -2720,13 +2711,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 CancellationToken.None).ConfigureAwait(false);
             if (!firstResetRequestCleared)
             {
-                SetUiState(TestUIState.ResetFailed);
-                _isResetting = false;
-                AddLog("复位未完成：PLC 复位信号清除失败，请检查 PLC 通信后重新执行复位。");
-                _logger.LogWarning("[复位流程][DT121] 第一次清除重试仍失败，禁止进入 CanStart");
-                await _notificationService.ShowWarningAsync(
-                    "复位未完成：PLC 复位信号清除失败。请检查 PLC 通信后重新执行复位。",
-                    "复位失败").ConfigureAwait(false);
+                await EnterResetFailedAsync(
+                    "复位未完成：PLC 复位信号清除失败，请检查 PLC 通信后重新执行复位。",
+                    "第一次清除 DT121 重试仍失败").ConfigureAwait(false);
                 return;
             }
 
@@ -2734,13 +2721,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             if (validationResult != ResetCompletionValidationResult.Success)
             {
                 string failure = FormatResetValidationFailure(validationResult);
-                SetUiState(TestUIState.ResetFailed);
-                _isResetting = false;
-                AddLog($"复位未完成：{failure}，请检查 PLC 通信后重新复位");
-                _logger.LogWarning("[复位流程][验证] 失败：{Result}，禁止进入 CanStart", validationResult);
-                await _notificationService.ShowWarningAsync(
+                await EnterResetFailedAsync(
                     $"复位未完成：{failure}，请检查 PLC 通信后重新复位。",
-                    "复位失败").ConfigureAwait(false);
+                    $"复位完成快照验证失败：{validationResult}").ConfigureAwait(false);
                 return;
             }
 
@@ -2755,13 +2738,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 CancellationToken.None).ConfigureAwait(false);
             if (!finalResetRequestCleared)
             {
-                SetUiState(TestUIState.ResetFailed);
-                _isResetting = false;
-                AddLog("复位收口未完成：PLC 复位信号清除失败，请检查 PLC 通信后重新执行复位。");
-                _logger.LogWarning("[复位流程][DT121] 弹窗后最终清除重试仍失败，保持复位门禁");
-                await _notificationService.ShowWarningAsync(
-                    "复位收口未完成：PLC 复位信号清除失败。请检查 PLC 通信后重新执行复位。",
-                    "复位失败").ConfigureAwait(false);
+                await EnterResetFailedAsync(
+                    "复位收口未完成：PLC 复位信号清除失败，请检查 PLC 通信后重新执行复位。",
+                    "成功提示后的最终 DT121 清除重试仍失败").ConfigureAwait(false);
                 return;
             }
 
@@ -2781,11 +2760,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[复位流程] 复位过程发生异常");
-            _isResetting = false;
-            SetUiState(TestUIState.Error);
-            AddLog($"复位异常: {ex.Message}");
-            throw;
+            await EnterResetFailedAsync(
+                "复位过程发生异常，请检查设备和 PLC 通信后重新执行复位。",
+                "复位流程出现未预期异常",
+                ex).ConfigureAwait(false);
         }
         finally
         {
@@ -2793,6 +2771,126 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ExitControlAction(InspectionControlAction.Resetting);
         }
 
+    }
+
+    /// <summary>
+    /// 统一收口所有可恢复的复位失败，保持 ResetFailed 并等待旧 DT121 完成低电平收口。
+    /// 该方法不得递归启动新的完整复位流程。
+    /// </summary>
+    private async Task EnterResetFailedAsync(
+        string operatorMessage,
+        string diagnosticReason,
+        Exception? exception = null)
+    {
+        bool isEnteringResetFailed = UiState != TestUIState.ResetFailed;
+
+        if (exception == null)
+        {
+            _logger.LogWarning("[复位失败收口] {Reason}", diagnosticReason);
+        }
+        else
+        {
+            _logger.LogError(exception, "[复位失败收口] {Reason}", diagnosticReason);
+        }
+
+        SetUiState(TestUIState.ResetFailed);
+        _isResetting = false;
+        _resetSignalHandled = true;
+        _resetRearmPending = true;
+        _lastResetRearmAttemptUtc = DateTime.UtcNow;
+        if (isEnteringResetFailed)
+        {
+            AddLog($"[复位失败收口] {operatorMessage.Replace('\n', ' ')}");
+        }
+
+        // 先尽力清除旧请求，但必须等待后续轮询确认 DT121=0 才能重新开放实体复位。
+        try
+        {
+            var clearResult = await _plcDevice.ClearResetRequestAsync(CancellationToken.None).ConfigureAwait(false);
+            if (clearResult.IsSuccess)
+            {
+                _logger.LogWarning("[复位失败收口] 已尽力写入 DT121=0，等待轮询确认入口重新武装");
+            }
+            else
+            {
+                _logger.LogWarning("[复位失败收口] 清理旧 DT121 失败，等待通信恢复后重试：{Message}", clearResult.Message);
+                AddLog("复位入口等待重新武装：PLC 复位信号暂未清除");
+            }
+        }
+        catch (Exception clearException)
+        {
+            _logger.LogWarning(clearException, "[复位失败收口] 清理旧 DT121 异常，等待通信恢复后重试");
+            AddLog("复位入口等待重新武装：PLC 通信暂不可用");
+        }
+
+        if (Interlocked.Exchange(ref _resetFailureNotificationShown, 1) == 0)
+        {
+            try
+            {
+                await _notificationService.ShowWarningAsync(operatorMessage, "复位失败").ConfigureAwait(false);
+            }
+            catch (Exception notificationException)
+            {
+                _logger.LogWarning(notificationException, "[复位失败收口] 显示复位失败提示异常");
+            }
+        }
+        else
+        {
+            _logger.LogWarning("[复位失败收口] 本轮复位失败提示已显示，跳过重复提示");
+        }
+    }
+
+    /// <summary>
+    /// ResetFailed 下只清理旧 DT121，不自动执行完整复位；成功写 0 后等待下一轮快照确认。
+    /// </summary>
+    private async Task TryRearmResetAfterFailureAsync()
+    {
+        if (UiState != TestUIState.ResetFailed
+            || !_resetRearmPending
+            || _currentControlAction != InspectionControlAction.None
+            || _isResetting
+            || !_plcDevice.IsConnected)
+        {
+            return;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        if (_lastResetRearmAttemptUtc != DateTime.MinValue
+            && now - _lastResetRearmAttemptUtc < TimeSpan.FromSeconds(1.5))
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _resetRearmInProgress, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _lastResetRearmAttemptUtc = now;
+        try
+        {
+            _logger.LogWarning("[复位重新武装] 开始清理旧 DT121");
+            var clearResult = await _plcDevice.ClearResetRequestAsync(CancellationToken.None).ConfigureAwait(false);
+            if (clearResult.IsSuccess)
+            {
+                _logger.LogWarning("[复位重新武装] 已写入 DT121=0，等待下一轮读取确认");
+                AddLog("复位重新武装：已写入 DT121=0，等待 PLC 确认");
+            }
+            else
+            {
+                _logger.LogWarning("[复位重新武装] 清理旧 DT121 失败：{Message}", clearResult.Message);
+                AddLog("复位入口等待重新武装：PLC 复位信号清除失败");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[复位重新武装] 清理旧 DT121 异常");
+            AddLog("复位入口等待重新武装：PLC 通信异常");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _resetRearmInProgress, 0);
+        }
     }
 
     #endregion
@@ -2806,6 +2904,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private async Task ExecuteStopFlowAsync(InspectionActionSource source)
     {
+        if (UiState == TestUIState.ResetFailed)
+        {
+            // ResetFailed 下停止请求不产生新的业务状态，只保留低级别诊断。
+            _logger.LogDebug("[动作仲裁][吸收] ResetFailed 状态下忽略停止请求，来源={Source}", source);
+            return;
+        }
+
         // ── 重复停止幂等忽略 ──
         if (_currentControlAction == InspectionControlAction.Stopping)
         {
@@ -3266,17 +3371,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         LogSemiPhysicalDebugAction("Reset", "DT121", 1);
 
-        if (IsResetRequestInProgress())
+        bool isResetFailedRetry =
+            UiState == TestUIState.ResetFailed
+            && _currentControlAction == InspectionControlAction.None
+            && !_isResetting;
+
+        if (!isResetFailedRetry && IsResetRequestInProgress())
         {
             _logger.LogWarning("[动作仲裁][忽略] 复位正在执行，重复复位请求未写入 DT121，UiState={UiState}, Action={Action}",
                 UiState, _currentControlAction);
             return;
-        }
-
-        if (UiState == TestUIState.ResetFailed)
-        {
-            _resetSignalHandled = false;
-            _logger.LogWarning("[复位重试] 当前为 ResetFailed，已重新武装复位请求处理标志");
         }
 
         _logger.LogInformation("[调试按钮][复位][请求] 上位机写入 DT121=1，等待 PLC 轮询统一消费");
@@ -3284,19 +3388,41 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         SuspendPlcPolling();
         // 写请求尚未被 PLC 轮询消费前先占住复位入口，避免连续点击重复写入 DT121=1。
         _isResetting = true;
+        Interlocked.Exchange(ref _resetFailureNotificationShown, 0);
         try
         {
+            if (isResetFailedRetry)
+            {
+                _logger.LogWarning("[复位重试] 收到新的调试面板复位请求，先处理旧 DT121");
+                var clearOldRequestResult = await _plcDevice.ClearResetRequestAsync(CancellationToken.None).ConfigureAwait(false);
+                if (!clearOldRequestResult.IsSuccess)
+                {
+                    await EnterResetFailedAsync(
+                        "复位入口暂时无法重新武装，请检查 PLC 通信后重试。",
+                        $"调试面板复位前清理旧 DT121 失败：{clearOldRequestResult.Message}").ConfigureAwait(false);
+                    return;
+                }
+
+                _resetRearmPending = false;
+                _resetSignalHandled = false;
+                _lastResetRearmAttemptUtc = DateTime.MinValue;
+            }
+
             var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
             if (!HandleControlSignalWriteResult(result, "调试面板", "DT121", "复位"))
             {
-                _isResetting = false;
+                await EnterResetFailedAsync(
+                    "复位请求发送失败，请检查 PLC 通信后重试。",
+                    $"调试面板写入 DT121=1 失败：{result.Message}").ConfigureAwait(false);
                 return;
             }
         }
-        catch
+        catch (Exception ex)
         {
-            _isResetting = false;
-            throw;
+            await EnterResetFailedAsync(
+                "复位请求发送异常，请检查 PLC 通信后重试。",
+                "调试面板复位请求写入过程发生异常",
+                ex).ConfigureAwait(false);
         }
         finally
         {
@@ -3363,10 +3489,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private bool IsResetRequestInProgress()
     {
-        return _resetSignalHandled
-               || _currentControlAction == InspectionControlAction.Resetting
+        return _currentControlAction == InspectionControlAction.Resetting
                || _isResetting
-               || UiState == TestUIState.Resetting;
+               || UiState == TestUIState.Resetting
+               || (UiState != TestUIState.ResetFailed && _resetSignalHandled);
     }
 
     /// <summary>
@@ -3376,7 +3502,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         return _currentControlAction is InspectionControlAction.Stopping or InspectionControlAction.Resetting
                || _isResetting
-               || UiState is TestUIState.Resetting or TestUIState.AwaitingReset or TestUIState.Paused;
+               || UiState is TestUIState.Resetting or TestUIState.ResetFailed or TestUIState.AwaitingReset or TestUIState.Paused;
     }
 
     /// <summary>
@@ -3387,38 +3513,60 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [RelayCommand]
     private async Task TriggerPlcResetAsync()
     {
-        if (IsResetRequestInProgress())
+        bool isResetFailedRetry =
+            UiState == TestUIState.ResetFailed
+            && _currentControlAction == InspectionControlAction.None
+            && !_isResetting;
+
+        // ResetFailed 且控制动作已退出时属于人工新请求，不能被旧 DT121 门禁拦截。
+        if (!isResetFailedRetry && IsResetRequestInProgress())
         {
             _logger.LogWarning("[动作仲裁][忽略] 复位正在执行，重复复位请求未写入 DT121，UiState={UiState}, Action={Action}",
                 UiState, _currentControlAction);
             return;
         }
 
-        if (UiState == TestUIState.ResetFailed)
-        {
-            _resetSignalHandled = false;
-            _logger.LogWarning("[复位重试] 当前为 ResetFailed，已重新武装复位请求处理标志");
-        }
-
         SuspendPlcPolling();
         // 写请求尚未被 PLC 轮询消费前先占住复位入口，避免连续点击重复写入 DT121=1。
         _isResetting = true;
+        Interlocked.Exchange(ref _resetFailureNotificationShown, 0);
         try
         {
+            if (isResetFailedRetry)
+            {
+                _logger.LogWarning("[复位重试] 收到新的鼠标复位请求，先处理旧 DT121");
+                var clearOldRequestResult = await _plcDevice.ClearResetRequestAsync(CancellationToken.None).ConfigureAwait(false);
+                if (!clearOldRequestResult.IsSuccess)
+                {
+                    await EnterResetFailedAsync(
+                        "复位入口暂时无法重新武装，请检查 PLC 通信后重试。",
+                        $"鼠标复位前清理旧 DT121 失败：{clearOldRequestResult.Message}").ConfigureAwait(false);
+                    return;
+                }
+
+                _resetRearmPending = false;
+                _resetSignalHandled = false;
+                _lastResetRearmAttemptUtc = DateTime.MinValue;
+            }
+
             var result = await _plcDevice.RequestResetAsync(CancellationToken.None).ConfigureAwait(false);
 
             if (!HandleControlSignalWriteResult(result, "复位", "DT121", "复位"))
             {
-                _isResetting = false;
+                await EnterResetFailedAsync(
+                    "复位请求发送失败，请检查 PLC 通信后重试。",
+                    $"写入 DT121=1 失败：{result.Message}").ConfigureAwait(false);
                 return;
             }
 
             _logger.LogInformation("[复位按钮][请求] 已写入 DT121=1，等待 PLC 轮询统一消费");
         }
-        catch
+        catch (Exception ex)
         {
-            _isResetting = false;
-            throw;
+            await EnterResetFailedAsync(
+                "复位请求发送异常，请检查 PLC 通信后重试。",
+                "鼠标复位请求写入过程发生异常",
+                ex).ConfigureAwait(false);
         }
         finally
         {
@@ -3960,6 +4108,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         IsOperatorEditable = false;
         IsInputEnabled = true;
         UiState = TestUIState.Ready;
+        _resetRearmPending = false;
+        Interlocked.Exchange(ref _resetRearmInProgress, 0);
+        _lastResetRearmAttemptUtc = DateTime.MinValue;
+        _resetSignalHandled = false;
+        _isResetting = false;
+        Interlocked.Exchange(ref _resetFailureNotificationShown, 0);
 
         if (hasOperator)
         {
@@ -4012,6 +4166,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (Volatile.Read(ref _plcPollingSuspendCount) != 0)
             _logger.LogError("[PLC轮询][生命周期] 离开运行页时暂停计数为 {SuspendCount}，已重置", _plcPollingSuspendCount);
         Interlocked.Exchange(ref _plcPollingSuspendCount, 0);
+        _resetRearmPending = false;
+        Interlocked.Exchange(ref _resetRearmInProgress, 0);
+        _lastResetRearmAttemptUtc = DateTime.MinValue;
         UnsubscribeFromHardwareEvents();
 
         // ★ 终了流程已提前完成 PLC 清理，此处只做非 PLC 的页面离开收尾
@@ -4201,6 +4358,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (Volatile.Read(ref _plcPollingSuspendCount) != 0)
             _logger.LogError("[PLC轮询][生命周期] Dispose 时暂停计数为 {SuspendCount}，已重置", _plcPollingSuspendCount);
         Interlocked.Exchange(ref _plcPollingSuspendCount, 0);
+        _resetRearmPending = false;
+        Interlocked.Exchange(ref _resetRearmInProgress, 0);
+        _lastResetRearmAttemptUtc = DateTime.MinValue;
         UnsubscribeFromHardwareEvents();
         _controlActionLock.Dispose();
 
