@@ -201,6 +201,15 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT307=0"));
     }
 
+    /// <summary>Fake PLC 写入 DT308，保留内部寄存器值供 U1 验收。</summary>
+    public Task<PlcOperationResult> WriteWorkstationAsync(string workstation, CancellationToken ct = default)
+    {
+        var value = WorkstationConstants.ToPlcValue(workstation);
+        WriteRegister(PlcAddressMap.WorkstationSelection, value);
+        _logger.LogWarning("[Fake][PLC][审计] 写入工位 DT308={Value} ({Workstation})", value, workstation);
+        return Task.FromResult(PlcOperationResult.Success($"Fake DT308={value}"));
+    }
+
     /// <summary>
     /// 写入当前测试点的两个引脚到 Fake PLC（最新地址表：每引脚独立选择区）。
     /// 模拟写入引脚选择区，200ms 后置 DT302=1 表示继电器动作完成。

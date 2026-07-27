@@ -1,0 +1,92 @@
+<Window x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.SeriesMachineSelectionDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="系列—机种与工位选择"
+        Width="800" Height="600"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#F4F6F8"
+        FontFamily="Microsoft YaHei UI">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#2C3E50" CornerRadius="8" Padding="18,12" Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="系列—机种与工位选择" FontSize="22" FontWeight="Bold" Foreground="White"/>
+                <TextBlock Text="请选择本次作业的参照信息" FontSize="13" Foreground="#D5DBDB" Margin="0,4,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Background="White" BorderBrush="#CED4DA" BorderThickness="1" Padding="10">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="系列维护" FontSize="16" FontWeight="Bold" Foreground="#2C3E50"/>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding SeriesItems}" SelectedItem="{Binding SelectedSeries}" DisplayMemberPath="Name" Margin="0,8"/>
+                    <StackPanel Grid.Row="2">
+                        <ComboBox IsEditable="True" Text="{Binding SeriesNameInput, UpdateSourceTrigger=PropertyChanged}" Height="32" MaxDropDownHeight="180"/>
+                        <UniformGrid Rows="1" Columns="3" Margin="0,8,0,0">
+                            <Button Content="新增" Command="{Binding AddSeriesCommand}" Background="#3498DB" Foreground="White" Margin="2"/>
+                            <Button Content="改名" Command="{Binding RenameSeriesCommand}" Background="#F39C12" Foreground="White" Margin="2"/>
+                            <Button Content="删除" Command="{Binding DeleteSeriesCommand}" Background="#E74C3C" Foreground="White" Margin="2"/>
+                        </UniformGrid>
+                    </StackPanel>
+                </Grid>
+            </Border>
+            <Border Grid.Column="2" Background="White" BorderBrush="#CED4DA" BorderThickness="1" Padding="10">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="机种维护" FontSize="16" FontWeight="Bold" Foreground="#2C3E50"/>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding MachineItems}" SelectedItem="{Binding SelectedMachine}" DisplayMemberPath="Name" Margin="0,8"/>
+                    <StackPanel Grid.Row="2">
+                        <TextBox Text="{Binding MachineNameInput, UpdateSourceTrigger=PropertyChanged}" Height="32"/>
+                        <UniformGrid Rows="1" Columns="3" Margin="0,8,0,0">
+                            <Button Content="新增" Command="{Binding AddMachineCommand}" Background="#3498DB" Foreground="White" Margin="2"/>
+                            <Button Content="改名" Command="{Binding RenameMachineCommand}" Background="#F39C12" Foreground="White" Margin="2"/>
+                            <Button Content="删除" Command="{Binding DeleteMachineCommand}" Background="#E74C3C" Foreground="White" Margin="2"/>
+                        </UniformGrid>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <GroupBox Grid.Row="2" Header="工位" Margin="0,12,0,0" Padding="8">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton Content="左工位" IsChecked="{Binding IsLeftWorkstation, Mode=OneWay}" Command="{Binding SelectLeftWorkstationCommand}" FontSize="17" Margin="8,0,30,0"/>
+                <RadioButton Content="右工位" IsChecked="{Binding IsRightWorkstation, Mode=OneWay}" Command="{Binding SelectRightWorkstationCommand}" FontSize="17"/>
+            </StackPanel>
+        </GroupBox>
+
+        <Border Grid.Row="3"
+                Background="#E8F8F5"
+                BorderBrush="#27AE60"
+                BorderThickness="2"
+                CornerRadius="5"
+                Padding="10"
+                Margin="0,12,0,0">
+            <TextBlock FontWeight="Bold"
+                       Foreground="#1E8449"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding SelectionPreviewText, Mode=OneWay}">
+                <Run Text="当前选择："/>
+                <Run Text="{Binding SelectionPreviewText, Mode=OneWay}"/>
+            </TextBlock>
+        </Border>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="取消" Command="{Binding CancelCommand}" Width="100" Height="36" Margin="0,0,8,0"/>
+            <Button Content="确定" Command="{Binding ConfirmSelectionCommand}" Width="100" Height="36" Background="#27AE60" Foreground="White" IsDefault="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

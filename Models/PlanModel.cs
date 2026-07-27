@@ -13,16 +13,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models
     /// <summary>
     /// 方案数据模型
     /// 对应一个独立的检测方案文件（一个方案一个JSON文件）
-    /// 新结构：机种→方案 两级，去除系列概念
+    /// 新结构：系列→机种→方案 三级目录；系列和工位只描述方案归属，不参与运行页方案匹配。
     /// </summary>
     public class PlanModel
     {
+        /// <summary>方案所属系列。</summary>
+        [JsonPropertyName("Series")]
+        public string Series { get; set; } = string.Empty;
+
         /// <summary>
         /// 机种名称（如 T998248391、998245664NNHB）
         /// 对应文件夹名，来源于扫描枪扫码或手动输入
         /// </summary>
         [JsonPropertyName("MachineType")]
         public string MachineType { get; set; } = string.Empty;
+
+        /// <summary>方案适用工位，只允许左工位或右工位。</summary>
+        [JsonPropertyName("Workstation")]
+        public string Workstation { get; set; } = string.Empty;
 
         /// <summary>
         /// 方案名称（如 "方案A"、"测试方案1"）

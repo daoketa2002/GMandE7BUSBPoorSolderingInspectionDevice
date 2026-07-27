@@ -23,7 +23,7 @@ public static class CsvRecordFormatter
         ArgumentNullException.ThrowIfNull(record);
 
         var headerBuilder = new StringBuilder();
-        headerBuilder.Append("序号,机种名称,序列号,方案名称,方案版本,检查者,综合判定");
+        headerBuilder.Append("序号,系列,机种名称,序列号,方案名称,方案版本,检查者,综合判定");
 
         if (record.PinResults != null)
         {
@@ -51,9 +51,9 @@ public static class CsvRecordFormatter
         var dataBuilder = new StringBuilder();
         dataBuilder.Append(rowIndex);
         dataBuilder.Append(',');
-        dataBuilder.Append(EscapeField(!string.IsNullOrWhiteSpace(record.MachineType)
-            ? record.MachineType
-            : record.Series));
+        dataBuilder.Append(EscapeField(record.Series));
+        dataBuilder.Append(',');
+        dataBuilder.Append(EscapeField(record.MachineType));
         dataBuilder.Append(',');
         dataBuilder.Append(EscapeField(record.SerialNumber));
         dataBuilder.Append(',');

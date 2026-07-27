@@ -112,37 +112,37 @@
         </Border>
 
         <!-- ===== 基本信息区 ===== -->
-        <!-- 改动说明：标签从"★ 系列"改为"★ 机种"，从"机种名称"改为"方案名称" -->
         <Border Grid.Row="1" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12" Margin="0,0,0,12">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="180"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="200"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="240"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="240"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 机种输入（必填，带★标记） -->
-                <TextBlock Grid.Column="0" Text="★ 机种：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding MachineType, UpdateSourceTrigger=PropertyChanged}"
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="★ 系列：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox Grid.Row="0" Grid.Column="1" IsEditable="True" Text="{Binding Series, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding SeriesOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="★ 机种：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <ComboBox Grid.Row="0" Grid.Column="3" IsEditable="True" Text="{Binding MachineType, UpdateSourceTrigger=PropertyChanged}"
                           ItemsSource="{Binding MachineTypeOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <TextBlock Grid.Row="0" Grid.Column="4" Text="创建：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="12,0,4,0"/>
+                <TextBlock Grid.Row="0" Grid.Column="5" Text="{Binding CreatedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Width="100"/>
+                <TextBlock Grid.Row="0" Grid.Column="6" Text="修改：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                <TextBlock Grid.Row="0" Grid.Column="7" Text="{Binding LastModifiedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center"/>
 
-                <!-- 方案名称（必填，带★标记） -->
-                <TextBlock Grid.Column="2" Text="★ 方案名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <TextBox Grid.Column="3" Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
-                         FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA"
-                         MaxLength="50"/>
-
-                <!-- 时间戳信息（只读展示） -->
-                <TextBlock Grid.Column="4" Text="创建：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="12,0,4,0"/>
-                <TextBlock Grid.Column="5" Text="{Binding CreatedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Width="150"/>
-
-                <TextBlock Grid.Column="6" Text="修改：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                <TextBlock Grid.Column="7" Text="{Binding LastModifiedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="★ 工位：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,10,6,0"/>
+                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                    <RadioButton Content="左工位" IsChecked="{Binding IsLeftWorkstation, Mode=OneWay}" Command="{Binding SelectLeftWorkstationCommand}" FontSize="15" Margin="0,0,16,0"/>
+                    <RadioButton Content="右工位" IsChecked="{Binding IsRightWorkstation, Mode=OneWay}" Command="{Binding SelectRightWorkstationCommand}" FontSize="15"/>
+                </StackPanel>
+                <TextBlock Grid.Row="1" Grid.Column="2" Text="★ 方案名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,10,6,0"/>
+                <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
+                         FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA" Margin="0,10,0,0" MaxLength="50"/>
             </Grid>
         </Border>
 

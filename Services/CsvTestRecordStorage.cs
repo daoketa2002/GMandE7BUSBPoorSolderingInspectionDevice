@@ -42,7 +42,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         private static readonly HashSet<string> FixedColumnNames = new(StringComparer.OrdinalIgnoreCase)
         {
-            "序号", "机种名称", "序列号", "方案名称", "检查者", "综合判定", "日期", "时间", "方案版本"
+            "序号", "系列", "机种名称", "序列号", "方案名称", "检查者", "综合判定", "日期", "时间", "方案版本"
         };
 
         public CsvTestRecordStorage(

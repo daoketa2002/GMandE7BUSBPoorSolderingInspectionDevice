@@ -127,30 +127,31 @@
         <Border Grid.Row="1" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12" Margin="0,0,0,8">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="200"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="200"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="200"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="180"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="180"/>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 机种选择（ComboBox可编辑，支持手动输入和下拉选择） -->
-                <TextBlock Grid.Column="0" Text="机种：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding SelectedMachineType, UpdateSourceTrigger=PropertyChanged}"
+                <TextBlock Grid.Column="0" Text="系列：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding SelectedSeries, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding SeriesOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <TextBlock Grid.Column="2" Text="机种：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <ComboBox Grid.Column="3" IsEditable="True" Text="{Binding SelectedMachineType, UpdateSourceTrigger=PropertyChanged}"
                           ItemsSource="{Binding MachineTypeOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
-
-                <!-- 方案选择（ComboBox可编辑，与机种联动） -->
-                <TextBlock Grid.Column="2" Text="方案名：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <ComboBox Grid.Column="3" IsEditable="True" Text="{Binding SelectedPlanName, UpdateSourceTrigger=PropertyChanged}"
+                <TextBlock Grid.Column="4" Text="工位：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <ComboBox Grid.Column="5" Text="{Binding SelectedWorkstation, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding WorkstationOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <TextBlock Grid.Column="6" Text="方案名：" FontSize="15" FontWeight="Bold" Foreground="#495057" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                <ComboBox Grid.Column="7" IsEditable="True" Text="{Binding SelectedPlanName, UpdateSourceTrigger=PropertyChanged}"
                           ItemsSource="{Binding PlanNameOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
-
-                <Button Grid.Column="4" Style="{StaticResource ActionButtonStyle}" Width="80" Background="#3498DB"
-                        Content="🔍 检索" Command="{Binding SearchCommand}" Margin="12,0,6,0" HorizontalAlignment="Left"/>
-                <Button Grid.Column="5" Style="{StaticResource ActionButtonStyle}" Width="80" Background="#95A5A6"
-                        Content="清空" Command="{Binding ClearFilterCommand}" HorizontalAlignment="Left"/>
+                <StackPanel Grid.Column="8" Orientation="Horizontal" Margin="12,0,0,0">
+                    <Button Style="{StaticResource ActionButtonStyle}" Width="80" Background="#3498DB"
+                            Content="🔍 检索" Command="{Binding SearchCommand}" Margin="2,0" HorizontalAlignment="Left"/>
+                    <Button Style="{StaticResource ActionButtonStyle}" Width="80" Background="#95A5A6"
+                            Content="清空" Command="{Binding ClearFilterCommand}" Margin="2,0" HorizontalAlignment="Left"/>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -221,11 +222,19 @@
         </Border>
 
         <!-- ===== 方案列表表格 ===== -->
-        <!-- 改动说明：表头从"系列"改为"机种" -->
         <DataGrid Grid.Row="3" ItemsSource="{Binding FilteredPlans}" SelectedItem="{Binding SelectedPlan}"
                   Style="{StaticResource PlanDataGridStyle}" ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
                   Margin="0,0,0,12">
             <DataGrid.Columns>
+                <!-- 系列列 -->
+                <DataGridTextColumn Header="系列" Binding="{Binding Series}" Width="120">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
                 <!-- 机种列 -->
                 <DataGridTextColumn Header="机种" Binding="{Binding MachineType}" Width="180">
                     <DataGridTextColumn.ElementStyle>
@@ -234,6 +243,14 @@
                             <Setter Property="VerticalAlignment" Value="Center"/>
                             <Setter Property="FontSize" Value="15"/>
                             <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <DataGridTextColumn Header="工位" Binding="{Binding Workstation}" Width="100">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/>
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>

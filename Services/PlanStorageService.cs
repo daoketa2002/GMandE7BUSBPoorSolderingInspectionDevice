@@ -14,8 +14,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 基于JSON文件的方案存储服务
-    /// 新结构：机种→方案 两级
-    /// 目录结构：{方案根目录}/{机种文件夹}/{方案名}.json
+    /// 新结构：系列→机种→方案 三级
+    /// 目录结构：{方案根目录}/{系列}/{机种文件夹}/{方案名}.json
     /// 一个方案一个独立文件，实现数据隔离
     /// </summary>
     public class PlanStorageService : IPlanStorageService
@@ -116,32 +116,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <summary>
-        /// 获取指定机种的文件夹路径
-        /// 格式：{方案根目录}/{安全化后的机种名}/
-        /// </summary>
-        /// <param name="machineType">机种名称</param>
-        /// <returns>机种文件夹的完整路径</returns>
-        private string GetMachineTypeFolderPath(string machineType)
-        {
-            var safeMachineType = SanitizeFileName(machineType);
-            var folderPath = Path.Combine(_planRootFolder, safeMachineType);
-            return folderPath;
-        }
+        /// <summary>获取系列目录路径。</summary>
+        private string GetSeriesFolderPath(string series)
+            => Path.Combine(_planRootFolder, SanitizeFileName(series));
 
-        /// <summary>
-        /// 获取指定方案的JSON文件路径
-        /// 格式：{机种文件夹}/{安全化后的方案名}.json
-        /// </summary>
-        /// <param name="machineType">机种名称</param>
-        /// <param name="planName">方案名称</param>
-        /// <returns>方案JSON文件的完整路径</returns>
-        private string GetPlanFilePath(string machineType, string planName)
-        {
-            var folderPath = GetMachineTypeFolderPath(machineType);
-            var safePlanName = SanitizeFileName(planName);
-            var filePath = Path.Combine(folderPath, $"{safePlanName}.json");
-            return filePath;
-        }
+        /// <summary>获取系列下的机种目录路径。</summary>
+        private string GetMachineTypeFolderPath(string series, string machineType)
+            => Path.Combine(GetSeriesFolderPath(series), SanitizeFileName(machineType));
+
+        /// <summary>获取三级目录下的方案 JSON 路径。</summary>
+        private string GetPlanFilePath(string series, string machineType, string planName)
+            => Path.Combine(GetMachineTypeFolderPath(series, machineType), $"{SanitizeFileName(planName)}.json");
 
         /// <summary>
         /// 从JSON文件加载单个方案
@@ -149,7 +134,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         /// <param name="filePath">JSON文件路径</param>
         /// <returns>方案对象，如果文件不存在或解析失败返回null</returns>
-        private PlanModel? LoadPlanFromFile(string filePath)
+        private PlanModel? LoadPlanFromFile(string filePath, string series, string machineType)
         {
             try
             {
@@ -170,9 +155,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                 if (plan != null)
                 {
-                    // 从文件路径反推机种名（兼容文件移动后的数据一致性）
-                    var folderName = Path.GetFileName(Path.GetDirectoryName(filePath));
-                    plan.MachineType = folderName ?? plan.MachineType;
+                    // 目录是方案身份的权威来源，避免 JSON 内旧值与实际路径不一致。
+                    plan.Series = series;
+                    plan.MachineType = machineType;
 
                     // 从文件名反推方案名（去除.json扩展名）
                     var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(filePath);
@@ -259,13 +244,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <summary>
-        /// 加载指定机种文件夹下的所有方案
+        /// 加载指定系列下的机种文件夹中的所有方案
         /// </summary>
+        /// <param name="series">系列名称</param>
         /// <param name="machineType">机种名称</param>
         /// <returns>该机种下的所有方案列表</returns>
-        private List<PlanModel> LoadPlansFromMachineTypeFolder(string machineType)
+        private List<PlanModel> LoadPlansFromMachineTypeFolder(string series, string machineType)
         {
-            var folderPath = GetMachineTypeFolderPath(machineType);
+            var folderPath = GetMachineTypeFolderPath(series, machineType);
             var plans = new List<PlanModel>();
 
             if (!Directory.Exists(folderPath))
@@ -278,7 +264,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                 foreach (var file in jsonFiles)
                 {
-                    var plan = LoadPlanFromFile(file);
+                    var plan = LoadPlanFromFile(file, series, machineType);
                     if (plan != null)
                     {
                         plans.Add(plan);
@@ -299,6 +285,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         #region IPlanStorageService 实现
 
+        /// <summary>在已持有文件锁时加载全部方案，供唯一性校验复用。</summary>
+        private List<PlanModel> LoadAllPlansUnsafe()
+        {
+            var allPlans = new List<PlanModel>();
+            if (!Directory.Exists(_planRootFolder))
+                return allPlans;
+
+            foreach (var seriesDir in Directory.GetDirectories(_planRootFolder))
+            {
+                var series = Path.GetFileName(seriesDir);
+                foreach (var machineDir in Directory.GetDirectories(seriesDir))
+                {
+                    var machineType = Path.GetFileName(machineDir);
+                    allPlans.AddRange(LoadPlansFromMachineTypeFolder(series, machineType));
+                }
+            }
+
+            return allPlans;
+        }
+
         /// <inheritdoc/>
         public async Task<List<PlanModel>> LoadAllPlansAsync()
         {
@@ -315,18 +321,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         return allPlans;
                     }
 
-                    // 遍历所有机种子文件夹
-                    var machineTypeDirs = Directory.GetDirectories(_planRootFolder);
-
-                    foreach (var dir in machineTypeDirs)
+                    // 严格遍历 系列/机种/*.json，不扫描旧的两级目录。
+                    var seriesDirs = Directory.GetDirectories(_planRootFolder);
+                    foreach (var seriesDir in seriesDirs)
                     {
-                        var machineType = Path.GetFileName(dir);
-                        var plans = LoadPlansFromMachineTypeFolder(machineType);
-                        allPlans.AddRange(plans);
+                        var series = Path.GetFileName(seriesDir);
+                        foreach (var machineDir in Directory.GetDirectories(seriesDir))
+                        {
+                            var machineType = Path.GetFileName(machineDir);
+                            allPlans.AddRange(LoadPlansFromMachineTypeFolder(series, machineType));
+                        }
                     }
 
-                    _logger.LogInformation("成功加载全部方案: 共 {PlanCount} 个方案，{MachineTypeCount} 个机种",
-                        allPlans.Count, machineTypeDirs.Length);
+                    _logger.LogInformation("成功加载全部方案: 共 {PlanCount} 个方案，{SeriesCount} 个系列",
+                        allPlans.Count, seriesDirs.Length);
 
                     return allPlans;
                 }
@@ -334,12 +342,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         }
 
         /// <inheritdoc/>
-        public async Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null)
+        public async Task SavePlanAsync(
+            PlanModel plan,
+            string? originalSeries = null,
+            string? originalMachineType = null,
+            string? originalPlanName = null)
         {
             ArgumentNullException.ThrowIfNull(plan);
 
+            plan.Series = plan.Series?.Trim() ?? string.Empty;
             plan.MachineType = plan.MachineType?.Trim() ?? string.Empty;
             plan.PlanName = plan.PlanName?.Trim() ?? string.Empty;
+
+            var seriesError = NameValidationHelper.ValidateSeriesName(plan.Series);
+            if (seriesError != null)
+            {
+                _logger.LogWarning("[安全审计] 拒绝保存非法系列名称 Series={Series} Error={Error}", plan.Series, seriesError);
+                throw new ArgumentException(seriesError, nameof(plan.Series));
+            }
 
             var machineTypeError = NameValidationHelper.ValidateMachineType(plan.MachineType);
             if (machineTypeError != null)
@@ -354,6 +374,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 _logger.LogWarning("[安全审计] 拒绝保存非法方案名称 PlanName={PlanName} Error={Error}", plan.PlanName, planNameError);
                 throw new ArgumentException(planNameError, nameof(plan.PlanName));
             }
+
+            if (!WorkstationConstants.IsValid(plan.Workstation))
+                throw new ArgumentException("工位必须是左工位或右工位。", nameof(plan.Workstation));
 
             await Task.Run(() =>
             {
@@ -381,6 +404,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                     plan.Version = Math.Max(1, plan.Version);
 
+                    // 运行页按 MachineType + PlanName 匹配，因此该身份必须跨系列唯一。
+                    var duplicate = LoadAllPlansUnsafe().FirstOrDefault(existing =>
+                        string.Equals(existing.MachineType, plan.MachineType, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(existing.PlanName, plan.PlanName, StringComparison.OrdinalIgnoreCase)
+                        && !(string.Equals(existing.Series, originalSeries, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(existing.MachineType, originalMachineType, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(existing.PlanName, originalPlanName, StringComparison.OrdinalIgnoreCase)));
+                    if (duplicate != null)
+                    {
+                        throw new InvalidOperationException(
+                            $"方案身份重复：机种“{plan.MachineType}”下已存在方案“{plan.PlanName}”（系列：{duplicate.Series}）。");
+                    }
+
                     // ================================================================
                     // ★ 核心修复：判断是否需要删除旧文件
                     // 判定条件：机种名称变更 OR 方案名称变更（任意一个变更都视为路径变化）
@@ -391,18 +427,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     //   4. 仅改机种   → machineTypeChanged=true，删除旧文件，保存新文件（移动）
                     //   5. 同时改两者 → 两者都变更，删除旧文件，保存新文件
                     // ================================================================
+                    bool seriesChanged = !string.IsNullOrWhiteSpace(originalSeries)
+                        && !string.Equals(originalSeries, plan.Series, StringComparison.OrdinalIgnoreCase);
                     bool machineTypeChanged = !string.IsNullOrWhiteSpace(originalMachineType)
                         && !string.Equals(originalMachineType, plan.MachineType, StringComparison.OrdinalIgnoreCase);
 
                     bool planNameChanged = !string.IsNullOrWhiteSpace(originalPlanName)
                         && !string.Equals(originalPlanName, plan.PlanName, StringComparison.OrdinalIgnoreCase);
 
-                    if (machineTypeChanged || planNameChanged)
+                    if (seriesChanged || machineTypeChanged || planNameChanged)
                     {
                         // 使用旧机种名+旧方案名定位原文件
                         var oldMachineType = originalMachineType!;
                         var oldPlanName = originalPlanName!;
-                        var oldFilePath = GetPlanFilePath(oldMachineType, oldPlanName);
+                        var oldFilePath = GetPlanFilePath(originalSeries!, oldMachineType, oldPlanName);
 
                         if (File.Exists(oldFilePath))
                         {
@@ -411,17 +449,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         }
 
                         // 清理旧机种文件夹（如果为空）
-                        CleanupEmptyMachineTypeFolder(oldMachineType);
+                        CleanupEmptyMachineTypeFolder(originalSeries!, oldMachineType);
                     }
 
                     // ================================================================
                     // 保存到新路径（覆盖或新建）
                     // ================================================================
-                    var newFilePath = GetPlanFilePath(plan.MachineType, plan.PlanName);
+                    var newFilePath = GetPlanFilePath(plan.Series, plan.MachineType, plan.PlanName);
                     SavePlanToFile(plan, newFilePath);
 
-                    _logger.LogInformation("方案保存成功: {MachineType}/{PlanName}.json",
-                        SanitizeFileName(plan.MachineType), SanitizeFileName(plan.PlanName));
+                    _logger.LogInformation("方案保存成功: {Series}/{MachineType}/{PlanName}.json",
+                        SanitizeFileName(plan.Series), SanitizeFileName(plan.MachineType), SanitizeFileName(plan.PlanName));
                 }
             });
         }
@@ -431,9 +469,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// 当文件夹下没有任何文件时，自动删除该空文件夹
         /// </summary>
         /// <param name="machineType">机种名称</param>
-        private void CleanupEmptyMachineTypeFolder(string machineType)
+        private void CleanupEmptyMachineTypeFolder(string series, string machineType)
         {
-            var folderPath = GetMachineTypeFolderPath(machineType);
+            var folderPath = GetMachineTypeFolderPath(series, machineType);
 
             if (!Directory.Exists(folderPath))
                 return;
@@ -446,13 +484,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 Directory.Delete(folderPath);
                 _logger.LogInformation("已删除空机种文件夹: {FolderPath}", folderPath);
+
+                var seriesFolder = GetSeriesFolderPath(series);
+                if (Directory.Exists(seriesFolder)
+                    && Directory.GetFiles(seriesFolder).Length == 0
+                    && Directory.GetDirectories(seriesFolder).Length == 0)
+                {
+                    Directory.Delete(seriesFolder);
+                    _logger.LogInformation("已删除空系列文件夹: {FolderPath}", seriesFolder);
+                }
             }
         }
 
         /// <inheritdoc/>
-        public async Task DeletePlanAsync(string machineType, string planName)
+        public async Task DeletePlanAsync(string series, string machineType, string planName)
         {
             // 参数校验
+            if (string.IsNullOrWhiteSpace(series))
+                throw new ArgumentException("系列名称不能为空", nameof(series));
             if (string.IsNullOrWhiteSpace(machineType))
                 throw new ArgumentException("机种名称不能为空", nameof(machineType));
             if (string.IsNullOrWhiteSpace(planName))
@@ -462,7 +511,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             {
                 lock (_fileLock)
                 {
-                    var filePath = GetPlanFilePath(machineType, planName);
+                    var filePath = GetPlanFilePath(series, machineType, planName);
 
                     if (File.Exists(filePath))
                     {
@@ -470,13 +519,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                         _logger.LogInformation("方案已删除: {FilePath}", filePath);
 
                         // 如果机种文件夹为空，删除空文件夹
-                        var folderPath = GetMachineTypeFolderPath(machineType);
+                        var folderPath = GetMachineTypeFolderPath(series, machineType);
                         if (Directory.Exists(folderPath) &&
                             Directory.GetFiles(folderPath).Length == 0 &&
                             Directory.GetDirectories(folderPath).Length == 0)
                         {
                             Directory.Delete(folderPath);
                             _logger.LogInformation("已删除空机种文件夹: {FolderPath}", folderPath);
+
+                            var seriesFolder = GetSeriesFolderPath(series);
+                            if (Directory.Exists(seriesFolder)
+                                && Directory.GetFiles(seriesFolder).Length == 0
+                                && Directory.GetDirectories(seriesFolder).Length == 0)
+                            {
+                                Directory.Delete(seriesFolder);
+                                _logger.LogInformation("已删除空系列文件夹: {FolderPath}", seriesFolder);
+                            }
                         }
                     }
                     else
@@ -495,24 +553,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 lock (_fileLock)
                 {
                     if (!Directory.Exists(_planRootFolder))
-                        return new List<string>(DefaultMachineTypes);
+                        return new List<string>();
 
-                    // 获取所有子文件夹名作为机种名称
-                    var machineTypes = Directory.GetDirectories(_planRootFolder)
+                    // 机种来自全部系列目录，大小写不敏感去重。
+                    var result = Directory.GetDirectories(_planRootFolder)
+                        .SelectMany(seriesDir => Directory.GetDirectories(seriesDir))
                         .Select(dir => Path.GetFileName(dir))
                         .Where(name => !string.IsNullOrWhiteSpace(name))
-                        .ToList()!;
-
-                    // 合并默认机种（去重）
-                    foreach (var defaultType in DefaultMachineTypes)
-                    {
-                        if (!machineTypes.Any(mt => mt.Equals(defaultType, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            machineTypes.Add(defaultType);
-                        }
-                    }
-
-                    var result = machineTypes.OrderBy(mt => mt).ToList();
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                        .ToList()!
+                        ;
                     _logger.LogDebug("获取所有机种: 共 {Count} 个", result.Count);
                     return result;
                 }
@@ -529,17 +580,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     if (string.IsNullOrWhiteSpace(machineType))
                         return new List<string>();
 
-                    var folderPath = GetMachineTypeFolderPath(machineType);
-
-                    if (!Directory.Exists(folderPath))
-                        return new List<string>();
-
-                    // 获取所有.json文件名（不含扩展名）作为方案名称
-                    var planNames = Directory.GetFiles(folderPath, "*.json", SearchOption.TopDirectoryOnly)
+                    // 在全部系列目录中查找实际机种，避免依赖当前参照系列。
+                    var planNames = Directory.Exists(_planRootFolder)
+                        ? Directory.GetDirectories(_planRootFolder)
+                        .SelectMany(seriesDir => Directory.GetDirectories(seriesDir)
+                            .Where(machineDir => string.Equals(
+                                Path.GetFileName(machineDir), machineType.Trim(), StringComparison.OrdinalIgnoreCase)))
+                        .SelectMany(machineDir => Directory.GetFiles(machineDir, "*.json", SearchOption.TopDirectoryOnly))
                         .Select(file => Path.GetFileNameWithoutExtension(file))
                         .Where(name => !string.IsNullOrWhiteSpace(name))
-                        .OrderBy(name => name)
-                        .ToList()!;
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                        .ToList()!
+                        : new List<string>();
 
                     _logger.LogDebug("获取机种 {MachineType} 的方案列表: 共 {Count} 个", machineType, planNames.Count);
                     return planNames;

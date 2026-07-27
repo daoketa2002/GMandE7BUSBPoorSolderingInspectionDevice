@@ -44,9 +44,6 @@ public static class InspectionStartValidator
             or TestUIState.Paused
             or TestUIState.AwaitingReset
             or TestUIState.Resetting
-            or TestUIState.CompletedPass
-            or TestUIState.CompletedFail
-            or TestUIState.SingleItemNgStopped
             or TestUIState.Error)
         {
             return Fail("当前状态需要先复位，无法启动检测");

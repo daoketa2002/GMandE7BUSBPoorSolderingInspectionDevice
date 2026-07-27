@@ -179,6 +179,9 @@ public interface IPlcDevice : ICommunicationDevice
     /// <summary>清除检测流程结束通知，写 DT307=0。</summary>
     Task<PlcOperationResult> ClearInspectionEndedAsync(CancellationToken ct = default);
 
+    /// <summary>写入当前参照工位到 DT308，写入应答成功即视为成功。</summary>
+    Task<PlcOperationResult> WriteWorkstationAsync(string workstation, CancellationToken ct = default);
+
     /// <summary>
     /// 向上位机异常状态写入 PLC。
     /// 通信失败、万用表无响应等异常时调用。

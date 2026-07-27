@@ -239,6 +239,13 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     public Task<PlcOperationResult> ClearInspectionEndedAsync(CancellationToken ct = default)
         => WriteSignalAsync("DT307(本次检测流程结束)", PlcAddressMap.InspectionEndedSignal, 0, ct);
 
+    /// <summary>写入 DT308 工位选择，不加入任何检测流程清零范围。</summary>
+    public Task<PlcOperationResult> WriteWorkstationAsync(string workstation, CancellationToken ct = default)
+    {
+        var value = WorkstationConstants.ToPlcValue(workstation);
+        return WriteSignalAsync($"DT308(工位={workstation})", PlcAddressMap.WorkstationSelection, value, ct);
+    }
+
     /// <summary>
     /// 写入当前测试点的两个引脚到 PLC（最新地址表：每引脚独立选择区）。
     /// 每个引脚写入连续 2 个寄存器：Select=1, Polarity=极性值。

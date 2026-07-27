@@ -6,8 +6,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
     /// <summary>
     /// 方案持久化存储服务接口
-    /// 新结构：机种→方案 两级，一个方案一个独立JSON文件
-    /// 目录：{方案根目录}/{机种}/{方案名}.json
+    /// 新结构：系列→机种→方案 三级，一个方案一个独立JSON文件
+    /// 目录：{方案根目录}/{系列}/{机种}/{方案名}.json
     /// </summary>
     public interface IPlanStorageService
     {
@@ -21,16 +21,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// 保存方案（新增或更新）
         /// </summary>
         /// <param name="plan">方案对象</param>
-        /// <param name="originalMachineType">编辑模式下的原机种名（新增时为null），用于处理机种变更时的文件移动/删除</param>
-        /// <param name="originalPlanName">编辑模式下的原方案名（新增时为null），用于处理方案名变更时的文件重命名</param>
-        Task SavePlanAsync(PlanModel plan, string? originalMachineType = null, string? originalPlanName = null);
+        /// <param name="originalSeries">编辑模式下的原系列名。</param>
+        /// <param name="originalMachineType">编辑模式下的原机种名。</param>
+        /// <param name="originalPlanName">编辑模式下的原方案名。</param>
+        Task SavePlanAsync(PlanModel plan, string? originalSeries = null, string? originalMachineType = null, string? originalPlanName = null);
 
         /// <summary>
         /// 删除方案
         /// </summary>
+        /// <param name="series">系列名称</param>
         /// <param name="machineType">机种名称</param>
         /// <param name="planName">方案名称</param>
-        Task DeletePlanAsync(string machineType, string planName);
+        Task DeletePlanAsync(string series, string machineType, string planName);
 
         /// <summary>
         /// 获取所有机种名称（去重，来自文件夹名）

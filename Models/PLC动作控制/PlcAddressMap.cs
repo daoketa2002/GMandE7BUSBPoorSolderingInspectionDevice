@@ -55,6 +55,9 @@ public sealed class PlcAddressMap
     /// </summary>
     public const ushort InspectionEndedSignal = 307;
 
+    /// <summary>DT308：当前参照工位（左工位=1，右工位=2）。</summary>
+    public const ushort WorkstationSelection = 308;
+
     // ── 引脚输出范围 ──
 
     /// <summary>引脚输出起始地址 DT130</summary>

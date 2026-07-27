@@ -50,6 +50,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     return;
                 }
 
+                var referenceDialog = _serviceProvider.GetRequiredService<SeriesMachineSelectionDialog>();
+                referenceDialog.Owner = Application.Current.MainWindow;
+                if (referenceDialog.ShowDialog() != true)
+                {
+                    _logger.Warning("[用户操作] 未确认系列—机种—工位参照信息，已取消进入运行界面");
+                    return;
+                }
+
                 _logger.Warning("[用户操作][审计] 进入运行界面前已选择作业员: {Operator}",
                     _operatorStateService.CurrentOperatorName);
                 await _navigationService.NavigateToAsync<TestPageView>("Main", null);

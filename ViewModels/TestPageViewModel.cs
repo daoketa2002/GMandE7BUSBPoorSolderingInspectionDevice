@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Threading;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
@@ -63,6 +64,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private readonly IDialogCoordinator _dialogCoordinator;
     private readonly ILogger<TestPageViewModel> _logger;
     private readonly IPlanStorageService _planStorageService;
+    private readonly IReferenceSelectionStateService _referenceSelectionStateService;
     private readonly IOperatorStateService _operatorStateService;
     private readonly IDeviceSettingsService _settingsService;
     private readonly ITestRecordStorage _testRecordStorage;
@@ -81,6 +83,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     #region 字段
 
     private DispatcherTimer? _clockTimer;
+
+    /// <summary>运行页测试耗时刷新定时器，独立于顶部系统时钟。</summary>
+    private DispatcherTimer? _elapsedTimeTimer;
+
+    /// <summary>界面显示用的本轮检测耗时计时器。</summary>
+    private readonly Stopwatch _displayInspectionStopwatch = new();
 
     /// <summary>PLC 状态轮询定时器（取代旧传感器模拟）</summary>
     private DispatcherTimer? _plcPollingTimer;
@@ -289,6 +297,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         IDeviceSettingsService settingsService,
         IPlanStorageService planStorageService,
+        IReferenceSelectionStateService referenceSelectionStateService,
         IDeviceConnectionManager deviceManager,
         IScannerBarcodeService scannerBarcodeService,
         ITestRecordStorage testRecordStorage,
@@ -304,6 +313,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
         _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
+        _referenceSelectionStateService = referenceSelectionStateService ?? throw new ArgumentNullException(nameof(referenceSelectionStateService));
 
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
@@ -318,6 +328,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         UiState = TestUIState.Ready;
 
         InitializeClock();
+        _referenceSelectionStateService.SelectionChanged += OnReferenceSelectionChanged;
+        ApplyReferenceSelection();
         SubscribeToHardwareEvents();
 
         // 启动时同步设备连接状态
@@ -338,6 +350,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     [ObservableProperty]
     private bool _isSchemeNameInvalid;
+
+    [ObservableProperty]
+    private string _referenceSeries = string.Empty;
+
+    [ObservableProperty]
+    private string _referenceMachineType = string.Empty;
+
+    [ObservableProperty]
+    private string _referenceWorkstation = string.Empty;
+
+    [ObservableProperty]
+    private string _referenceDisplayText = "未选择参照信息";
+
+    [ObservableProperty]
+    private bool _isReferenceMachineMismatch;
 
     partial void OnSchemeNameChanged(string value)
     {
@@ -446,6 +473,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [ObservableProperty]
     private string _sensorStatusText = "待机中";
 
+    [ObservableProperty]
+    private string _elapsedSecondsText = "0.0";
+
     private void InitializeClock()
     {
         _clockTimer = new DispatcherTimer(DispatcherPriority.Render)
@@ -457,6 +487,50 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             CurrentTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         };
         _clockTimer.Start();
+
+        _elapsedTimeTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        _elapsedTimeTimer.Tick += OnElapsedTimeTimerTick;
+    }
+
+    /// <summary>每 100ms 刷新运行页耗时，使用一位小数并保持单位独立显示。</summary>
+    private void OnElapsedTimeTimerTick(object? sender, EventArgs e)
+    {
+        if (_displayInspectionStopwatch.IsRunning)
+        {
+            ElapsedSecondsText = _displayInspectionStopwatch.Elapsed.TotalSeconds
+                .ToString("F1", CultureInfo.InvariantCulture);
+        }
+    }
+
+    /// <summary>在真正开始调用检测引擎前启动本轮界面计时。</summary>
+    private void StartElapsedTimeTimer()
+    {
+        _displayInspectionStopwatch.Restart();
+        ElapsedSecondsText = "0.0";
+        _elapsedTimeTimer?.Start();
+    }
+
+    /// <summary>检测返回后停止界面计时，并以检测引擎统一耗时口径定格。</summary>
+    private void StopElapsedTimeTimer(TimeSpan? finalDuration = null)
+    {
+        _displayInspectionStopwatch.Stop();
+        if (finalDuration.HasValue)
+        {
+            ElapsedSecondsText = finalDuration.Value.TotalSeconds
+                .ToString("F1", CultureInfo.InvariantCulture);
+        }
+        _elapsedTimeTimer?.Stop();
+    }
+
+    /// <summary>完整复位或新一轮有效启动准备完成后归零耗时。</summary>
+    private void ResetElapsedTime()
+    {
+        StopElapsedTimeTimer();
+        _displayInspectionStopwatch.Reset();
+        ElapsedSecondsText = "0.0";
     }
 
     [RelayCommand(CanExecute = nameof(CanReconnectElectricalDevice))]
@@ -600,7 +674,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             TestUIState.Ready => "待机中",
             TestUIState.CanStart => "可启动",
             TestUIState.Testing => "测试中",
-            TestUIState.Paused => "已停止",
+            TestUIState.Paused => "已停止，请复位",
             TestUIState.AwaitingReset => "请复位",
             TestUIState.EmergencyStop => "急停中",
             TestUIState.Resetting => "复位中",
@@ -613,8 +687,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         };
 
         IsInputEnabled = state is not (TestUIState.Testing
-            or TestUIState.CompletedPass
-            or TestUIState.CompletedFail
             or TestUIState.EmergencyStop
             or TestUIState.Resetting
             or TestUIState.ResetFailed
@@ -629,6 +701,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
 
         NotifyChangeOperatorCanExecuteChanged();
+        NotifyChangeReferenceSelectionCanExecuteChanged();
         NotifyReconnectCommandsCanExecuteChanged();
     }
 
@@ -653,6 +726,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _ = dispatcher.BeginInvoke(
             new Action(ChangeOperatorCommand.NotifyCanExecuteChanged),
             DispatcherPriority.Normal);
+    }
+
+    /// <summary>刷新运行页重新选择参照命令的可执行状态。</summary>
+    private void NotifyChangeReferenceSelectionCanExecuteChanged()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null)
+            return;
+
+        if (dispatcher.CheckAccess())
+            ChangeReferenceSelectionCommand.NotifyCanExecuteChanged();
+        else
+            _ = dispatcher.BeginInvoke(
+                new Action(ChangeReferenceSelectionCommand.NotifyCanExecuteChanged),
+                DispatcherPriority.Normal);
     }
 
     /// <summary>
@@ -725,6 +813,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         Volatile.Write(ref _activeControlActionRequestId, actionRequestId);
         _currentControlAction = action;
         NotifyChangeOperatorCanExecuteChanged();
+        NotifyChangeReferenceSelectionCanExecuteChanged();
         NotifyReconnectCommandsCanExecuteChanged();
         _logger.LogWarning(
             "[运行控制][进入] Action={Action}, ActionRequestId={ActionRequestId}, UiState={UiState}, InspectionRunVersion={InspectionRunVersion}, EngineIsRunning={EngineIsRunning}, ExecutionStage={ExecutionStage}, LockWaitElapsedMs={ElapsedMs}",
@@ -861,6 +950,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (_lastPlcInputs?.IsStopRequested == true) return (StartRejectReason.StopNotReleased, "请松开停止按钮或先执行复位。");
         if (_lastPlcInputs?.IsEmergencyStop == true || UiState == TestUIState.EmergencyStop) return (StartRejectReason.EmergencyStopActive, "请解除急停并完成复位后再启动。");
         if (UiState == TestUIState.AwaitingReset) return (StartRejectReason.AwaitingReset, "上一轮检测尚未复位，请先复位。");
+        if (UiState == TestUIState.Paused) return (StartRejectReason.AwaitingReset, "当前已停止，请先复位后再启动。");
+        if (UiState == TestUIState.Error) return (StartRejectReason.AwaitingReset, "当前处于异常状态，请先复位后再启动。");
         if (_inspectionEngine?.IsRunning == true || UiState == TestUIState.Testing) return (StartRejectReason.DuplicateStart, "检测已在运行中，无需重复启动。");
         if (_currentControlAction != InspectionControlAction.None || UiState == TestUIState.Resetting) return (StartRejectReason.Busy, "系统正在处理其他动作，请等待当前操作完成。");
         return (StartRejectReason.Unknown, "当前条件不满足，无法启动检测，请检查运行状态。");
@@ -919,14 +1010,51 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         await Task.CompletedTask;
     }
 
+    /// <summary>运行页重新选择参照系列、机种和工位，仅允许在非运行状态执行。</summary>
+    [RelayCommand(CanExecute = nameof(CanChangeReferenceSelection))]
+    private async Task ChangeReferenceSelectionAsync()
+    {
+        if (!CanChangeReferenceSelection())
+        {
+            _logger.LogWarning("[参照选择][拒绝] 当前状态不允许重新选择：UiState={UiState}, Action={Action}",
+                UiState, _currentControlAction);
+            return;
+        }
+
+        var dialog = _serviceProvider.GetRequiredService<SeriesMachineSelectionDialog>();
+        dialog.Owner = Application.Current.MainWindow;
+        if (dialog.ShowDialog() == true)
+        {
+            AddLog($"参照信息已更新：{ReferenceDisplayText}");
+            _logger.LogWarning("[参照选择][审计] 运行页重新选择完成：{ReferenceDisplayText}", ReferenceDisplayText);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private bool CanChangeReferenceSelection()
+    {
+        return _currentControlAction == InspectionControlAction.None
+               && (UiState is TestUIState.Ready
+                   or TestUIState.CanStart
+                   or TestUIState.CompletedPass
+                   or TestUIState.CompletedFail
+                   or TestUIState.SingleItemNgStopped);
+    }
+
     private bool CanChangeOperator()
     {
         return _currentControlAction == InspectionControlAction.None
-               && UiState is TestUIState.Ready or TestUIState.CanStart;
+               && (UiState is TestUIState.Ready
+                   or TestUIState.CanStart
+                   or TestUIState.CompletedPass
+                   or TestUIState.CompletedFail
+                   or TestUIState.SingleItemNgStopped);
     }
 
     partial void OnModelNameChanged(string value)
     {
+        UpdateReferenceMachineMismatch();
         if (!_suppressDuplicateCheck)
         {
             _lastDuplicateCheckKey = null;
@@ -938,6 +1066,45 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         RefreshReadyOrCanStartState();
         _ = HandleModelNameChangedAsync(value, loadVersion);
         ScheduleDuplicateRecordCheck();
+    }
+
+    /// <summary>参照机种与实际输入机种只做可见提示，不参与启动校验。</summary>
+    private void UpdateReferenceMachineMismatch()
+    {
+        IsReferenceMachineMismatch = !string.IsNullOrWhiteSpace(ReferenceMachineType)
+            && !string.IsNullOrWhiteSpace(ModelName)
+            && !string.Equals(
+                ReferenceMachineType.Trim(),
+                ModelName.Trim(),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>从参照状态服务同步运行页展示字段。</summary>
+    private void ApplyReferenceSelection()
+    {
+        var selection = _referenceSelectionStateService.CurrentSelection;
+        ReferenceSeries = selection.SeriesName?.Trim() ?? string.Empty;
+        ReferenceMachineType = selection.ReferenceMachineType?.Trim() ?? string.Empty;
+        ReferenceWorkstation = selection.Workstation?.Trim() ?? string.Empty;
+        ReferenceDisplayText = string.IsNullOrWhiteSpace(ReferenceSeries)
+            || string.IsNullOrWhiteSpace(ReferenceMachineType)
+            || string.IsNullOrWhiteSpace(ReferenceWorkstation)
+            ? "未选择参照信息"
+            : $"{ReferenceSeries} / {ReferenceMachineType} / {ReferenceWorkstation}";
+        UpdateReferenceMachineMismatch();
+        ChangeReferenceSelectionCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnReferenceSelectionChanged(object? sender, EventArgs e)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null)
+            return;
+
+        if (dispatcher.CheckAccess())
+            ApplyReferenceSelection();
+        else
+            _ = dispatcher.BeginInvoke(new Action(ApplyReferenceSelection), DispatcherPriority.Normal);
     }
 
     partial void OnSerialNumberChanged(string value)
@@ -1325,8 +1492,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var record = new LogRecord
             {
                 Timestamp = DateTime.Now,
-                Series = machineType,
-                MachineType = machineType,
+                Series = ReferenceSeries,
+                MachineType = ModelName,
                 SerialNumber = SerialNumber,
                 PlanName = planName,
                 PlanVersion = _currentPlanVersion,
@@ -1369,12 +1536,51 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 正常完成态启动下一轮前清理上一轮结果。
+    /// 该方法只在完整启动校验、万用表检查和 DT234 写入成功后调用，失败时保留上一轮界面结果。
+    /// </summary>
+    private async Task<bool> PrepareCompletedRunForNextStartAsync(CancellationToken ct)
+    {
+        if (UiState is not (TestUIState.CompletedPass or TestUIState.CompletedFail or TestUIState.SingleItemNgStopped))
+            return true;
+
+        await CancelFinalResultAutoClearAsync("下一轮启动准备").ConfigureAwait(false);
+
+        var finalResultClear = await ClearFinalResultWithAuditAsync("下一轮启动准备", ct).ConfigureAwait(false);
+        if (!finalResultClear.IsSuccess)
+        {
+            _logger.LogWarning("[下一轮启动][拒绝] DT304/DT305 清除失败，保留上一轮结果：{Message}", finalResultClear.Message);
+            AddLog("下一轮启动失败：上一轮检测结果信号清除失败，请执行复位或检查 PLC。");
+            await _notificationService.ShowWarningAsync(
+                "上一轮检测结果信号清除失败，请执行复位或检查 PLC 后再重试。",
+                "启动拒绝").ConfigureAwait(false);
+            return false;
+        }
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            ClearTestItemsForRestart();
+            FinalJudgment = null;
+            _inspectionCompletionInProgress = false;
+            _inspectionStarted = false;
+            _ignoreInspectionCallbacksUntilNextStart = false;
+            Interlocked.Increment(ref _inspectionRunVersion);
+            ResetElapsedTime();
+        });
+
+        _logger.LogInformation("[下一轮启动][准备完成] 上一轮结果、项目状态和耗时已清理");
+        return true;
+    }
+
+    /// <summary>
     /// 回到准备态，使用强制收口自动计算待机/可启动。
     /// </summary>
     private void ResetToReadyState()
     {
         SerialNumber = string.Empty;
         ClearTestItemsForRestart();
+        FinalJudgment = null;
+        ResetElapsedTime();
         IsPlcStartRequested = false;
         _inspectionStarted = false;
         ForceRefreshReadyOrCanStartState();
@@ -2381,21 +2587,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return StartRequestDecision.RejectNeedReset;
         }
 
-        // CompletedPass / CompletedFail → RejectNeedReset
-        if (UiState is TestUIState.CompletedPass or TestUIState.CompletedFail)
-        {
-            _logger.LogWarning("[启动请求][拒绝] 当前检测结果尚未处理完成，来源={Source}", source);
-            return StartRequestDecision.RejectNeedReset;
-        }
-
-        // Error / SingleItemNgStopped → RejectNeedReset
-        if (UiState is TestUIState.Error or TestUIState.SingleItemNgStopped)
+        // Error → RejectNeedReset；正常完成态允许下一轮启动，单项 NG 正常收口也属于完成态。
+        if (UiState == TestUIState.Error)
         {
             _logger.LogWarning("[启动请求][拒绝] 当前状态需要先复位，来源={Source}", source);
             return StartRequestDecision.RejectNeedReset;
         }
 
-        // Ready / CanStart → 继续完整校验
+        // Ready / CanStart / CompletedPass / CompletedFail / SingleItemNgStopped → 继续完整校验
         return StartRequestDecision.ContinueValidation;
     }
 
@@ -2464,6 +2663,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             startingToken.ThrowIfCancellationRequested();
 
+            bool isCompletedRun = UiState is TestUIState.CompletedPass
+                or TestUIState.CompletedFail
+                or TestUIState.SingleItemNgStopped;
+
             var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken).ConfigureAwait(false);
             if (!pcReadyResult.IsSuccess)
             {
@@ -2473,6 +2676,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             }
 
             startingToken.ThrowIfCancellationRequested();
+
+            if (isCompletedRun)
+            {
+                if (!await PrepareCompletedRunForNextStartAsync(startingToken).ConfigureAwait(false))
+                {
+                    await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
+                    await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
+                    return;
+                }
+            }
+            else
+            {
+                // 新一轮已通过全部启动复核，之前的耗时现在才允许归零。
+                await Application.Current.Dispatcher.InvokeAsync(ResetElapsedTime);
+            }
 
             _logger.LogInformation("[启动复核][通过] 条件满足，万用表通信正常，DT234=1 已写入，开始检测");
             _inspectionStarted = true;
@@ -2755,6 +2973,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             };
             _resetSignalHandled = false;
             _isResetting = false;
+            ResetElapsedTime();
             _logger.LogInformation("[复位流程][完成] 重复复位请求已吸收，复位门禁已重新开放");
             ForceRefreshReadyOrCanStartState();
         }
@@ -2972,7 +3191,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     await CompleteStopSignalHandshakeAsync("StopAndWaitTimeout", CancellationToken.None).ConfigureAwait(false);
                     _inspectionStarted = false;
                     IsPlcStartRequested = false;
-                    SetUiState(TestUIState.AwaitingReset);
+                    SetUiState(TestUIState.Paused);
                     AddLog("停止处理中超时：请执行复位完成设备收口。");
                     return;
                 }
@@ -2985,16 +3204,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
             _inspectionStarted = false;
             IsPlcStartRequested = false;
-            SetUiState(TestUIState.AwaitingReset);
+            SetUiState(TestUIState.Paused);
             if (stopSignalReleased)
             {
                 AddLog("[停止流程] 已停止，必须复位后才能重新从第一项开始检测");
-                _logger.LogInformation("[停止流程][审计] 停止收口完成，DT122 已释放，页面进入 AwaitingReset");
+                _logger.LogInformation("[停止流程][审计] 停止收口完成，DT122 已释放，页面保持 Paused");
             }
             else
             {
                 AddLog("[停止流程] 已停止，但 DT122 仍未稳定释放，请执行复位完成收口");
-                _logger.LogWarning("[停止流程][DT122] 稳定确认未释放，页面保持 AwaitingReset，等待 ResetFlow 兜底");
+                _logger.LogWarning("[停止流程][DT122] 稳定确认未释放，页面保持 Paused，等待 ResetFlow 兜底");
             }
 
             if (!finalResult.IsSuccess)
@@ -3588,11 +3807,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         int runVersion = Interlocked.Increment(ref _inspectionRunVersion);
 
+        await Application.Current.Dispatcher.InvokeAsync(StartElapsedTimeTimer);
+
         var result = await Task.Run(async () =>
         {
             return await _inspectionEngine.RunInspectionAsync(
                 barcode, modelName, operatorName, CancellationToken.None);
         }).ConfigureAwait(false);
+
+        await Application.Current.Dispatcher.InvokeAsync(() => StopElapsedTimeTimer(result.Duration));
 
         // 复位后返回的旧检测任务直接丢弃，不再处理结果和弹提示
         if (runVersion != _inspectionRunVersion || _ignoreInspectionCallbacksUntilNextStart)
@@ -3941,9 +4164,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
-            if (UiState == TestUIState.Testing
-                || UiState == TestUIState.CompletedPass
-                || UiState == TestUIState.CompletedFail)
+            if (UiState == TestUIState.Testing)
             {
                 AddLog("⚠️ 测试中禁止扫码，条码已忽略");
                 return;
@@ -4125,6 +4346,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogWarning("[运行页初始化][审计] 当前作业员为空，运行页不允许启动");
         }
 
+        _referenceSelectionStateService.SelectionChanged -= OnReferenceSelectionChanged;
+        _referenceSelectionStateService.SelectionChanged += OnReferenceSelectionChanged;
+        await _referenceSelectionStateService.LoadAsync();
+        ApplyReferenceSelection();
+
         // 加载方案信息
         await RefreshPlanNameOptionsAsync(ModelName);
         ValidateCurrentSchemeName();
@@ -4169,7 +4395,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _resetRearmPending = false;
         Interlocked.Exchange(ref _resetRearmInProgress, 0);
         _lastResetRearmAttemptUtc = DateTime.MinValue;
+        StopElapsedTimeTimer();
         UnsubscribeFromHardwareEvents();
+        _referenceSelectionStateService.SelectionChanged -= OnReferenceSelectionChanged;
 
         // ★ 终了流程已提前完成 PLC 清理，此处只做非 PLC 的页面离开收尾
         if (_isFinishing)
@@ -4342,6 +4570,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _clockTimer?.Stop();
         _clockTimer = null;
+        if (_elapsedTimeTimer != null)
+        {
+            _elapsedTimeTimer.Stop();
+            _elapsedTimeTimer.Tick -= OnElapsedTimeTimerTick;
+            _elapsedTimeTimer = null;
+        }
+        _displayInspectionStopwatch.Stop();
+        _referenceSelectionStateService.SelectionChanged -= OnReferenceSelectionChanged;
         _duplicateCheckCts?.Cancel();
         _duplicateCheckCts?.Dispose();
         _duplicateCheckCts = null;

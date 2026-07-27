@@ -37,6 +37,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
+        private readonly ISeriesMachineStorageService _seriesMachineStorageService;
         private readonly IDeviceConnectionManager _deviceManager;
         private readonly ILogger<PlanEditViewModel> _logger;
 
@@ -78,12 +79,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
+            ISeriesMachineStorageService seriesMachineStorageService,
             IDeviceConnectionManager deviceManager,
             ILogger<PlanEditViewModel> logger)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
+            _seriesMachineStorageService = seriesMachineStorageService ?? throw new ArgumentNullException(nameof(seriesMachineStorageService));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -97,6 +100,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             // 初始化下拉选项
             MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
+            SeriesOptions = new ObservableCollection<string>();
+            WorkstationOptions = new ObservableCollection<string>
+            {
+                WorkstationConstants.Left,
+                WorkstationConstants.Right
+            };
             PinOptions = new ObservableCollection<string>(PlanStorageService.PinList);
             // ★ CheckMode 下拉选项使用中文（不再需要单独的 CheckModeOptions，已内聚到 PlanItemViewModel）
             ContinuityUnitOptions = new ObservableCollection<string> { "OPEN", "SHORT" };
@@ -119,6 +128,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// </summary>
         [ObservableProperty]
         private string _machineType = string.Empty;
+
+        /// <summary>方案归属系列，允许手工输入合法值。</summary>
+        [ObservableProperty]
+        private string _series = string.Empty;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(IsLeftWorkstation))]
+        [NotifyPropertyChangedFor(nameof(IsRightWorkstation))]
+        private string _workstation = WorkstationConstants.Left;
 
         /// <summary>
         /// 方案名称（如 "方案A"）
@@ -143,6 +161,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 机种下拉选项列表
         /// </summary>
         public ObservableCollection<string> MachineTypeOptions { get; }
+        public ObservableCollection<string> SeriesOptions { get; }
+        public ObservableCollection<string> WorkstationOptions { get; }
+        public bool IsLeftWorkstation => Workstation == WorkstationConstants.Left;
+        public bool IsRightWorkstation => Workstation == WorkstationConstants.Right;
+
+        [RelayCommand]
+        private void SelectLeftWorkstation() => Workstation = WorkstationConstants.Left;
+
+        [RelayCommand]
+        private void SelectRightWorkstation() => Workstation = WorkstationConstants.Right;
 
         /// <summary>
         /// 引脚下拉选项（A1~A20, B1~B20）
@@ -323,6 +351,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             try
             {
                 // 校验必填项
+                if (string.IsNullOrWhiteSpace(Series))
+                {
+                    await _notificationService.ShowWarningAsync("请输入/选择系列名称！", "校验失败");
+                    return;
+                }
                 if (string.IsNullOrWhiteSpace(MachineType))
                 {
                     await _notificationService.ShowWarningAsync("请输入/选择机种名称！", "校验失败");
@@ -331,6 +364,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 if (string.IsNullOrWhiteSpace(PlanName))
                 {
                     await _notificationService.ShowWarningAsync("请输入方案名称！", "校验失败");
+                    return;
+                }
+
+                var seriesError = NameValidationHelper.ValidateSeriesName(Series);
+                if (seriesError != null)
+                {
+                    _logger.LogWarning("[用户操作] 方案保存被拒绝：系列名称不合法 Series={Series} Error={Error}", Series, seriesError);
+                    await _notificationService.ShowWarningAsync(seriesError, "校验失败");
+                    return;
+                }
+
+                if (!WorkstationConstants.IsValid(Workstation))
+                {
+                    await _notificationService.ShowWarningAsync("请选择左工位或右工位！", "校验失败");
                     return;
                 }
 
@@ -483,8 +530,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 // 构建方案对象（CheckMode 直接使用中文值存储到JSON）
                 var plan = new PlanModel
                 {
+                    Series = Series.Trim(),
                     MachineType = MachineType.Trim(),
                     PlanName = PlanName.Trim(),
+                    Workstation = Workstation,
                     Version = _isEditMode ? Math.Max(1, _originalPlan?.Version ?? 1) : 1,
                     CreatedTime = _isEditMode ? CreatedTime : DateTime.Now,
                     LastModifiedTime = DateTime.Now,
@@ -539,7 +588,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 }
 
                 // 同时传递原机种名和原方案名，确保方案名变更时也能正确删除旧文件
-                await _planStorageService.SavePlanAsync(plan, _originalPlan?.MachineType, _originalPlan?.PlanName);
+                await _planStorageService.SavePlanAsync(
+                    plan,
+                    _originalPlan?.Series,
+                    _originalPlan?.MachineType,
+                    _originalPlan?.PlanName);
 
                 _logger.LogInformation("方案保存成功: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
                 await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 保存成功！", "保存成功");
@@ -648,9 +701,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 页面导航进入时触发
         /// 根据参数判断新增/编辑模式，加载已有方案数据
         /// </summary>
-        public Task OnNavigatedToAsync(object? parameter = null)
+        public async Task OnNavigatedToAsync(object? parameter = null)
         {
             _logger.LogDebug("进入方案编辑页面");
+
+            var catalog = await _seriesMachineStorageService.LoadAsync();
+            SeriesOptions.Clear();
+            foreach (var series in catalog.Series.OrderBy(item => item.Name))
+                SeriesOptions.Add(series.Name);
+
+            var machineTypes = await _planStorageService.GetAllMachineTypesAsync();
+            MachineTypeOptions.Clear();
+            foreach (var machineType in machineTypes)
+                MachineTypeOptions.Add(machineType);
 
             if (parameter is PlanModel existingPlan)
             {
@@ -658,8 +721,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _isEditMode = true;
                 _originalPlan = existingPlan;
 
+                Series = existingPlan.Series;
                 MachineType = existingPlan.MachineType;
                 PlanName = existingPlan.PlanName;
+                Workstation = WorkstationConstants.IsValid(existingPlan.Workstation)
+                    ? existingPlan.Workstation
+                    : WorkstationConstants.Left;
                 CreatedTime = existingPlan.CreatedTime;
                 LastModifiedTime = existingPlan.LastModifiedTime;
 
@@ -695,7 +762,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 _originalPlan = null;
 
                 MachineType = string.Empty;
+                Series = string.Empty;
                 PlanName = string.Empty;
+                Workstation = WorkstationConstants.Left;
                 CreatedTime = DateTime.Now;
                 LastModifiedTime = DateTime.Now;
                 Items.Clear();
@@ -711,7 +780,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             IsScannerConnected = _deviceManager.IsScannerConnected;
             ScannerStatusText = _deviceManager.ScannerStatusText;
 
-            return Task.CompletedTask;
+            return;
         }
 
         /// <summary>

@@ -239,6 +239,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // === 方案设定相关服务 === 
             services.AddSingleton<IPlanStorageService, PlanStorageService>();
+            services.AddSingleton<ISeriesMachineStorageService, SeriesMachineStorageService>();
+            services.AddSingleton<IReferenceSelectionStateService, ReferenceSelectionStateService>();
 
             // === 内存监控服务 === 
             services.AddSingleton<MemoryMonitorService>();
@@ -303,6 +305,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<ExitConfirmViewModel>();
             services.AddTransient<TestPageViewModel>();
             services.AddTransient<OperatorSelectionDialogViewModel>();
+            services.AddTransient<SeriesMachineSelectionDialogViewModel>();
             services.AddTransient<PlanSettingViewModel>();
             services.AddTransient<PlanEditViewModel>();
             services.AddTransient<SystemSettingsViewModel>();
@@ -313,6 +316,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<ExitConfirmDialog>();
             services.AddTransient<TestPageView>();
             services.AddTransient<OperatorSelectionDialog>();
+            services.AddTransient<SeriesMachineSelectionDialog>();
             services.AddTransient<PlanSettingView>();
             services.AddTransient<PlanEditView>();
             services.AddTransient<SystemSettingsView>();

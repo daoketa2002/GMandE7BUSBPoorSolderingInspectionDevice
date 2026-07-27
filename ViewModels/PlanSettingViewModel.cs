@@ -36,6 +36,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
+        private readonly ISeriesMachineStorageService _seriesMachineStorageService;
         private readonly ILogger<PlanSettingViewModel> _logger;
 
 
@@ -79,12 +80,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
+            ISeriesMachineStorageService seriesMachineStorageService,
             IDeviceConnectionManager deviceManager,
             ILogger<PlanSettingViewModel> logger)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
+            _seriesMachineStorageService = seriesMachineStorageService ?? throw new ArgumentNullException(nameof(seriesMachineStorageService));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -99,6 +102,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 初始化下拉选项集合
             MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
             PlanNameOptions = new ObservableCollection<string>();
+            SeriesOptions = new ObservableCollection<string>();
+            WorkstationOptions = new ObservableCollection<string>
+            {
+                WorkstationConstants.Left,
+                WorkstationConstants.Right
+            };
 
             _logger.LogDebug("PlanSettingViewModel 构造完成");
         }
@@ -120,6 +129,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [ObservableProperty]
         private string _selectedPlanName = string.Empty;
 
+        [ObservableProperty]
+        private string _selectedSeries = string.Empty;
+
+        [ObservableProperty]
+        private string _selectedWorkstation = string.Empty;
+
         /// <summary>
         /// 机种下拉选项列表
         /// 从所有方案文件夹中提取，合并默认机种
@@ -131,6 +146,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 与机种联动：选择机种后自动刷新为该机种下的所有方案
         /// </summary>
         public ObservableCollection<string> PlanNameOptions { get; }
+        public ObservableCollection<string> SeriesOptions { get; }
+        public ObservableCollection<string> WorkstationOptions { get; }
 
         /// <summary>
         /// 机种选择变更时触发（MVVM CommunityToolkit 自动生成的 partial 方法）
@@ -212,6 +229,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             _isUpdatingMachineTypeProgrammatically = false;
 
             SelectedPlanName = string.Empty;
+            SelectedSeries = string.Empty;
+            SelectedWorkstation = string.Empty;
             ApplyFilter();
         }
 
@@ -240,9 +259,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     p.PlanName.Contains(planName, StringComparison.OrdinalIgnoreCase));
             }
 
+            if (!string.IsNullOrWhiteSpace(SelectedSeries))
+                filtered = filtered.Where(p => string.Equals(p.Series, SelectedSeries.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrWhiteSpace(SelectedWorkstation))
+                filtered = filtered.Where(p => string.Equals(p.Workstation, SelectedWorkstation.Trim(), StringComparison.OrdinalIgnoreCase));
+
             // 排序：按机种→方案名
             var result = filtered
-                .OrderBy(p => p.MachineType)
+                .OrderBy(p => p.Series)
+                .ThenBy(p => p.MachineType)
                 .ThenBy(p => p.PlanName)
                 .ToList();
 
@@ -254,8 +280,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
 
             TotalCountText = $"共 {FilteredPlans.Count} 个方案";
-            _logger.LogDebug("检索完成: 机种={MachineType}, 方案名={PlanName}, 结果数={Count}",
-                machineType ?? "(全部)", planName ?? "(全部)", FilteredPlans.Count);
+            _logger.LogDebug("检索完成: 系列={Series}, 机种={MachineType}, 方案名={PlanName}, 工位={Workstation}, 结果数={Count}",
+                SelectedSeries ?? "(全部)", machineType ?? "(全部)", planName ?? "(全部)",
+                SelectedWorkstation ?? "(全部)", FilteredPlans.Count);
         }
 
         #endregion
@@ -325,12 +352,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                 var plan = SelectedPlan;
                 var confirmed = await _notificationService.ConfirmAsync(
-                    $"确定要删除方案 \"{plan.PlanName}\"（机种：{plan.MachineType}）吗？\n\n此操作不可恢复！",
+                    $"确定要删除方案 \"{plan.PlanName}\"（系列：{plan.Series}，机种：{plan.MachineType}）吗？\n\n此操作不可恢复！",
                     "确认删除");
 
                 if (!confirmed) return;
 
-                await _planStorageService.DeletePlanAsync(plan.MachineType, plan.PlanName);
+                await _planStorageService.DeletePlanAsync(plan.Series, plan.MachineType, plan.PlanName);
                 await RefreshAllDataAsync();
 
                 _logger.LogInformation("方案已删除: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
@@ -438,6 +465,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
 
             _logger.LogDebug("机种下拉选项已刷新，共 {Count} 个", MachineTypeOptions.Count);
+
+            var catalog = await _seriesMachineStorageService.LoadAsync();
+            SeriesOptions.Clear();
+            foreach (var series in catalog.Series.OrderBy(item => item.Name))
+                SeriesOptions.Add(series.Name);
         }
 
         /// <summary>
