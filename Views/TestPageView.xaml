@@ -65,20 +65,20 @@
         <!-- ============================================================
      设备状态指示灯按钮样式（优化版）
      改动说明：
-       1. 按钮尺寸调整为 110×46，适配顶部区域高度
-       2. 主标签 15px，状态标签 11px，保持紧凑可读
+       1. 按钮尺寸调整为 150×60，适配顶部区域高度
+       2. 主标签 18px，状态标签 13px，保持清晰可读
        3. 移除状态标签 Opacity="0.9"，消除光晕效应
        4. 增加底部阴影 BorderThickness="0,0,0,4"，参照"终了"按钮立体感
        5. 圆角 6px → 8px，保持层次感
        6. 内部布局由 StackPanel 改为 Grid + RowDefinitions，行距更舒展
      ============================================================ -->
         <Style x:Key="DeviceStatusButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="110"/>
-            <Setter Property="Height" Value="46"/>
+            <Setter Property="Width" Value="150"/>
+            <Setter Property="Height" Value="60"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Padding" Value="6,1"/>
+            <Setter Property="Padding" Value="8,2"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -246,7 +246,7 @@
 
     <Grid Background="#FFFFFF">
         <Grid.RowDefinitions>
-            <RowDefinition Height="240"/>
+            <RowDefinition Height="260"/>
             <RowDefinition Height="70"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="145"/>
@@ -295,7 +295,7 @@
                                        Foreground="#1E8449" VerticalAlignment="Center"/>
                             <TextBlock Grid.Column="1" Text="{Binding ReferenceDisplayText}"
                                        FontSize="14" FontWeight="Bold"
-                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding ReferenceDisplayText}"
+                                       TextWrapping="Wrap" ToolTip="{Binding ReferenceDisplayText}"
                                        VerticalAlignment="Center" Margin="4,0,8,0">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -490,15 +490,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="24"/>
-                                    <RowDefinition Height="16"/>
+                                    <RowDefinition Height="30"/>
+                                    <RowDefinition Height="20"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="PLC"
-                                           FontSize="15" FontWeight="Bold"
+                                           FontSize="18" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="{Binding PlcStatusText}"
-                                           FontSize="11"
+                                           FontSize="13"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
@@ -515,15 +515,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="24"/>
-                                    <RowDefinition Height="16"/>
+                                    <RowDefinition Height="30"/>
+                                    <RowDefinition Height="20"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="扫描仪"
-                                           FontSize="15" FontWeight="Bold"
+                                           FontSize="18" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="{Binding ScannerStatusText}"
-                                           FontSize="11"
+                                           FontSize="13"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
@@ -540,15 +540,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="24"/>
-                                    <RowDefinition Height="16"/>
+                                    <RowDefinition Height="30"/>
+                                    <RowDefinition Height="20"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="万用表"
-                                           FontSize="15" FontWeight="Bold"
+                                           FontSize="18" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="{Binding DmmStatusText}"
-                                           FontSize="11"
+                                           FontSize="13"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
@@ -566,15 +566,15 @@
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="24"/>
-                                    <RowDefinition Height="16"/>
+                                    <RowDefinition Height="30"/>
+                                    <RowDefinition Height="20"/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="PC"
-                                           FontSize="15" FontWeight="Bold"
+                                           FontSize="18" FontWeight="Bold"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Bottom"/>
                                 <TextBlock Grid.Row="1" Text="就绪"
-                                           FontSize="11"
+                                           FontSize="13"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Top"/>
                             </Grid>
