@@ -177,8 +177,8 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
                 return;
             }
 
-            MachineNameInput = machineName;
             SelectedMachine = null;
+            MachineNameInput = machineName;
             HintText = matches.Count > 1
                 ? $"多个系列存在机种 {machineName}，请选择正确系列。"
                 : $"未找到机种 {machineName}，请确认系列后点击新增。";

@@ -719,24 +719,52 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Text="机种名称：" FontSize="16" FontWeight="Bold"
                                Foreground="#495057" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}"
-                             FontSize="16" Width="200" Height="36" MaxLength="50"
-                             VerticalContentAlignment="Center"
-                             ToolTip="实际机种与参照机种不一致，请确认扫码是否正确"
-                             x:Name="ModelNameTextBox" KeyDown="InputTextBox_KeyDown">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox">
-                                <Setter Property="BorderBrush" Value="#CED4DA"/>
-                                <Setter Property="BorderThickness" Value="1"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsReferenceMachineMismatch}" Value="True">
-                                        <Setter Property="BorderBrush" Value="#E74C3C"/>
-                                        <Setter Property="BorderThickness" Value="2"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
+                    <Grid x:Name="ModelNameInputContainer" Width="200" Height="36">
+                        <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}"
+                                 FontSize="16" MaxLength="50" Padding="6,0,30,0"
+                                 Height="36" VerticalContentAlignment="Center"
+                                 ToolTip="实际机种与参照机种不一致，请确认扫码是否正确"
+                                 x:Name="ModelNameTextBox" KeyDown="InputTextBox_KeyDown">
+                            <TextBox.Style>
+                                <Style TargetType="TextBox">
+                                    <Setter Property="BorderBrush" Value="#CED4DA"/>
+                                    <Setter Property="BorderThickness" Value="1"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsReferenceMachineMismatch}" Value="True">
+                                            <Setter Property="BorderBrush" Value="#E74C3C"/>
+                                            <Setter Property="BorderThickness" Value="2"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBox.Style>
+                        </TextBox>
+
+                        <Button Content="×"
+                                Command="{Binding ClearModelNameCommand}"
+                                Width="26" Height="26" Margin="0,0,4,0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Background="Transparent" BorderThickness="0"
+                                Foreground="#6C757D" FontSize="16" Padding="0"
+                                FocusVisualStyle="{x:Null}" Cursor="Hand"
+                                ToolTip="清除机种名称">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ElementName=ModelNameInputContainer, Path=IsMouseOver}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding ElementName=ModelNameTextBox, Path=IsKeyboardFocusWithin}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding ModelName}" Value="">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </Grid>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">

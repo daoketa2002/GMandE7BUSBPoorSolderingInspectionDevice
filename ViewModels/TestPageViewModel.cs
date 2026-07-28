@@ -1000,6 +1000,13 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [ObservableProperty]
     private string _modelName = string.Empty;
 
+    /// <summary>清除运行页机种名称，后续方案和检测项目联动由 OnModelNameChanged 统一处理。</summary>
+    [RelayCommand]
+    private void ClearModelName()
+    {
+        ModelName = string.Empty;
+    }
+
     [ObservableProperty]
     private string _serialNumber = string.Empty;
 
