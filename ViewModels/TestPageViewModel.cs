@@ -637,10 +637,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>调试面板可见（Fake 或半实物）</summary>
     public bool IsDebugControlPanelVisible => IsFakeMode || IsSemiPhysicalDebugMode;
 
-    /// <summary>临时 DT309/DT310 验收面板开关，用户验收通过后连同注入命令一并删除。</summary>
-    public bool IsInstallRejectAcceptanceToolVisible
-        => _configuration.GetValue<bool>("Hardware:EnableInstallRejectAcceptanceTools");
-
     /// <summary>真实模式复位可见（非 Fake 且非半实物）</summary>
     public bool IsRealModeResetVisible => !IsFakeMode && !IsSemiPhysicalDebugMode;
 
@@ -3556,67 +3552,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             Volatile.Write(ref _emergencyStopPending, 0);
         }
     }
-    #endregion
-
-    #region 临时 DT309/DT310 验收入口
-
-    /// <summary>判断临时安装拒绝注入是否满足验收使用条件。</summary>
-    private bool CanUseInstallRejectAcceptanceTools()
-    {
-        return IsInstallRejectAcceptanceToolVisible
-            && _plcDevice.IsConnected
-            && _inspectionEngine?.IsRunning != true
-            && UiState != TestUIState.Testing
-            && _currentControlAction == InspectionControlAction.None;
-    }
-
-    [RelayCommand]
-    private Task InjectLeftProximityRejectAsync()
-        => WriteInstallRejectForAcceptanceAsync(1, 0);
-
-    [RelayCommand]
-    private Task InjectLeftPresenceRejectAsync()
-        => WriteInstallRejectForAcceptanceAsync(2, 0);
-
-    [RelayCommand]
-    private Task InjectRightProximityRejectAsync()
-        => WriteInstallRejectForAcceptanceAsync(0, 1);
-
-    [RelayCommand]
-    private Task InjectRightPresenceRejectAsync()
-        => WriteInstallRejectForAcceptanceAsync(0, 2);
-
-    [RelayCommand]
-    private Task ClearInstallRejectAcceptanceSignalsAsync()
-        => WriteInstallRejectForAcceptanceAsync(0, 0);
-
-    /// <summary>
-    /// 临时验收写入 DT309/DT310。该入口不写 DT120，也不绕过运行页正式轮询。
-    /// </summary>
-    private async Task WriteInstallRejectForAcceptanceAsync(ushort leftCode, ushort rightCode)
-    {
-        if (!CanUseInstallRejectAcceptanceTools())
-        {
-            _logger.LogWarning(
-                "[验收注入][拒绝] 当前条件不允许写入 DT309/DT310：Connected={Connected}, UiState={UiState}, Action={Action}, EngineRunning={EngineRunning}",
-                _plcDevice.IsConnected,
-                UiState,
-                _currentControlAction,
-                _inspectionEngine?.IsRunning == true);
-            return;
-        }
-
-        var result = await _plcDevice.WriteWorkstationInstallRejectForAcceptanceAsync(
-            leftCode,
-            rightCode,
-            CancellationToken.None);
-        if (!result.IsSuccess)
-        {
-            _logger.LogWarning("[验收注入][失败] DT309={LeftCode}, DT310={RightCode}：{Message}",
-                leftCode, rightCode, result.Message);
-        }
-    }
-
     #endregion
 
     /// <summary>

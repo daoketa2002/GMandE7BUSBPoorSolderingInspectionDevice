@@ -691,45 +691,6 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
-    /// 临时验收注入：只允许写入 0、1、2，使用一次 FC16 写入两个连续寄存器。
-    /// </summary>
-    public async Task<PlcOperationResult> WriteWorkstationInstallRejectForAcceptanceAsync(
-        ushort leftCode,
-        ushort rightCode,
-        CancellationToken ct = default)
-    {
-        if (leftCode > 2 || rightCode > 2)
-            return PlcOperationResult.Failure("临时验收注入只允许 DT309/DT310 使用 0、1、2");
-
-        _logger.LogWarning("[验收注入][安装拒绝] 写入 DT309={LeftCode}, DT310={RightCode}", leftCode, rightCode);
-        try
-        {
-            var response = await _modbusClient.WriteMultipleRegistersAsync(
-                ConfiguredUnitId,
-                PlcAddressMap.LeftWorkstationInstallReject,
-                new[] { leftCode, rightCode },
-                ct,
-                ModbusTimeoutConstants.NormalRequestMs).ConfigureAwait(false);
-
-            if (response is null)
-                return PlcOperationResult.Failure("临时验收注入失败：无响应");
-            if (response.IsError)
-                return PlcOperationResult.Failure($"临时验收注入失败：Modbus错误码 {response.ErrorCode}", response);
-
-            return PlcOperationResult.Success($"DT309={leftCode}, DT310={rightCode} 已写入", response);
-        }
-        catch (OperationCanceledException)
-        {
-            return PlcOperationResult.Cancelled("临时验收注入被取消");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[验收注入][安装拒绝] 写入异常");
-            return PlcOperationResult.Failure($"临时验收注入异常: {ex.Message}");
-        }
-    }
-
-    /// <summary>
     /// 读取继电器动作完成标志（DT302）。
     /// </summary>
     public async Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)

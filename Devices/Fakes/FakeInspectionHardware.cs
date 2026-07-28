@@ -405,23 +405,6 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT309=0, DT310=0 已清除"));
     }
 
-    public Task<PlcOperationResult> WriteWorkstationInstallRejectForAcceptanceAsync(
-        ushort leftCode,
-        ushort rightCode,
-        CancellationToken ct = default)
-    {
-        if (leftCode > 2 || rightCode > 2)
-            return Task.FromResult(PlcOperationResult.Failure("临时验收注入只允许 DT309/DT310 使用 0、1、2"));
-
-        lock (_syncRoot)
-        {
-            _registers[PlcAddressMap.LeftWorkstationInstallReject] = leftCode;
-            _registers[PlcAddressMap.RightWorkstationInstallReject] = rightCode;
-        }
-        _logger.LogWarning("[Fake][验收注入][安装拒绝] 写入 DT309={LeftCode}, DT310={RightCode}", leftCode, rightCode);
-        return Task.FromResult(PlcOperationResult.Success($"Fake DT309={leftCode}, DT310={rightCode} 已写入"));
-    }
-
     public Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)
     {
         lock (_syncRoot)

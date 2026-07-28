@@ -1053,30 +1053,6 @@
                         </Border>
                     </Expander>
 
-                    <!-- ═══════ 临时 DT309/DT310 验收工具区 ═══════ -->
-                    <Expander Grid.Row="3" IsExpanded="False" Margin="0,8,0,0"
-                              Visibility="{Binding IsInstallRejectAcceptanceToolVisible, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <Expander.Header>
-                            <TextBlock Text="DT309/DT310 验收工具（临时）" FontSize="13" FontWeight="SemiBold"
-                                       Foreground="#7F8C8D" Margin="4,2"/>
-                        </Expander.Header>
-                        <Border Background="#FFF8E7" CornerRadius="8" Padding="6"
-                                BorderBrush="#F5C16C" BorderThickness="1">
-                            <UniformGrid Rows="3" Columns="2">
-                                <Button Content="左-接近不到位" Command="{Binding InjectLeftProximityRejectCommand}"
-                                        Style="{StaticResource DebugButtonStyle}" Background="#E67E22"/>
-                                <Button Content="左-物检不到位" Command="{Binding InjectLeftPresenceRejectCommand}"
-                                        Style="{StaticResource DebugButtonStyle}" Background="#E67E22"/>
-                                <Button Content="右-接近不到位" Command="{Binding InjectRightProximityRejectCommand}"
-                                        Style="{StaticResource DebugButtonStyle}" Background="#E67E22"/>
-                                <Button Content="右-物检不到位" Command="{Binding InjectRightPresenceRejectCommand}"
-                                        Style="{StaticResource DebugButtonStyle}" Background="#E67E22"/>
-                                <Button Grid.ColumnSpan="2" Content="手动清零" Command="{Binding ClearInstallRejectAcceptanceSignalsCommand}"
-                                        Style="{StaticResource DebugButtonStyle}" Background="#7F8C8D"/>
-                            </UniformGrid>
-                        </Border>
-                    </Expander>
-
                     <!-- ═══════ 真实模式操作区：复位 ═══════ -->
                     <Button Grid.Row="1" Content="复位"
                             Command="{Binding TriggerPlcResetCommand}"
