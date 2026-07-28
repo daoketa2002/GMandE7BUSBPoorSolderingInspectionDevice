@@ -14,7 +14,6 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
-using System.Windows;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 {
@@ -135,20 +134,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private void OnScannerConnectionChanged(object? sender, bool isConnected)
         {
             _isConnected = isConnected;
-            _logger.LogInformation("扫描枪连接状态变更: {IsConnected}", isConnected);
-
-            // 确保在UI线程触发事件
-            if (Application.Current?.Dispatcher != null)
-            {
-                Application.Current.Dispatcher.BeginInvoke(() =>
-                {
-                    ConnectionStateChanged?.Invoke(this, isConnected);
-                });
-            }
-            else
-            {
-                ConnectionStateChanged?.Invoke(this, isConnected);
-            }
+            _logger.LogInformation("[扫码转发] 扫描枪连接状态变更: Connected={Connected}", isConnected);
+            PublishConnectionStateSafely(isConnected);
         }
 
         /// <summary>
@@ -158,20 +145,78 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private void OnScannerBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
         {
             // 原始事件不做产品条码拆分，供作业员选择弹窗按完整字符串处理。
-            BarcodeReceived?.Invoke(this, e);
+            PublishBarcodeReceivedSafely(e);
             var parsed = ParseBarcode(e.Barcode);
+            _logger.LogInformation(
+                "[扫码解析] Raw={Raw}, Model={Model}, Serial={Serial}",
+                parsed.RawBarcode,
+                parsed.ModelName,
+                parsed.SerialPart);
+            PublishBarcodeParsedSafely(parsed);
+        }
 
-            // 确保在UI线程触发事件
-            if (Application.Current?.Dispatcher != null)
+        private void PublishBarcodeReceivedSafely(BarcodeReceivedEventArgs args)
+        {
+            var handlers = BarcodeReceived;
+            if (handlers == null)
             {
-                Application.Current.Dispatcher.BeginInvoke(() =>
-                {
-                    BarcodeParsed?.Invoke(this, parsed);
-                });
+                _logger.LogDebug("[扫码转发] BarcodeReceived 当前无订阅者");
+                return;
             }
-            else
+
+            foreach (EventHandler<BarcodeReceivedEventArgs> handler in handlers.GetInvocationList())
             {
-                BarcodeParsed?.Invoke(this, parsed);
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码转发][异常] BarcodeReceived 订阅者执行失败");
+                }
+            }
+        }
+
+        private void PublishBarcodeParsedSafely(BarcodeParsedEventArgs args)
+        {
+            var handlers = BarcodeParsed;
+            if (handlers == null)
+            {
+                _logger.LogDebug("[扫码转发] BarcodeParsed 当前无订阅者");
+                return;
+            }
+
+            foreach (EventHandler<BarcodeParsedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码转发][异常] BarcodeParsed 订阅者执行失败");
+                }
+            }
+        }
+
+        private void PublishConnectionStateSafely(bool isConnected)
+        {
+            var handlers = ConnectionStateChanged;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<bool> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, isConnected);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[扫码转发][异常] ConnectionStateChanged 订阅者执行失败: Connected={Connected}",
+                        isConnected);
+                }
             }
         }
 
@@ -209,7 +254,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     serialPart = parts[2].Trim();
                 }
 
-                _logger.LogDebug("条码解析成功: 机种={Model}, 日期={Date}, 序列号={Serial}",
+                _logger.LogInformation("[扫码解析] 条码解析完成: Model={Model}, Date={Date}, Serial={Serial}",
                     modelName, datePart, serialPart);
             }
             catch (Exception ex)

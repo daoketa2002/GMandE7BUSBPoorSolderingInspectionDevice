@@ -20,6 +20,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
@@ -55,6 +56,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 标记：是否正在程序化更新机种下拉框（防止联动时重复触发检索）
         /// </summary>
         private bool _isUpdatingMachineTypeProgrammatically = false;
+        private bool _scannerEventsSubscribed;
 
         #endregion
 
@@ -94,10 +96,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // ⭐ 同步扫描枪初始状态
             IsScannerConnected = _deviceManager.IsScannerConnected;
             ScannerStatusText = _deviceManager.ScannerStatusText;
-
-            // ⭐ 订阅全局设备管理器事件
-            _deviceManager.ScannerConnectionStateChanged += OnScannerConnectionStateChanged;
-            _deviceManager.BarcodeScanned += OnScannerBarcodeScanned;
 
             // 初始化下拉选项集合
             MachineTypeOptions = new ObservableCollection<string>(PlanStorageService.DefaultMachineTypes);
@@ -377,12 +375,27 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         // ⭐ 新增：扫描枪连接状态变更回调（统一来源）
         private void OnScannerConnectionStateChanged(object? sender, DeviceConnectionStateChangedEventArgs e)
         {
-            Application.Current.Dispatcher.Invoke(() =>
+            void ApplyState()
             {
-                IsScannerConnected = e.IsConnected;
-                ScannerStatusText = e.StatusText;
-                _logger.LogInformation("扫描枪状态变更: {Status}", e.StatusText);
-            });
+                try
+                {
+                    if (!_scannerEventsSubscribed)
+                    {
+                        _logger.LogDebug("[扫码UI][忽略] 方案设定页已离开，忽略扫描枪状态");
+                        return;
+                    }
+
+                    IsScannerConnected = e.IsConnected;
+                    ScannerStatusText = e.StatusText;
+                    _logger.LogInformation("[扫码UI] 方案设定页扫描枪状态更新: {Status}", e.StatusText);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码UI][异常] 方案设定页应用扫描枪状态失败");
+                }
+            }
+
+            BeginInvokeScannerUi(ApplyState, "扫描枪状态");
         }
 
         /// <summary>
@@ -391,19 +404,57 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// </summary>
         private void OnScannerBarcodeScanned(object? sender, BarcodeParsedEventArgs e)
         {
-            Application.Current.Dispatcher.Invoke(() =>
+            void ApplyBarcode()
             {
-                ScannedBarcode = e.RawBarcode;
-                _logger.LogInformation("扫描枪收到条码: {Barcode}, 机种={Model}", e.RawBarcode, e.ModelName);
+                try
+                {
+                    if (!_scannerEventsSubscribed)
+                    {
+                        _logger.LogDebug("[扫码UI][忽略] 方案设定页已离开，丢弃排队中的旧扫码");
+                        return;
+                    }
 
-                // 自动填充机种名称
-                _isUpdatingMachineTypeProgrammatically = true;
-                SelectedMachineType = e.ModelName;
-                _isUpdatingMachineTypeProgrammatically = false;
+                    ScannedBarcode = e.RawBarcode;
+                    _logger.LogInformation(
+                        "[扫码UI] 方案设定页已应用条码, Model={Model}, Serial={Serial}",
+                        e.ModelName,
+                        e.SerialPart);
 
-                // 触发检索
-                Search();
-            });
+                    // 自动填充机种名称
+                    _isUpdatingMachineTypeProgrammatically = true;
+                    SelectedMachineType = e.ModelName;
+                    _isUpdatingMachineTypeProgrammatically = false;
+
+                    // 触发检索
+                    Search();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码UI][异常] 方案设定页应用条码失败");
+                }
+            }
+
+            BeginInvokeScannerUi(ApplyBarcode, "条码");
+        }
+
+        private void BeginInvokeScannerUi(Action action, string operationName)
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null
+                || dispatcher.HasShutdownStarted
+                || dispatcher.HasShutdownFinished)
+            {
+                _logger.LogWarning("[扫码UI][忽略] Dispatcher 不可用: Operation={Operation}", operationName);
+                return;
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                action();
+                return;
+            }
+
+            dispatcher.BeginInvoke(action, DispatcherPriority.Normal);
         }
 
 
@@ -513,9 +564,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             // 刷新全部数据
             await RefreshAllDataAsync();
 
-            // ⭐ 重新订阅扫码事件（确保不重复订阅）
+            // 页面级事件只在页面活跃期间订阅，避免旧页面继续响应扫码。
+            _deviceManager.ScannerConnectionStateChanged -= OnScannerConnectionStateChanged;
+            _deviceManager.ScannerConnectionStateChanged += OnScannerConnectionStateChanged;
             _deviceManager.BarcodeScanned -= OnScannerBarcodeScanned;
             _deviceManager.BarcodeScanned += OnScannerBarcodeScanned;
+            _scannerEventsSubscribed = true;
 
             // ⭐ 同步扫描枪连接状态（不再手动连接）
             IsScannerConnected = _deviceManager.IsScannerConnected;
@@ -531,11 +585,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _logger.LogDebug("离开方案设定页面");
 
-            // ⭐ 页面离开时取消订阅扫码事件，避免在其他页面触发
+            // 页面离开时取消订阅全部页面级扫描枪事件。
             if (_deviceManager != null)
             {
+                _deviceManager.ScannerConnectionStateChanged -= OnScannerConnectionStateChanged;
                 _deviceManager.BarcodeScanned -= OnScannerBarcodeScanned;
             }
+            _scannerEventsSubscribed = false;
 
             return Task.CompletedTask;
         }

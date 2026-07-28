@@ -956,13 +956,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 switch (deviceType)
                 {
                     case DeviceTypeNames.Plc:
-                        PlcConnectionStateChanged?.Invoke(this, args);
+                        PublishConnectionStateSubscribers(PlcConnectionStateChanged, args, "PLC");
                         break;
                     case DeviceTypeNames.Dmm:
-                        DmmConnectionStateChanged?.Invoke(this, args);
+                        PublishConnectionStateSubscribers(DmmConnectionStateChanged, args, "DMM");
                         break;
                     case DeviceTypeNames.Scanner:
-                        ScannerConnectionStateChanged?.Invoke(this, args);
+                        PublishConnectionStateSubscribers(ScannerConnectionStateChanged, args, "Scanner");
                         break;
                     default:
                         _logger.LogWarning(
@@ -981,6 +981,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             }
 
             dispatcher.BeginInvoke((Action)Publish);
+        }
+
+        private void PublishConnectionStateSubscribers(
+            EventHandler<DeviceConnectionStateChangedEventArgs>? handlers,
+            DeviceConnectionStateChangedEventArgs args,
+            string deviceType)
+        {
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<DeviceConnectionStateChangedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[设备连接][{DeviceType}][异常] 连接状态订阅者执行失败",
+                        deviceType);
+                }
+            }
         }
 
         private void CheckAllDevicesReady()
@@ -1043,11 +1066,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             _scannerBarcodeService.BarcodeParsed += (sender, e) =>
             {
-                Application.Current?.Dispatcher.BeginInvoke(() =>
-                {
-                    BarcodeScanned?.Invoke(this, e);
-                });
+                _logger.LogInformation(
+                    "[扫码转发] 已接收解析条码并发布 BarcodeScanned: Model={Model}, Serial={Serial}",
+                    e.ModelName,
+                    e.SerialPart);
+                PublishBarcodeScannedSafely(e);
             };
+        }
+
+        private void PublishBarcodeScannedSafely(BarcodeParsedEventArgs args)
+        {
+            var handlers = BarcodeScanned;
+            if (handlers == null)
+            {
+                _logger.LogDebug("[扫码转发] BarcodeScanned 当前无订阅者");
+                return;
+            }
+
+            foreach (EventHandler<BarcodeParsedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码转发][异常] BarcodeScanned 订阅者执行失败");
+                }
+            }
         }
 
         #endregion

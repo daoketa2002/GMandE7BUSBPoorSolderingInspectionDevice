@@ -72,16 +72,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         private readonly ILogger<HoneywellH1900Scanner> _logger;
         private SerialPort? _serialPort;
+        private readonly SemaphoreSlim _connectionLifecycleLock = new(1, 1);
         private CancellationTokenSource? _readLoopCts;
-        private readonly StringBuilder _dataBuffer = new();
-        private readonly object _lockObject = new();
-
-        /// <summary>
-        /// 条码完整超时计时器
-        /// 原理：每次收到串口数据时重置，超时后认为一条完整条码已接收
-        /// 不依赖 \r\n 结束符，兼容扫描枪的各种配置模式
-        /// </summary>
-        private System.Timers.Timer? _barcodeCompleteTimer;
+        private Task? _readLoopTask;
+        private int _connectionVersion;
 
         private string _portName = "COM9";
         private int _baudRate = DEFAULT_BAUD_RATE;
@@ -162,7 +156,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// <summary>
         /// 设备是否已连接（ICommunicationDevice 接口实现）
         /// </summary>
-        public bool IsConnected => _isConnected && _serialPort?.IsOpen == true;
+        public bool IsConnected
+        {
+            get
+            {
+                var serialPort = Volatile.Read(ref _serialPort);
+                var readLoopTask = Volatile.Read(ref _readLoopTask);
+                return _isConnected
+                    && serialPort?.IsOpen == true
+                    && readLoopTask is { IsCompleted: false };
+            }
+        }
 
         /// <summary>串口设备不发送未知心跳，仅检查当前串口是否仍可用。</summary>
         public Task<DeviceHealthCheckResult> CheckHealthAsync(CancellationToken ct = default)
@@ -233,113 +237,135 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public async Task<bool> ConnectAsync(CancellationToken ct = default)
         {
-            return await Task.Run(() => ConnectInternal(_portName, _baudRate), ct).ConfigureAwait(false);
+            await _connectionLifecycleLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                return await ConnectCoreAsync(_portName, _baudRate, "设备连接服务", ct)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _connectionLifecycleLock.Release();
+            }
         }
 
-        /// <summary>
-        /// 内部连接实现
-        /// ⭐ 修复：不再信任缓存的 _isConnected，改为检查实际串口状态
-        /// </summary>
-        private bool ConnectInternal(string portName, int baudRate)
+        /// <summary>统一执行连接，调用方必须已经持有生命周期门禁。</summary>
+        private async Task<bool> ConnectCoreAsync(
+            string portName,
+            int baudRate,
+            string reconnectSource,
+            CancellationToken ct)
         {
             if (_isDisposed)
                 throw new ObjectDisposedException(nameof(HoneywellH1900Scanner));
 
-            lock (_lockObject)
+            var currentTask = Volatile.Read(ref _readLoopTask);
+            if (IsConnected)
             {
-                // ⭐ 修复：检查实际串口状态，不信任缓存的 _isConnected
-                if (_serialPort != null && _serialPort.IsOpen)
-                {
-                    _logger.LogInformation("扫描枪串口已打开（{PortName}），跳过重复连接", _serialPort.PortName);
-                    _isConnected = true;
-                    return true;
-                }
-
-                // ⭐ 如果 _isConnected 为 true 但串口实际已关闭，重置状态
-                if (_isConnected && (_serialPort == null || !_serialPort.IsOpen))
-                {
-                    _logger.LogWarning("⚠️ 检测到状态不一致：_isConnected=true 但串口未打开，强制重置状态");
-                    _isConnected = false;
-                    CloseSerialPort();
-                }
-
-                _portName = portName;
-
-                try
-                {
-                    // ⭐ 检查端口是否存在于系统中
-                    var availablePorts = SerialPort.GetPortNames();
-                    if (!availablePorts.Any(p => p.Equals(portName, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        _logger.LogError("❌ 端口 {PortName} 不存在于系统中！可用端口: {AvailablePorts}",
-                            portName, string.Join(", ", availablePorts));
-                        Notify(NotificationType.Error, $"端口 {portName} 不存在！请检查设备连接和端口配置");
-                        return false;
-                    }
-
-                    _logger.LogInformation("正在打开扫描枪串口 {PortName} @ {BaudRate}bps...", portName, baudRate);
-
-                    var parity = ParseParity(_parity);
-                    var stopBits = ParseStopBits(_stopBits);
-                    var handshake = ParseFlowControl(_flowControl);
-                    _serialPort = new SerialPort(portName, baudRate, parity, _dataBits, stopBits)
-                    {
-                        ReadTimeout = READ_TIMEOUT_MS,
-                        WriteTimeout = WRITE_TIMEOUT_MS,
-                        Encoding = Encoding.ASCII,
-                        DtrEnable = true,
-                        RtsEnable = handshake == Handshake.RequestToSend,
-                        Handshake = handshake
-                    };
-
-                    _serialPort.DataReceived += OnDataReceived;
-                    _serialPort.ErrorReceived += OnErrorReceived;
-
-                    _serialPort.Open();
-                    _isConnected = true;
-
-                    // 记录连接成功时间，用于 PortWatchdog 宽限期判断
-                    _connectionStableTime = DateTime.Now;
-
-                    // 重置防抖计数器
-                    _disconnectDetectedCount = 0;
-
-                    _logger.LogInformation("✅ 扫描枪串口 {PortName} 已成功打开 @ {BaudRate}bps", portName, baudRate);
-                    ConnectionStateChanged?.Invoke(this, true);
-                    Notify(NotificationType.Success, $"扫描枪已连接: {portName} @ {baudRate}bps");
-
-                    StartMonitoring();
-
-                    return true;
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    _logger.LogError(ex, "❌ 端口 {PortName} 被其他程序占用", portName);
-                    Notify(NotificationType.Error, $"端口 {portName} 被占用！请关闭其他串口工具");
-                    _serialPort?.Dispose();
-                    _serialPort = null;
-                    _isConnected = false;
-                    return false;
-                }
-                catch (IOException ex)
-                {
-                    _logger.LogError(ex, "❌ 端口 {PortName} IO异常: {Message}", portName, ex.Message);
-                    Notify(NotificationType.Error, $"端口 {portName} 通信异常: {ex.Message}");
-                    _serialPort?.Dispose();
-                    _serialPort = null;
-                    _isConnected = false;
-                    return false;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "❌ 打开扫描枪串口失败: {PortName}, 错误: {Message}", portName, ex.Message);
-                    Notify(NotificationType.Error, $"扫描枪连接失败: {ex.Message}");
-                    _serialPort?.Dispose();
-                    _serialPort = null;
-                    _isConnected = false;
-                    return false;
-                }
+                _logger.LogDebug("[扫码连接] 已存在健康连接，跳过重复连接: Port={Port}, Version={Version}",
+                    portName, Volatile.Read(ref _connectionVersion));
+                return true;
             }
+
+            if (_serialPort != null || currentTask != null || _isConnected)
+            {
+                _logger.LogWarning(
+                    "[扫码连接][异常] 现有连接不健康，开始清理旧连接: Port={Port}, ReadTaskCompleted={Completed}",
+                    _portName,
+                    currentTask?.IsCompleted);
+                await StopCurrentConnectionAsync(stopWatchdog: true).ConfigureAwait(false);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            _portName = portName;
+            var version = Interlocked.Increment(ref _connectionVersion);
+            _logger.LogInformation(
+                "[扫码连接] 开始建立连接, Port={Port}, Version={Version}, Source={Source}",
+                portName,
+                version,
+                reconnectSource);
+
+            SerialPort? serialPort = null;
+            try
+            {
+                var availablePorts = SerialPort.GetPortNames();
+                if (!availablePorts.Any(p => p.Equals(portName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _logger.LogError("[扫码连接] 端口不存在: Port={Port}, AvailablePorts={AvailablePorts}",
+                        portName, string.Join(", ", availablePorts));
+                    Notify(NotificationType.Error, $"端口 {portName} 不存在！请检查设备连接和端口配置");
+                    return false;
+                }
+
+                var parity = ParseParity(_parity);
+                var stopBits = ParseStopBits(_stopBits);
+                var handshake = ParseFlowControl(_flowControl);
+                serialPort = new SerialPort(portName, baudRate, parity, _dataBits, stopBits)
+                {
+                    ReadTimeout = READ_TIMEOUT_MS,
+                    WriteTimeout = WRITE_TIMEOUT_MS,
+                    Encoding = Encoding.ASCII,
+                    DtrEnable = true,
+                    RtsEnable = handshake == Handshake.RequestToSend,
+                    Handshake = handshake
+                };
+
+                // 读取统一由 RunReadLoop 负责，串口事件只保留错误通知。
+                serialPort.ErrorReceived += OnErrorReceived;
+                serialPort.Open();
+
+                var readLoopCts = new CancellationTokenSource();
+                Volatile.Write(ref _serialPort, serialPort);
+                Volatile.Write(ref _readLoopCts, readLoopCts);
+                // 先标记当前连接有效，再启动任务，避免任务刚启动就因状态快照为 false 退出。
+                _isConnected = true;
+                var readLoopTask = Task.Run(
+                    () => RunReadLoopAsync(serialPort, version, readLoopCts.Token),
+                    CancellationToken.None);
+                Volatile.Write(ref _readLoopTask, readLoopTask);
+
+                _connectionStableTime = DateTime.Now;
+                _disconnectDetectedCount = 0;
+                StartMonitoring();
+
+                _logger.LogInformation(
+                    "[扫码连接] 连接成功并启动读取任务, Port={Port}, Version={Version}, ReadTaskStarted=true, Source={Source}",
+                    portName,
+                    version,
+                    reconnectSource);
+                PublishConnectionStateSafely(true);
+                Notify(NotificationType.Success, $"扫描枪已连接: {portName} @ {baudRate}bps");
+                return true;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "[扫码连接] 端口被占用: Port={Port}", portName);
+                Notify(NotificationType.Error, $"端口 {portName} 被占用！请关闭其他串口工具");
+            }
+            catch (IOException ex)
+            {
+                _logger.LogError(ex, "[扫码连接] 端口 IO 异常: Port={Port}", portName);
+                Notify(NotificationType.Error, $"端口 {portName} 通信异常: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[扫码连接] 打开串口失败: Port={Port}", portName);
+                Notify(NotificationType.Error, $"扫描枪连接失败: {ex.Message}");
+            }
+
+            if (ReferenceEquals(Volatile.Read(ref _serialPort), serialPort)
+                || Volatile.Read(ref _readLoopTask) != null)
+            {
+                await StopCurrentConnectionAsync(stopWatchdog: true).ConfigureAwait(false);
+            }
+            else
+            {
+                Interlocked.Increment(ref _connectionVersion);
+                _isConnected = false;
+                CloseSerialPort(serialPort);
+                Volatile.Write(ref _serialPort, null);
+            }
+            return false;
         }
 
         /// <summary>
@@ -347,19 +373,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public async Task DisconnectAsync()
         {
-            await Task.Run(() =>
+            await _connectionLifecycleLock.WaitAsync().ConfigureAwait(false);
+            try
             {
-                lock (_lockObject)
-                {
-                    StopMonitoring();
-                    CloseSerialPort();
-                    _isConnected = false;
-                    _connectionStableTime = DateTime.MinValue;
-                    _disconnectDetectedCount = 0;
-                    ConnectionStateChanged?.Invoke(this, false);
-                    _logger.LogInformation("扫描枪已断开连接");
-                }
-            }).ConfigureAwait(false);
+                await StopCurrentConnectionAsync(stopWatchdog: true).ConfigureAwait(false);
+                PublishConnectionStateSafely(false);
+                _logger.LogInformation("[扫码连接] 已断开连接");
+            }
+            finally
+            {
+                _connectionLifecycleLock.Release();
+            }
         }
 
         /// <summary>
@@ -367,7 +391,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public bool Connect(string portName = "COM9", int baudRate = DEFAULT_BAUD_RATE)
         {
-            return ConnectInternal(portName, baudRate);
+            _portName = portName;
+            _baudRate = baudRate;
+            return ConnectAsync().GetAwaiter().GetResult();
         }
 
         private static Parity ParseParity(string value)
@@ -403,28 +429,66 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             };
         }
 
-        private void CloseSerialPort()
+        private void CloseSerialPort(SerialPort? serialPort)
         {
+            if (serialPort == null)
+                return;
+
             try
             {
-                if (_serialPort != null)
+                serialPort.ErrorReceived -= OnErrorReceived;
+
+                if (serialPort.IsOpen)
                 {
-                    _serialPort.DataReceived -= OnDataReceived;
-                    _serialPort.ErrorReceived -= OnErrorReceived;
-
-                    if (_serialPort.IsOpen)
-                    {
-                        _serialPort.Close();
-                    }
-
-                    _serialPort.Dispose();
-                    _serialPort = null;
+                    serialPort.Close();
                 }
+
+                serialPort.Dispose();
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "关闭串口时出现异常（可忽略）");
+                _logger.LogDebug(ex, "[扫码连接] 关闭串口时出现异常（可忽略）");
             }
+        }
+
+        /// <summary>
+        /// 停止当前读取任务和串口。调用方必须已经持有生命周期门禁。
+        /// 先使版本失效并关闭串口，再等待读取任务退出，避免旧任务污染新连接。
+        /// </summary>
+        private async Task StopCurrentConnectionAsync(bool stopWatchdog)
+        {
+            var oldVersion = Interlocked.Increment(ref _connectionVersion);
+            var oldCts = Interlocked.Exchange(ref _readLoopCts, null);
+            var oldTask = Interlocked.Exchange(ref _readLoopTask, null);
+            var oldPort = Interlocked.Exchange(ref _serialPort, null);
+
+            _isConnected = false;
+            oldCts?.Cancel();
+            CloseSerialPort(oldPort);
+
+            if (oldTask != null && !oldTask.IsCompleted && Task.CurrentId != oldTask.Id)
+            {
+                try
+                {
+                    await oldTask.ConfigureAwait(false);
+                    _logger.LogDebug("[扫码连接] 旧读取任务已退出, OldVersion={Version}", oldVersion);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogDebug("[扫码连接] 旧读取任务已取消, OldVersion={Version}", oldVersion);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[扫码连接] 等待旧读取任务退出时出现异常, OldVersion={Version}", oldVersion);
+                }
+            }
+
+            oldCts?.Dispose();
+            _connectionStableTime = DateTime.MinValue;
+            _disconnectDetectedCount = 0;
+
+            if (stopWatchdog)
+                StopMonitoring();
         }
 
         #endregion
@@ -436,7 +500,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             if (_isMonitoring) return;
 
             _isMonitoring = true;
-            _readLoopCts = new CancellationTokenSource();
 
             // ⭐ 启动串口热插拔检测
             StartPortWatchdog();
@@ -448,17 +511,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         {
             _isMonitoring = false;
 
-            _readLoopCts?.Cancel();
-            _readLoopCts?.Dispose();
-            _readLoopCts = null;
-
             // ⭐ 停止热插拔检测
             StopPortWatchdog();
-
-            // 停止并释放超时计时器
-            _barcodeCompleteTimer?.Stop();
-            _barcodeCompleteTimer?.Dispose();
-            _barcodeCompleteTimer = null;
 
             _logger.LogDebug("扫描枪数据监听已停止");
         }
@@ -555,7 +609,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                             _disconnectDetectedCount);
                         Notify(NotificationType.Warning, $"扫描枪已断开（端口 {_portName} 消失）");
 
-                        HandlePortLostByWatchdog();
+                        _ = HandlePortLostByWatchdogAsync();
                     }
                 }
                 else
@@ -600,7 +654,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             // 方法1：检查串口IsOpen标志
             try
             {
-                if (_serialPort == null || !_serialPort.IsOpen)
+                var readLoopTask = Volatile.Read(ref _readLoopTask);
+                if (readLoopTask == null || readLoopTask.IsCompleted)
+                {
+                    _logger.LogWarning("[扫码连接][异常] 串口读取任务已退出，交由重连流程恢复");
+                    return true;
+                }
+
+                var serialPort = Volatile.Read(ref _serialPort);
+                if (serialPort == null || !serialPort.IsOpen)
                 {
                     _logger.LogDebug("PortWatchdog 方法1：串口已关闭");
                     return true;
@@ -615,7 +677,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             // 方法2：尝试访问BytesToRead（拔出后通常抛IOException）
             try
             {
-                _ = _serialPort.BytesToRead;
+                _ = Volatile.Read(ref _serialPort)!.BytesToRead;
             }
             catch (IOException)
             {
@@ -656,26 +718,34 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// 这里不能调用 DisconnectAsync，因为 DisconnectAsync 会停止 PortWatchdog，
         /// 停止后就无法继续检测端口重新出现。
         /// </summary>
-        private void HandlePortLostByWatchdog()
+        private async Task HandlePortLostByWatchdogAsync()
         {
-            lock (_lockObject)
+            var entered = false;
+            try
             {
+                await _connectionLifecycleLock.WaitAsync().ConfigureAwait(false);
+                entered = true;
                 if (!_isConnected)
                 {
                     return;
                 }
 
-                CloseSerialPort();
-                _isConnected = false;
-                _connectionStableTime = DateTime.MinValue;
-                _disconnectDetectedCount = 0;
-
-                _barcodeCompleteTimer?.Stop();
-                _barcodeCompleteTimer?.Dispose();
-                _barcodeCompleteTimer = null;
-
-                ConnectionStateChanged?.Invoke(this, false);
-                _logger.LogInformation("扫描枪已断开连接，继续保持热插拔检测等待恢复");
+                await StopCurrentConnectionAsync(stopWatchdog: false).ConfigureAwait(false);
+                PublishConnectionStateSafely(false);
+                _logger.LogInformation("[扫码连接] 热插拔确认断开，读取任务已停止，继续等待端口恢复");
+            }
+            catch (ObjectDisposedException) when (_isDisposed)
+            {
+                _logger.LogDebug("[扫码连接] Watchdog 退出时生命周期门禁已释放");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[扫码连接][异常] Watchdog 断开处理失败");
+            }
+            finally
+            {
+                if (entered)
+                    _connectionLifecycleLock.Release();
             }
         }
 
@@ -700,100 +770,159 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         }
 
         /// <summary>
-        /// 串口数据接收事件处理
-        /// 
-        /// 工作原理（超时判定法）：
-        /// 1. 扫描枪通过串口连续发送条码字符，间隔通常 < 10ms
-        /// 2. 每次收到数据追加到缓冲区，同时重置 100ms 计时器
-        /// 3. 100ms 内无新数据 → 认为条码已完整发送 → 触发回调提取条码
-        /// 
-        /// 优势：不依赖 \r\n 结束符，兼容扫描枪有/无结束符两种配置模式
+        /// 单一串口读取任务。
+        /// 每次连接只创建一个任务和一组局部缓冲区，读取超时 100ms 即完成当前条码组包。
         /// </summary>
-        private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
+        private async Task RunReadLoopAsync(
+            SerialPort serialPort,
+            int connectionVersion,
+            CancellationToken cancellationToken)
         {
-            if (_serialPort == null || !_serialPort.IsOpen) return;
+            var readBuffer = new byte[256];
+            var barcodeBuffer = new StringBuilder();
+            var normalExit = false;
 
             try
             {
-                lock (_lockObject)
+                while (!cancellationToken.IsCancellationRequested
+                    && IsCurrentConnection(serialPort, connectionVersion))
                 {
-                    // 一次性读取所有可用数据
-                    int bytesToRead = _serialPort.BytesToRead;
-                    if (bytesToRead <= 0) return;
-
-                    byte[] buffer = new byte[bytesToRead];
-                    int bytesRead = _serialPort.Read(buffer, 0, bytesToRead);
-
-                    if (bytesRead > 0)
+                    try
                     {
-                        string data = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                        _logger.LogDebug("扫描枪原始数据: {Data}", data.Replace("\r", "\\r").Replace("\n", "\\n"));
+                        var bytesRead = serialPort.Read(readBuffer, 0, readBuffer.Length);
+                        if (bytesRead <= 0)
+                            continue;
 
-                        RawDataReceived?.Invoke(this, data);
-
-                        // 追加到缓冲区（累积字符直到超时判定完整）
-                        _dataBuffer.Append(data);
-
-                        // 初始化或重置超时计时器
-                        // 每次收到数据都重新计时，直到100ms内无新数据才认为条码完整
-                        if (_barcodeCompleteTimer == null)
+                        if (!IsCurrentConnection(serialPort, connectionVersion))
                         {
-                            _barcodeCompleteTimer = new System.Timers.Timer(BARCODE_COMPLETE_TIMEOUT_MS);
-                            _barcodeCompleteTimer.AutoReset = false;  // 只触发一次
-                            _barcodeCompleteTimer.Elapsed += OnBarcodeCompleteTimeout;
+                            _logger.LogDebug("[扫码接收][忽略] 读取到旧连接数据, Version={Version}", connectionVersion);
+                            break;
                         }
-                        _barcodeCompleteTimer.Stop();    // 停止上一次计时
-                        _barcodeCompleteTimer.Start();   // 重新开始100ms倒计时
+
+                        var data = serialPort.Encoding.GetString(readBuffer, 0, bytesRead);
+                        barcodeBuffer.Append(data);
+                        _logger.LogInformation(
+                            "[扫码接收] Port={Port}, Version={Version}, BytesRead={BytesRead}, BufferLength={BufferLength}",
+                            serialPort.PortName,
+                            connectionVersion,
+                            bytesRead,
+                            barcodeBuffer.Length);
+                        PublishRawDataSafely(data);
+                    }
+                    catch (TimeoutException)
+                    {
+                        if (barcodeBuffer.Length > 0)
+                        {
+                            CompleteBarcode(serialPort, connectionVersion, barcodeBuffer);
+                            barcodeBuffer.Clear();
+                        }
+                    }
+                    catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested
+                        || !IsCurrentConnection(serialPort, connectionVersion))
+                    {
+                        normalExit = true;
+                        break;
+                    }
+                    catch (IOException ex) when (cancellationToken.IsCancellationRequested
+                        || !IsCurrentConnection(serialPort, connectionVersion))
+                    {
+                        normalExit = true;
+                        _logger.LogDebug(ex, "[扫码接收] 读取任务因连接停止而退出, Version={Version}", connectionVersion);
+                        break;
+                    }
+                    catch (InvalidOperationException ex) when (cancellationToken.IsCancellationRequested
+                        || !IsCurrentConnection(serialPort, connectionVersion))
+                    {
+                        normalExit = true;
+                        _logger.LogDebug(ex, "[扫码接收] 读取任务因串口关闭而退出, Version={Version}", connectionVersion);
+                        break;
                     }
                 }
             }
-            catch (TimeoutException)
-            {
-                // 读取超时，正常情况
-            }
-            catch (IOException ex)
-            {
-                // ⭐ IO异常通常意味着设备已拔出
-                _logger.LogWarning(ex, "扫描枪IO异常（可能已拔出）");
-                // 不在此处立即触发断开，交给 PortWatchdog 防抖机制统一处理
-            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "扫描枪数据接收异常");
+                _logger.LogError(ex, "[扫码接收] 读取任务未预期异常, Version={Version}", connectionVersion);
+            }
+
+            if (!normalExit
+                && !cancellationToken.IsCancellationRequested
+                && IsCurrentConnection(serialPort, connectionVersion))
+            {
+                HandleReadLoopUnexpectedExit(serialPort, connectionVersion);
+            }
+
+            _logger.LogDebug("[扫码接收] 读取任务已正常退出, Version={Version}", connectionVersion);
+            await Task.CompletedTask;
+        }
+
+        private bool IsCurrentConnection(SerialPort serialPort, int connectionVersion)
+        {
+            try
+            {
+                return Volatile.Read(ref _serialPort) == serialPort
+                    && Volatile.Read(ref _connectionVersion) == connectionVersion
+                    && _isConnected
+                    && serialPort.IsOpen;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
             }
         }
 
-        /// <summary>
-        /// 条码完整超时回调
-        /// 
-        /// 触发条件：最后一次收到串口数据后 100ms 内无新数据到达
-        /// 此时认为扫描枪已完成一条条码的发送，提取缓冲区内容
-        /// 
-        /// 清理逻辑：
-        /// - 去除首尾空白字符
-        /// - 去除末尾的 \r、\n、\t（如果有配置结束符）
-        /// - 空条码忽略
-        /// </summary>
-        private void OnBarcodeCompleteTimeout(object? sender, System.Timers.ElapsedEventArgs e)
+        private void CompleteBarcode(
+            SerialPort serialPort,
+            int connectionVersion,
+            StringBuilder barcodeBuffer)
         {
-            string barcode;
-            lock (_lockObject)
+            if (!IsCurrentConnection(serialPort, connectionVersion))
             {
-                barcode = _dataBuffer.ToString();
-                _dataBuffer.Clear();
+                _logger.LogDebug("[扫码组包][忽略] 连接版本已失效, Version={Version}", connectionVersion);
+                return;
             }
 
-            // 清理条码：去首尾空白，去末尾换行符（兼容有/无结束符两种模式）
-            barcode = barcode.Trim().TrimEnd('\r', '\n', '\t', ' ');
+            var barcode = barcodeBuffer.ToString().Trim().TrimEnd('\r', '\n', '\t', ' ');
+            if (string.IsNullOrWhiteSpace(barcode))
+                return;
 
-            if (!string.IsNullOrWhiteSpace(barcode))
+            _logger.LogInformation(
+                "[扫码组包] Version={Version}, BarcodeLength={Length}, Barcode={Barcode}",
+                connectionVersion,
+                barcode.Length,
+                barcode);
+            PublishBarcodeReceivedSafely(new BarcodeReceivedEventArgs(barcode, barcode));
+        }
+
+        private void HandleReadLoopUnexpectedExit(
+            SerialPort serialPort,
+            int connectionVersion)
+        {
+            if (Interlocked.CompareExchange(
+                    ref _connectionVersion,
+                    connectionVersion + 1,
+                    connectionVersion) != connectionVersion)
             {
-                _logger.LogInformation("扫描到条码: {Barcode}", barcode);
-
-                // 触发条码事件
-                var args = new BarcodeReceivedEventArgs(barcode, barcode);
-                BarcodeReceived?.Invoke(this, args);
+                return;
             }
+
+            _isConnected = false;
+            _logger.LogWarning(
+                "[扫码接收][异常] 读取任务意外退出，连接已失效: Port={Port}, Version={Version}",
+                serialPort.PortName,
+                connectionVersion);
+
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref _serialPort, null, serialPort),
+                    serialPort))
+            {
+                CloseSerialPort(serialPort);
+            }
+
+            PublishConnectionStateSafely(false);
         }
 
         private void OnErrorReceived(object sender, System.IO.Ports.SerialErrorReceivedEventArgs e)
@@ -824,7 +953,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public async Task<bool> TriggerScanAsync()
         {
-            if (!_isConnected || _serialPort == null || !_serialPort.IsOpen)
+            var serialPort = Volatile.Read(ref _serialPort);
+            if (!IsConnected || serialPort == null)
             {
                 _logger.LogWarning("扫描枪未连接，无法触发扫描");
                 return false;
@@ -834,11 +964,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             {
                 // Honeywell 触发扫描命令：SYN T CR
                 byte[] triggerCommand = { 0x16, 0x54, 0x0D };
-
-                lock (_lockObject)
-                {
-                    _serialPort.Write(triggerCommand, 0, triggerCommand.Length);
-                }
+                serialPort.Write(triggerCommand, 0, triggerCommand.Length);
 
                 _logger.LogDebug("已发送触发扫描命令");
                 return true;
@@ -860,7 +986,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// </summary>
         public async Task<bool> SendConfigurationAsync(string configCommand)
         {
-            if (!_isConnected || _serialPort == null || !_serialPort.IsOpen)
+            var serialPort = Volatile.Read(ref _serialPort);
+            if (!IsConnected || serialPort == null)
             {
                 _logger.LogWarning("扫描枪未连接");
                 return false;
@@ -869,11 +996,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             try
             {
                 byte[] cmdBytes = Encoding.ASCII.GetBytes(configCommand + "\r\n");
-
-                lock (_lockObject)
-                {
-                    _serialPort.Write(cmdBytes, 0, cmdBytes.Length);
-                }
+                serialPort.Write(cmdBytes, 0, cmdBytes.Length);
 
                 _logger.LogInformation("已发送配置命令: {Command}", configCommand);
                 return true;
@@ -891,7 +1014,83 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         private void Notify(NotificationType type, string message)
         {
-            OnNotification?.Invoke(this, new CommunicationNotification(type, message, "H1900"));
+            var handlers = OnNotification;
+            if (handlers == null)
+                return;
+
+            var args = new CommunicationNotification(type, message, "H1900");
+            foreach (EventHandler<CommunicationNotification> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码连接][异常] 通知订阅者执行失败: Type={Type}", type);
+                }
+            }
+        }
+
+        private void PublishRawDataSafely(string data)
+        {
+            var handlers = RawDataReceived;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<string> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, data);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码接收][异常] RawDataReceived 订阅者执行失败");
+                }
+            }
+        }
+
+        private void PublishBarcodeReceivedSafely(BarcodeReceivedEventArgs args)
+        {
+            var handlers = BarcodeReceived;
+            if (handlers == null)
+            {
+                _logger.LogDebug("[扫码组包] 当前无条码订阅者");
+                return;
+            }
+
+            foreach (EventHandler<BarcodeReceivedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码接收][异常] BarcodeReceived 订阅者执行失败");
+                }
+            }
+        }
+
+        private void PublishConnectionStateSafely(bool isConnected)
+        {
+            var handlers = ConnectionStateChanged;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<bool> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, isConnected);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码连接][异常] ConnectionStateChanged 订阅者执行失败: Connected={Connected}",
+                        isConnected);
+                }
+            }
         }
 
         #endregion
@@ -901,22 +1100,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         public void Dispose()
         {
             if (_isDisposed) return;
-            _isDisposed = true;
 
-            // ⭐ 同步清理连接资源（不能调用异步 DisconnectAsync）
-            lock (_lockObject)
+            _connectionLifecycleLock.Wait();
+            try
             {
-                StopMonitoring();
-                CloseSerialPort();
-                _isConnected = false;
-                _connectionStableTime = DateTime.MinValue;
-                _disconnectDetectedCount = 0;
-                ConnectionStateChanged?.Invoke(this, false);
-            }
+                if (_isDisposed)
+                    return;
 
-            _readLoopCts?.Dispose();
-            _barcodeCompleteTimer?.Stop();
-            _barcodeCompleteTimer?.Dispose();
+                _isDisposed = true;
+                StopCurrentConnectionAsync(stopWatchdog: true).GetAwaiter().GetResult();
+                PublishConnectionStateSafely(false);
+            }
+            finally
+            {
+                _connectionLifecycleLock.Release();
+                _connectionLifecycleLock.Dispose();
+            }
 
             GC.SuppressFinalize(this);
         }

@@ -4382,20 +4382,60 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        Application.Current.Dispatcher.Invoke(() =>
+        void ApplyBarcode()
         {
-            if (UiState == TestUIState.Testing)
+            try
             {
-                AddLog("⚠️ 测试中禁止扫码，条码已忽略");
-                return;
+                if (!_hardwareEventsSubscribed)
+                {
+                    _logger.LogDebug("[扫码UI][忽略] 页面已离开，丢弃排队中的旧扫码");
+                    return;
+                }
+
+                if (_suspendRunPageBarcodeHandling)
+                {
+                    _logger.LogDebug("[扫码UI][忽略] 选择弹窗打开，运行页忽略本次产品条码");
+                    return;
+                }
+
+                if (UiState == TestUIState.Testing)
+                {
+                    _logger.LogInformation("[扫码UI][忽略] 测试中禁止扫码");
+                    AddLog("⚠️ 测试中禁止扫码，条码已忽略");
+                    return;
+                }
+
+                ModelName = e.ModelName;
+                SerialNumber = e.SerialPart ?? string.Empty;
+                ValidateCurrentSchemeName();
+
+                _logger.LogInformation(
+                    "[扫码UI] 运行页已应用条码, Model={Model}, Serial={Serial}",
+                    e.ModelName,
+                    e.SerialPart);
+                AddLog($"📷 扫描到条码: 机种={e.ModelName}, 序列号={e.SerialPart}");
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[扫码UI][异常] 运行页应用条码失败");
+            }
+        }
 
-            ModelName = e.ModelName;
-            SerialNumber = e.SerialPart ?? string.Empty;
-            ValidateCurrentSchemeName();
-
-            AddLog($"📷 扫描到条码: 机种={e.ModelName}, 序列号={e.SerialPart}");
-        });
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null
+            || dispatcher.HasShutdownStarted
+            || dispatcher.HasShutdownFinished)
+        {
+            _logger.LogWarning("[扫码UI][忽略] Dispatcher 不可用");
+        }
+        else if (dispatcher.CheckAccess())
+        {
+            ApplyBarcode();
+        }
+        else
+        {
+            dispatcher.BeginInvoke((Action)ApplyBarcode, DispatcherPriority.Normal);
+        }
     }
 
     /// <summary>检测引擎状态变更 → 映射为 UI 状态。</summary>
