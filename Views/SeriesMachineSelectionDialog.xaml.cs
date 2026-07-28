@@ -14,7 +14,11 @@ public partial class SeriesMachineSelectionDialog : Window
         DataContext = viewModel;
         _viewModel.RequestClose += OnRequestClose;
         Loaded += async (_, _) => await _viewModel.LoadAsync();
-        Closed += (_, _) => _viewModel.RequestClose -= OnRequestClose;
+        Closed += (_, _) =>
+        {
+            _viewModel.RequestClose -= OnRequestClose;
+            _viewModel.UnsubscribeFromBarcode();
+        };
     }
 
     private void OnRequestClose(bool? dialogResult)

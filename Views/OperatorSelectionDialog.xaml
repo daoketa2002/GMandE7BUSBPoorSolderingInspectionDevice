@@ -163,7 +163,7 @@
         </Border>
 
         <TextBlock Grid.Row="3"
-                   Text="新增作业员"
+                   Text="新增作业员（可手动输入，也可扫描作业员工号）"
                    FontSize="16"
                    FontWeight="Bold"
                    Foreground="#2C3E50"

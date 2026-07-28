@@ -58,6 +58,12 @@ public sealed class PlcAddressMap
     /// <summary>DT308：当前参照工位（左工位=1，右工位=2）。</summary>
     public const ushort WorkstationSelection = 308;
 
+    /// <summary>DT309：左工位基板安装拒绝代码。0=无拒绝，1=接近传感器，2=物检传感器。</summary>
+    public const ushort LeftWorkstationInstallReject = 309;
+
+    /// <summary>DT310：右工位基板安装拒绝代码。0=无拒绝，1=接近传感器，2=物检传感器。</summary>
+    public const ushort RightWorkstationInstallReject = 310;
+
     // ── 引脚输出范围 ──
 
     /// <summary>引脚输出起始地址 DT130</summary>

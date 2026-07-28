@@ -6,6 +6,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.ObjectModel;
+using System.Windows;
 
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 
@@ -15,20 +16,24 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
     private readonly ISeriesMachineStorageService _storageService;
     private readonly IReferenceSelectionStateService _selectionStateService;
     private readonly IPlcDevice _plcDevice;
+    private readonly IScannerBarcodeService _scannerBarcodeService;
     private readonly INotificationService _notificationService;
     private readonly ILogger<SeriesMachineSelectionDialogViewModel> _logger;
     private SeriesMachineCatalog _catalog = new();
+    private bool _barcodeSubscribed;
 
     public SeriesMachineSelectionDialogViewModel(
         ISeriesMachineStorageService storageService,
         IReferenceSelectionStateService selectionStateService,
         IPlcDevice plcDevice,
+        IScannerBarcodeService scannerBarcodeService,
         INotificationService notificationService,
         ILogger<SeriesMachineSelectionDialogViewModel> logger)
     {
         _storageService = storageService ?? throw new ArgumentNullException(nameof(storageService));
         _selectionStateService = selectionStateService ?? throw new ArgumentNullException(nameof(selectionStateService));
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
+        _scannerBarcodeService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
         _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -58,6 +63,9 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isBusy;
+
+    [ObservableProperty]
+    private string _hintText = string.Empty;
 
     public bool IsLeftWorkstation => Workstation == WorkstationConstants.Left;
     public bool IsRightWorkstation => Workstation == WorkstationConstants.Right;
@@ -113,6 +121,73 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
             ?? SelectedMachine;
         if (WorkstationConstants.IsValid(current.Workstation))
             Workstation = current.Workstation;
+
+        SubscribeToBarcode();
+    }
+
+    /// <summary>订阅共享产品条码解析事件，使用统一的中英文逗号解析结果。</summary>
+    private void SubscribeToBarcode()
+    {
+        if (_barcodeSubscribed)
+            return;
+
+        _scannerBarcodeService.BarcodeParsed += OnBarcodeParsed;
+        _barcodeSubscribed = true;
+    }
+
+    /// <summary>弹窗关闭时退订共享扫码事件。</summary>
+    public void UnsubscribeFromBarcode()
+    {
+        if (!_barcodeSubscribed)
+            return;
+
+        _scannerBarcodeService.BarcodeParsed -= OnBarcodeParsed;
+        _barcodeSubscribed = false;
+    }
+
+    private void OnBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
+    {
+        void ApplyBarcode()
+        {
+            var machineName = e.ModelName.Trim();
+            if (string.IsNullOrWhiteSpace(machineName))
+                return;
+
+            var currentMatch = SelectedSeries?.Machines.FirstOrDefault(item =>
+                string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase));
+            if (currentMatch != null)
+            {
+                SelectedMachine = currentMatch;
+                MachineNameInput = currentMatch.Name;
+                HintText = $"扫码已选中机种：{machineName}";
+                return;
+            }
+
+            var matches = _catalog.Series
+                .Where(series => series.Machines.Any(item =>
+                    string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            if (matches.Count == 1)
+            {
+                SelectedSeries = SeriesItems.FirstOrDefault(item => item.Id == matches[0].Id);
+                SelectedMachine = SelectedSeries?.Machines.FirstOrDefault(item =>
+                    string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase));
+                MachineNameInput = machineName;
+                HintText = $"扫码已定位到：{matches[0].Name} / {machineName}";
+                return;
+            }
+
+            MachineNameInput = machineName;
+            SelectedMachine = null;
+            HintText = matches.Count > 1
+                ? $"多个系列存在机种 {machineName}，请选择正确系列。"
+                : $"未找到机种 {machineName}，请确认系列后点击新增。";
+        }
+
+        if (Application.Current?.Dispatcher is { } dispatcher)
+            dispatcher.BeginInvoke((Action)ApplyBarcode);
+        else
+            ApplyBarcode();
     }
 
     [RelayCommand]

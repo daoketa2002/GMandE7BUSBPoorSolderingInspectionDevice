@@ -81,7 +81,7 @@ var tests = new List<(string Name, Action Body)>
     ("CTRL-RECOVER-01 阶段 D 扫描枪只由连接服务负责重连", TestCtrlRecover01ScannerReconnectOwnerContract),
     ("CTRL-RECOVER-01 阶段 D 断线提示与页面恢复状态", TestCtrlRecover01RecoveryExperienceContract),
     ("RESULT-UI-01 PLC 最终结果和系统设置源码契约", TestResultUi01SourceContract),
-    ("CSV 日志根目录统一为根目录 TestLog", TestCsvLogRootPathContract),
+    ("CSV 日志根目录统一为根目录 DataLog", TestCsvLogRootPathContract),
     ("启动拒绝记录来源原因和是否清除启动请求", () =>
     {
         var source = File.ReadAllText(Path.Combine(
@@ -329,7 +329,7 @@ var tests = new List<(string Name, Action Body)>
                 planVersion: 1,
                 pins: new[] { "A1-B1" });
 
-            var monthFolder = Path.Combine(root, "TestLog", "2026-07");
+            var monthFolder = Path.Combine(root, "DataLog", "2026-07");
             Directory.CreateDirectory(monthFolder);
             var oldFile = Path.Combine(monthFolder, "GM_P1.csv");
             File.WriteAllLines(oldFile, new[]
@@ -513,7 +513,7 @@ var tests = new List<(string Name, Action Body)>
                     .GetResult();
             }
 
-            var monthFolder = Path.Combine(root, "TestLog", "2026-07");
+            var monthFolder = Path.Combine(root, "DataLog", "2026-07");
             var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
             AssertEqual(2, files.Count);
 
@@ -551,7 +551,7 @@ var tests = new List<(string Name, Action Body)>
                 .GetAwaiter()
                 .GetResult();
 
-            var monthFolder = Path.Combine(root, "TestLog", "2026-07");
+            var monthFolder = Path.Combine(root, "DataLog", "2026-07");
             var files = Directory.GetFiles(monthFolder, "GM_P1*.csv").OrderBy(x => x).ToList();
             AssertEqual(2, files.Count);
 
@@ -932,9 +932,9 @@ var tests = new List<(string Name, Action Body)>
             var pathManager = new CsvStoragePathManager(
                 csvSettings,
                 NullLogger<CsvStoragePathManager>.Instance);
-            var storage = CreateCsvStorageWithIndex(
+            var storage = new CsvTestRecordStorage(
                 pathManager,
-                new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance));
+                NullLogger<CsvTestRecordStorage>.Instance);
 
             storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-A", DateTime.Now)).GetAwaiter().GetResult();
 
@@ -944,8 +944,8 @@ var tests = new List<(string Name, Action Body)>
 
             storage.SaveRecordAsync(CreateLogRecord("GM", "P1", "SN-B", DateTime.Now.AddSeconds(1))).GetAwaiter().GetResult();
 
-            var filesA = Directory.GetFiles(Path.Combine(rootA, "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
-            var filesB = Directory.GetFiles(Path.Combine(rootB, "TestLog"), "GM_P1*.csv", SearchOption.AllDirectories);
+            var filesA = Directory.GetFiles(Path.Combine(rootA, "DataLog"), "GM_P1*.csv", SearchOption.AllDirectories);
+            var filesB = Directory.GetFiles(Path.Combine(rootB, "DataLog"), "GM_P1*.csv", SearchOption.AllDirectories);
             AssertEqual(true, filesA.Length > 0);
             AssertEqual(true, filesB.Length > 0);
             AssertEqual(true, filesA.All(file => File.ReadAllText(file).Contains("SN-A", StringComparison.Ordinal)));
@@ -990,7 +990,7 @@ var tests = new List<(string Name, Action Body)>
 
         var source = File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "ViewModels", "SystemSettingsViewModel.cs"));
         AssertEqual(true, source.Contains("RestoreCsvPathPreview", StringComparison.Ordinal));
-        AssertEqual(true, source.Contains("previousTestLogPath", StringComparison.Ordinal));
+        AssertEqual(true, source.Contains("previousDataLogPath", StringComparison.Ordinal));
         AssertEqual(true, source.Contains("if (!csvPathApplied)", StringComparison.Ordinal));
     }),
     ("APP-OPT-01 D1/D2 keeps bounded log rolling and DT302 timing contract", () =>
@@ -2473,7 +2473,7 @@ static void TestCsvLogRootPathContract()
     try
     {
         var pathManager = CreateCsvPathManager(root, maxRowsPerFile: 50000);
-        AssertEqual(Path.Combine(root, "TestLog"), pathManager.GetTestLogRootPath());
+        AssertEqual(Path.Combine(root, "DataLog"), pathManager.GetDataLogRootPath());
 
         string pathManagerSource = File.ReadAllText(Path.Combine(
             Environment.CurrentDirectory,
@@ -2489,26 +2489,26 @@ static void TestCsvLogRootPathContract()
             "SystemSettingsView.xaml"));
 
         AssertEqual(true, pathManagerSource.Contains(
-            "public static string BuildTestLogRootPath(string rootPath)",
+            "public static string BuildDataLogRootPath(string rootPath)",
             StringComparison.Ordinal));
-        AssertEqual(false, pathManagerSource.Contains("DATA_FOLDER_NAME", StringComparison.Ordinal));
+        AssertEqual(true, pathManagerSource.Contains("DATA_LOG_FOLDER_NAME", StringComparison.Ordinal));
         AssertEqual(true, settingsViewModelSource.Contains(
-            "CsvStoragePathManager.BuildTestLogRootPath(rootPath)",
+            "CsvStoragePathManager.BuildDataLogRootPath(rootPath)",
             StringComparison.Ordinal));
         AssertEqual(false, settingsViewModelSource.Contains(
             "Path.Combine(CustomStoragePath, \"数据\", \"TestLog\")",
             StringComparison.Ordinal));
         AssertEqual(true, settingsViewModelSource.Contains(
-            "_csvPathManager.GetTestLogRootPath()",
+            "_csvPathManager.GetDataLogRootPath()",
             StringComparison.Ordinal));
         AssertEqual(true, settingsViewModelSource.Contains(
-            "Directory.CreateDirectory(testLogPath)",
+            "Directory.CreateDirectory(dataLogPath)",
             StringComparison.Ordinal));
         AssertEqual(true, settingsViewModelSource.Contains(
             "new System.Diagnostics.ProcessStartInfo",
             StringComparison.Ordinal));
         AssertEqual(false, settingsViewSource.Contains("「数据\\TestLog」", StringComparison.Ordinal));
-        AssertEqual(true, settingsViewSource.Contains("「TestLog」文件夹", StringComparison.Ordinal));
+        AssertEqual(true, settingsViewSource.Contains("「DataLog」文件夹", StringComparison.Ordinal));
     }
     finally
     {
@@ -2669,9 +2669,9 @@ static List<string> ReadCsvDataRows(string filePath)
 
 static CsvTestRecordStorage CreateCsvStorage(string root, int maxRowsPerFile)
 {
-    return CreateCsvStorageWithIndex(
+    return new CsvTestRecordStorage(
         CreateCsvPathManager(root, maxRowsPerFile),
-        new MonthlyLogIndexService(NullLogger<MonthlyLogIndexService>.Instance));
+        NullLogger<CsvTestRecordStorage>.Instance);
 }
 
 static CsvStoragePathManager CreateCsvPathManager(string root, int maxRowsPerFile)
@@ -2687,16 +2687,6 @@ static CsvStoragePathManager CreateCsvPathManager(string root, int maxRowsPerFil
     return new CsvStoragePathManager(
         new CsvStorageSettings(configuration),
         NullLogger<CsvStoragePathManager>.Instance);
-}
-
-static CsvTestRecordStorage CreateCsvStorageWithIndex(
-    CsvStoragePathManager pathManager,
-    MonthlyLogIndexService indexService)
-{
-    return new CsvTestRecordStorage(
-        pathManager,
-        indexService,
-        NullLogger<CsvTestRecordStorage>.Instance);
 }
 
 static LogRecord CreateLogRecord(

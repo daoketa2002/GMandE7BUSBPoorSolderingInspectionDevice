@@ -197,6 +197,23 @@ public interface IPlcDevice : ICommunicationDevice
     /// </summary>
     Task<PlcOperationResult<PlcControlSignals>> ReadControlSignalsAsync(CancellationToken ct = default);
 
+    /// <summary>一次读取 DT309、DT310 的左右工位安装拒绝代码。</summary>
+    Task<PlcOperationResult<WorkstationInstallRejectSignals>> ReadWorkstationInstallRejectSignalsAsync(
+        CancellationToken ct = default);
+
+    /// <summary>一次写入 DT309=0、DT310=0，清除工位安装拒绝代码。</summary>
+    Task<PlcOperationResult> ClearWorkstationInstallRejectSignalsAsync(
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// 临时验收注入：向 DT309、DT310 写入允许的拒绝代码。
+    /// 用户完成 U1～U7 验收后删除，不属于正式生产功能。
+    /// </summary>
+    Task<PlcOperationResult> WriteWorkstationInstallRejectForAcceptanceAsync(
+        ushort leftCode,
+        ushort rightCode,
+        CancellationToken ct = default);
+
     /// <summary>
     /// 读取继电器动作完成标志（DT302 单寄存器）。
     /// 仅用于 InspectionEngine.WaitRelaySwitchCompletedAsync 的内部轮询。

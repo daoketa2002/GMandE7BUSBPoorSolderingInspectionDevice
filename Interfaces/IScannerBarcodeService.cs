@@ -1,5 +1,7 @@
 ﻿using System;
 
+using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+
 namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 {
     /// <summary>
@@ -17,6 +19,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// 条码扫描完成事件（已解析）
         /// </summary>
         event EventHandler<BarcodeParsedEventArgs>? BarcodeParsed;
+
+        /// <summary>原始扫码事件，保留完整字符串供作业员号等非产品条码场景使用。</summary>
+        event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
 
         /// <summary>
         /// 扫描枪连接状态变更事件

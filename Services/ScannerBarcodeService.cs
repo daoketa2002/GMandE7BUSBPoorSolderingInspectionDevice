@@ -45,6 +45,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private volatile bool _isConnected;
 
         public event EventHandler<BarcodeParsedEventArgs>? BarcodeParsed;
+        public event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
         public event EventHandler<bool>? ConnectionStateChanged;
 
         /// <summary>
@@ -156,6 +157,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         private void OnScannerBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
         {
+            // 原始事件不做产品条码拆分，供作业员选择弹窗按完整字符串处理。
+            BarcodeReceived?.Invoke(this, e);
             var parsed = ParseBarcode(e.Barcode);
 
             // 确保在UI线程触发事件
@@ -190,7 +193,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             try
             {
                 // 按逗号分割
-                var parts = barcode.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                var parts = barcode.Split(new[] { ',', '，' },
+                    StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
                 if (parts.Length >= 1)
                 {

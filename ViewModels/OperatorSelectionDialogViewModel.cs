@@ -16,15 +16,19 @@ public partial class OperatorSelectionDialogViewModel : ObservableObject
 {
     private readonly IOperatorStorageService _storageService;
     private readonly IOperatorStateService _operatorStateService;
+    private readonly IScannerBarcodeService _scannerBarcodeService;
     private readonly ILogger<OperatorSelectionDialogViewModel> _logger;
+    private bool _barcodeSubscribed;
 
     public OperatorSelectionDialogViewModel(
         IOperatorStorageService storageService,
         IOperatorStateService operatorStateService,
+        IScannerBarcodeService scannerBarcodeService,
         ILogger<OperatorSelectionDialogViewModel> logger)
     {
         _storageService = storageService ?? throw new ArgumentNullException(nameof(storageService));
         _operatorStateService = operatorStateService ?? throw new ArgumentNullException(nameof(operatorStateService));
+        _scannerBarcodeService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -58,6 +62,61 @@ public partial class OperatorSelectionDialogViewModel : ObservableObject
             : Operators.FirstOrDefault(o => o.Id == current.Id)
               ?? Operators.FirstOrDefault(o => string.Equals(o.Name, current.Name, StringComparison.OrdinalIgnoreCase))
               ?? Operators.FirstOrDefault();
+
+        SubscribeToBarcode();
+    }
+
+    /// <summary>订阅原始扫码事件，防止重复加载造成重复订阅。</summary>
+    private void SubscribeToBarcode()
+    {
+        if (_barcodeSubscribed)
+            return;
+
+        _scannerBarcodeService.BarcodeReceived += OnBarcodeReceived;
+        _barcodeSubscribed = true;
+    }
+
+    /// <summary>弹窗关闭时退订原始扫码事件。</summary>
+    public void UnsubscribeFromBarcode()
+    {
+        if (!_barcodeSubscribed)
+            return;
+
+        _scannerBarcodeService.BarcodeReceived -= OnBarcodeReceived;
+        _barcodeSubscribed = false;
+    }
+
+    private void OnBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
+    {
+        void ApplyBarcode()
+        {
+            var raw = e.Barcode.Trim();
+            if (!InputValidationHelper.IsValidOperatorName(raw))
+            {
+                HintText = "作业员扫码内容无效，请重新扫描或手动输入。";
+                _logger.LogWarning("[作业员扫码][校验拒绝] 原始内容不符合名称规则");
+                return;
+            }
+
+            var existing = Operators.FirstOrDefault(item =>
+                string.Equals(item.Name.Trim(), raw, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
+            {
+                SelectedOperator = existing;
+                InputName = existing.Name;
+                HintText = $"扫码已选中作业员：{existing.Name}";
+                return;
+            }
+
+            InputName = raw;
+            SelectedOperator = null;
+            HintText = $"未找到作业员 {raw}，请确认后点击新增。";
+        }
+
+        if (Application.Current?.Dispatcher is { } dispatcher)
+            dispatcher.BeginInvoke((Action)ApplyBarcode);
+        else
+            ApplyBarcode();
     }
 
     [RelayCommand]

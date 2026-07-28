@@ -23,7 +23,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     /// CSV 测试记录存储实现
     /// 
     /// 目录结构：
-    /// {根目录}/TestLog/{yyyy-MM}/{机种名称}_{方案名称}.csv
+    /// {根目录}/DataLog/{yyyy-MM}/{机种名称}_{方案名称}.csv
     /// 
     /// 特性：
     /// - 按年月自动分层
@@ -36,8 +36,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
     {
         private readonly CsvStoragePathManager _pathManager;
         private readonly ILogger<CsvTestRecordStorage> _logger;
-        private readonly MonthlyLogIndexService _monthlyLogIndexService;
-
         private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _fileLocks = new();
 
         private static readonly HashSet<string> FixedColumnNames = new(StringComparer.OrdinalIgnoreCase)
@@ -47,11 +45,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         public CsvTestRecordStorage(
             CsvStoragePathManager pathManager,
-            MonthlyLogIndexService monthlyLogIndexService,
             ILogger<CsvTestRecordStorage> logger)
         {
             _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
-            _monthlyLogIndexService = monthlyLogIndexService ?? throw new ArgumentNullException(nameof(monthlyLogIndexService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             _logger.LogInformation("CsvTestRecordStorage 初始化完成");
@@ -97,9 +93,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 string expectedHeader = BuildCsvHeader(record);
                 string logicalLockKey = Path.Combine(monthFolder, baseFileName);
                 var fileLock = _fileLocks.GetOrAdd(logicalLockKey, _ => new ReaderWriterLockSlim());
-                string writtenFileName = string.Empty;
-                int writtenRowNumber = 0;
-
                 await Task.Run(() =>
                 {
                     if (!fileLock.TryEnterWriteLock(TimeSpan.FromSeconds(30)))
@@ -127,9 +120,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                             writer.WriteLine(dataRow);
                         }
 
-                        writtenFileName = Path.GetFileName(filePath);
-                        writtenRowNumber = rowIndex;
-
                         _logger.LogInformation(
                             "CSV保存成功 - 机种:{MachineType}, 方案:{Plan}, SN:{Serial}, 结果:{Result}",
                             effectiveMachineType, record.PlanName, record.SerialNumber,
@@ -141,17 +131,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     }
                 });
 
-                if (!string.IsNullOrWhiteSpace(writtenFileName) && writtenRowNumber > 0)
-                {
-                    try
-                    {
-                        await _monthlyLogIndexService.AppendAsync(monthFolder, record, writtenFileName, writtenRowNumber);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[日志索引] 追加失败，正式 CSV 已保留: {FileName}", writtenFileName);
-                    }
-                }
             }
             catch (Exception ex)
             {
@@ -182,8 +161,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             return await Task.Run(() =>
             {
-                var testLogRoot = _pathManager.GetTestLogRootPath();
-                if (!Directory.Exists(testLogRoot))
+                var dataLogRoot = _pathManager.GetDataLogRootPath();
+                if (!Directory.Exists(dataLogRoot))
                     return false;
 
                 var safeMachineType = _pathManager.SanitizeFileName(machineType.Trim());
@@ -193,19 +172,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                 foreach (var monthFolder in GetMonthFoldersInRange(startTime, endTime))
                 {
-                    var entries = ReadOrRebuildMonthIndex(monthFolder);
-                    var hit = entries.FirstOrDefault(entry =>
-                        string.Equals(entry.MachineType, expectedMachineType, StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(entry.SerialNumber, expectedSerialNumber, StringComparison.OrdinalIgnoreCase)
-                        && entry.Timestamp >= startTime
-                        && entry.Timestamp <= endTime);
-
-                    if (hit != null)
+                    foreach (var filePath in Directory.EnumerateFiles(monthFolder, searchPattern))
                     {
-                        _logger.LogWarning(
-                            "[重复测试] 最近记录命中 - 机种:{MachineType}, SN:{SerialNumber}, 文件:{FileName}",
-                            machineType, serialNumber, hit.FileName);
-                        return true;
+                        try
+                        {
+                            if (ContainsMatchingRecord(filePath, expectedMachineType, expectedSerialNumber, startTime, endTime))
+                            {
+                                _logger.LogWarning(
+                                    "[重复测试] 最近记录命中 - 机种:{MachineType}, SN:{SerialNumber}, 文件:{FileName}",
+                                    machineType, serialNumber, Path.GetFileName(filePath));
+                                return true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[重复测试] CSV 文件读取失败，继续检查其他文件：{FilePath}", filePath);
+                        }
                     }
                 }
 
@@ -360,10 +342,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// </summary>
         private List<string> GetMonthFoldersInRange(DateTime? startDate, DateTime? endDate)
         {
-            var testLogRoot = _pathManager.GetTestLogRootPath();
+            var dataLogRoot = _pathManager.GetDataLogRootPath();
             var result = new List<string>();
 
-            if (!Directory.Exists(testLogRoot))
+            if (!Directory.Exists(dataLogRoot))
                 return result;
 
             // 确定起始和结束月份
@@ -376,7 +358,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 : new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
 
             // 遍历所有月份文件夹
-            foreach (var dir in Directory.GetDirectories(testLogRoot))
+            foreach (var dir in Directory.GetDirectories(dataLogRoot))
             {
                 var folderName = Path.GetFileName(dir);
                 if (DateTime.TryParseExact(folderName, "yyyy-MM",
@@ -393,23 +375,51 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return result.OrderBy(d => d).ToList();
         }
 
-        private List<LogIndexEntry> ReadOrRebuildMonthIndex(string monthFolder)
+        private bool ContainsMatchingRecord(
+            string filePath,
+            string expectedMachineType,
+            string expectedSerialNumber,
+            DateTime startTime,
+            DateTime endTime)
         {
-            try
-            {
-                var indexPath = Path.Combine(monthFolder, MonthlyLogIndexService.IndexFileName);
-                if (!File.Exists(indexPath))
-                {
-                    _monthlyLogIndexService.RebuildMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
-                }
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream, DetectFileEncoding(filePath), detectEncodingFromByteOrderMarks: true);
 
-                return _monthlyLogIndexService.ReadMonthIndexAsync(monthFolder).GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
+            var headerLine = reader.ReadLine();
+            if (string.IsNullOrWhiteSpace(headerLine))
+                return false;
+
+            var headerMap = BuildHeaderMap(ParseCsvLine(headerLine));
+            if (!headerMap.ContainsKey("机种名称")
+                || !headerMap.ContainsKey("序列号")
+                || !headerMap.ContainsKey("日期")
+                || !headerMap.ContainsKey("时间"))
             {
-                _logger.LogWarning(ex, "[日志索引] 读取或重建索引失败: {MonthFolder}", monthFolder);
-                return new List<LogIndexEntry>();
+                _logger.LogWarning("[重复测试] CSV 缺少必要表头，跳过文件：{FilePath}", filePath);
+                return false;
             }
+
+            string? line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                var columns = ParseCsvLine(line);
+                if (!string.Equals(GetColumnValue(headerMap, columns, "机种名称"), expectedMachineType, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(GetColumnValue(headerMap, columns, "序列号"), expectedSerialNumber, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (TryParseDateTime(
+                    GetColumnValue(headerMap, columns, "日期"),
+                    GetColumnValue(headerMap, columns, "时间"),
+                    out var timestamp)
+                    && timestamp >= startTime
+                    && timestamp <= endTime)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -449,32 +459,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             return int.TryParse(value, out var version) && version > 0 ? version : 1;
         }
 
-        private static DateTime ParseDateTime(string dateStr, string timeStr)
+        private static bool TryParseDateTime(string dateStr, string timeStr, out DateTime result)
         {
-            // 先尝试最常用的格式
             string combined = $"{dateStr} {timeStr}";
 
-            // 格式1：yyyy年MM月dd日 HH时mm分ss秒（新格式）
-            if (DateTime.TryParseExact(combined,
-                "yyyy年MM月dd日 HH时mm分ss秒",
-                CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime result))
-                return result;
-
-            // 格式2：yyyy/MM/dd HH:mm:ss（兼容旧格式）
-            if (DateTime.TryParseExact(combined,
-                "yyyy/MM/dd HH:mm:ss",
-                CultureInfo.InvariantCulture, DateTimeStyles.None, out result))
-                return result;
-
-            // 格式3：通用尝试
-            if (DateTime.TryParse(combined, out result))
-                return result;
-
-            // 解析失败输出调试信息
-            System.Diagnostics.Debug.WriteLine(
-                $"CSV日期解析失败 - 日期:'{dateStr}', 时间:'{timeStr}'，使用当前时间兜底");
-
-            return DateTime.Now;
+            return DateTime.TryParseExact(
+                       combined,
+                       new[]
+                       {
+                           "yyyy年M月d日 HH时mm分ss秒",
+                           "yyyy年MM月dd日 HH时mm分ss秒",
+                           "yyyy/MM/dd HH:mm:ss"
+                       },
+                       CultureInfo.InvariantCulture,
+                       DateTimeStyles.None,
+                       out result)
+                   || DateTime.TryParse(combined, CultureInfo.InvariantCulture, DateTimeStyles.None, out result);
         }
 
         private static Encoding DetectFileEncoding(string filePath)

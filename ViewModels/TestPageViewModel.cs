@@ -126,6 +126,18 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>轮询中上一次 PLC 输入快照，用于检测信号变化</summary>
     private PlcControlSignals? _lastPlcInputs;
 
+    /// <summary>轮询中上一次 DT309/DT310 安装拒绝快照，用于诊断和防重复处理。</summary>
+    private WorkstationInstallRejectSignals? _lastInstallRejectSignals;
+
+    /// <summary>当前安装拒绝弹窗是否正在显示。</summary>
+    private int _installRejectDialogInProgress;
+
+    /// <summary>已经处理过的安装拒绝键，避免同一非零值持续轮询重复弹窗。</summary>
+    private string? _handledInstallRejectKey;
+
+    /// <summary>DT309/DT310 读取失败诊断日志限频时间。</summary>
+    private DateTime _lastInstallRejectReadFailureLogUtc = DateTime.MinValue;
+
     /// <summary>是否已向引擎发起检测（防止 DT120=1 重复触发多次 RunInspectionAsync）</summary>
     private bool _inspectionStarted;
 
@@ -180,6 +192,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     /// <summary>设备断线恢复收口门禁，防止 PLC/DMM/扫描枪重复事件重复停止本轮检测。</summary>
     private int _deviceDisconnectHandling;
+
+    /// <summary>选择作业员或参照机种弹窗打开期间，运行页暂时忽略产品条码事件。</summary>
+    private bool _suspendRunPageBarcodeHandling;
 
     /// <summary>正常 OK 结果的延时清除任务取消源。</summary>
     private CancellationTokenSource? _finalResultAutoClearCts;
@@ -622,6 +637,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>调试面板可见（Fake 或半实物）</summary>
     public bool IsDebugControlPanelVisible => IsFakeMode || IsSemiPhysicalDebugMode;
 
+    /// <summary>临时 DT309/DT310 验收面板开关，用户验收通过后连同注入命令一并删除。</summary>
+    public bool IsInstallRejectAcceptanceToolVisible
+        => _configuration.GetValue<bool>("Hardware:EnableInstallRejectAcceptanceTools");
+
     /// <summary>真实模式复位可见（非 Fake 且非半实物）</summary>
     public bool IsRealModeResetVisible => !IsFakeMode && !IsSemiPhysicalDebugMode;
 
@@ -999,15 +1018,23 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         var dialog = _serviceProvider.GetRequiredService<OperatorSelectionDialog>();
         dialog.Owner = Application.Current.MainWindow;
-        var confirmed = dialog.ShowDialog() == true;
-        if (!confirmed || !_operatorStateService.HasOperator)
-            return;
+        _suspendRunPageBarcodeHandling = true;
+        try
+        {
+            var confirmed = dialog.ShowDialog() == true;
+            if (!confirmed || !_operatorStateService.HasOperator)
+                return;
 
-        OperatorName = _operatorStateService.CurrentOperatorName;
-        AddLog($"作业员已切换为：{OperatorName}");
-        _logger.LogWarning("[作业员][审计] 运行页检测前切换作业员: {Operator}", OperatorName);
-        RefreshReadyOrCanStartState();
-        await Task.CompletedTask;
+            OperatorName = _operatorStateService.CurrentOperatorName;
+            AddLog($"作业员已切换为：{OperatorName}");
+            _logger.LogWarning("[作业员][审计] 运行页检测前切换作业员: {Operator}", OperatorName);
+            RefreshReadyOrCanStartState();
+            await Task.CompletedTask;
+        }
+        finally
+        {
+            _suspendRunPageBarcodeHandling = false;
+        }
     }
 
     /// <summary>运行页重新选择参照系列、机种和工位，仅允许在非运行状态执行。</summary>
@@ -1023,13 +1050,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         var dialog = _serviceProvider.GetRequiredService<SeriesMachineSelectionDialog>();
         dialog.Owner = Application.Current.MainWindow;
-        if (dialog.ShowDialog() == true)
+        _suspendRunPageBarcodeHandling = true;
+        try
         {
-            AddLog($"参照信息已更新：{ReferenceDisplayText}");
-            _logger.LogWarning("[参照选择][审计] 运行页重新选择完成：{ReferenceDisplayText}", ReferenceDisplayText);
-        }
+            if (dialog.ShowDialog() == true)
+            {
+                AddLog($"参照信息已更新：{ReferenceDisplayText}");
+                _logger.LogWarning("[参照选择][审计] 运行页重新选择完成：{ReferenceDisplayText}", ReferenceDisplayText);
+            }
 
-        await Task.CompletedTask;
+            await Task.CompletedTask;
+        }
+        finally
+        {
+            _suspendRunPageBarcodeHandling = false;
+        }
     }
 
     private bool CanChangeReferenceSelection()
@@ -2280,6 +2315,32 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var previousInputs = _lastPlcInputs;
             var inputs = pollResult.Value;
 
+            // DT309/DT310 独立读取，失败时不能阻断前面的急停、复位和停止处理。
+            var installRejectResult = await _plcDevice
+                .ReadWorkstationInstallRejectSignalsAsync(pollingCt)
+                .ConfigureAwait(false);
+            bool installRejectReadFailed = installRejectResult == null
+                || !installRejectResult.IsSuccess
+                || installRejectResult.Value == null;
+            var installRejectSignals = installRejectResult?.Value;
+            if (installRejectReadFailed)
+            {
+                if (installRejectResult?.IsCancelled == true)
+                {
+                    _logger.LogDebug("[PLC轮询] DT309/DT310 读取因控制动作切换已取消");
+                }
+                else if (DateTime.UtcNow - _lastInstallRejectReadFailureLogUtc >= TimeSpan.FromSeconds(1))
+                {
+                    _lastInstallRejectReadFailureLogUtc = DateTime.UtcNow;
+                    _logger.LogWarning("[PLC轮询][诊断] 读取 DT309/DT310 失败：{Message}",
+                        installRejectResult?.Message ?? "返回结果或 Value 为 null");
+                }
+            }
+            else
+            {
+                _lastInstallRejectSignals = installRejectSignals;
+            }
+
             // 先保存本轮最新快照，再执行 UI 状态和启动条件判断，避免后续动作继续使用上一轮 DT121 状态。
             _lastPlcInputs = inputs;
 
@@ -2287,7 +2348,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             IsPlcStartRequested = inputs.IsStartRequested;
 
             var operation = Application.Current.Dispatcher.InvokeAsync(
-                () => UpdateUiStateFromPlcInputsAsync(previousInputs, inputs));
+                () => UpdateUiStateFromPlcInputsAsync(
+                    previousInputs,
+                    inputs,
+                    installRejectSignals,
+                    installRejectReadFailed));
             await operation.Task.Unwrap().ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -2310,7 +2375,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     ///   2. 上位机操作全部完成后 → 最后清除 DT121
     ///   3. 清除 DT121 后 → 通知 PLC 上位机已就绪
     /// </summary>
-    private async Task UpdateUiStateFromPlcInputsAsync(PlcControlSignals? previousInputs, PlcControlSignals inputs)
+    private async Task UpdateUiStateFromPlcInputsAsync(
+        PlcControlSignals? previousInputs,
+        PlcControlSignals inputs,
+        WorkstationInstallRejectSignals? installRejectSignals,
+        bool installRejectReadFailed)
     {
         // ResetFailed 下先处理旧 DT121 的重新武装；DT121=0 只开放下一次入口，
         // 不代表上一次完整复位成功，也不能自动恢复 Ready/CanStart。
@@ -2434,6 +2503,27 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
+        // 安装拒绝是启动前输入，优先于 DT120 启动处理；不改变检测状态，也不要求复位。
+        if (installRejectReadFailed && inputs.IsStartRequested)
+        {
+            await RejectStartWhenInstallRejectReadFailedAsync();
+            return;
+        }
+
+        if (installRejectSignals != null)
+        {
+            if (installRejectSignals.LeftCode == 0 && installRejectSignals.RightCode == 0)
+            {
+                _handledInstallRejectKey = null;
+            }
+            else
+            {
+                await HandleWorkstationInstallRejectAsync(installRejectSignals, inputs.IsStartRequested);
+                if (Volatile.Read(ref _installRejectDialogInProgress) != 0)
+                    return;
+            }
+        }
+
         // ════════════════════════════════════════════════════════
         // DT120 复位后释放保护：复位后即使 PLC 下一拍仍返回 DT120=1，
         // 也不进入 HandlePlcStartRequest()，避免残留启动信号重新触发检测。
@@ -2477,6 +2567,134 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>
     /// DT123 只按首次高电平或 0→1 上升沿解释为新的急停事件，避免旧快照重复触发急停流程。
     /// </summary>
+    /// <summary>
+    /// DT309/DT310 读取失败且同时存在启动请求时，禁止在无法确认安装状态的情况下启动。
+    /// 该路径只清除启动请求，不把页面置为 Error 或 AwaitingReset。
+    /// </summary>
+    private async Task RejectStartWhenInstallRejectReadFailedAsync()
+    {
+        _logger.LogWarning("[启动复核][拒绝] DT309/DT310 读取失败，禁止启动并清除 DT120");
+        AddLog("启动拒绝：基板安装状态读取失败，请检查 PLC 通信后重试。");
+        await _notificationService.ShowWarningAsync(
+            "基板安装状态读取失败，请检查 PLC 通信后重试。",
+            "启动拒绝");
+
+        var clearStartResult = await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+        if (!clearStartResult.IsSuccess)
+        {
+            _logger.LogWarning("[启动复核][拒绝] DT309/DT310 读取失败后的 DT120 清除失败：{Message}",
+                clearStartResult.Message);
+        }
+    }
+
+    /// <summary>
+    /// 显示工位安装拒绝提示，并在弹窗关闭后完成 DT120 和 DT309/DT310 清零握手。
+    /// </summary>
+    private async Task HandleWorkstationInstallRejectAsync(
+        WorkstationInstallRejectSignals signals,
+        bool startRequested)
+    {
+        string workstation;
+        ushort currentCode;
+        string key;
+        string message;
+
+        if (string.Equals(ReferenceWorkstation, WorkstationConstants.Left, StringComparison.OrdinalIgnoreCase))
+        {
+            workstation = WorkstationConstants.Left;
+            currentCode = signals.LeftCode;
+            key = $"{workstation}|{currentCode}";
+            message = BuildInstallRejectMessage(workstation, currentCode);
+        }
+        else if (string.Equals(ReferenceWorkstation, WorkstationConstants.Right, StringComparison.OrdinalIgnoreCase))
+        {
+            workstation = WorkstationConstants.Right;
+            currentCode = signals.RightCode;
+            key = $"{workstation}|{currentCode}";
+            message = BuildInstallRejectMessage(workstation, currentCode);
+        }
+        else
+        {
+            currentCode = signals.LeftCode != 0 ? signals.LeftCode : signals.RightCode;
+            if (currentCode == 0)
+                return;
+
+            workstation = "当前工位";
+            key = $"Unknown|{signals.LeftCode}|{signals.RightCode}";
+            message = "基板安装状态异常，但当前工位信息无效，请重新选择系列、机种和工位后再启动。";
+        }
+
+        if (currentCode == 0 || string.Equals(_handledInstallRejectKey, key, StringComparison.Ordinal))
+            return;
+        if (Interlocked.CompareExchange(ref _installRejectDialogInProgress, 1, 0) != 0)
+            return;
+
+        _handledInstallRejectKey = key;
+        _logger.LogWarning(
+            "[启动复核][安装拒绝] Workstation={Workstation}, Address={Address}, Code={Code}, DT120={StartRequested}, UiState={UiState}",
+            workstation,
+            string.Equals(workstation, WorkstationConstants.Left, StringComparison.OrdinalIgnoreCase) ? 309 : 310,
+            currentCode,
+            startRequested ? 1 : 0,
+            UiState);
+        try
+        {
+            AddLog($"启动拒绝：{message.Replace("\n", " ", StringComparison.Ordinal)}");
+            await _notificationService.ShowWarningAsync(message, "启动拒绝");
+
+            if (startRequested)
+            {
+                var clearStartResult = await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+                if (!clearStartResult.IsSuccess)
+                {
+                    _logger.LogWarning("[启动复核][安装拒绝] 清除 DT120 失败：{Message}", clearStartResult.Message);
+                }
+            }
+
+            var clearResult = await _plcDevice.ClearWorkstationInstallRejectSignalsAsync(CancellationToken.None);
+            if (!clearResult.IsSuccess)
+            {
+                _logger.LogWarning("[启动复核][安装拒绝] 第一次清除 DT309/DT310 失败：{Message}", clearResult.Message);
+                await Task.Delay(200);
+                clearResult = await _plcDevice.ClearWorkstationInstallRejectSignalsAsync(CancellationToken.None);
+            }
+
+            if (clearResult.IsSuccess)
+            {
+                _handledInstallRejectKey = null;
+                _lastInstallRejectSignals = new WorkstationInstallRejectSignals();
+                _logger.LogWarning("[启动复核][安装拒绝] 清除成功 DT309=0, DT310=0，入口已重新武装");
+                AddLog("基板安装异常信号已清除，可重新启动。");
+            }
+            else
+            {
+                _logger.LogWarning("[启动复核][安装拒绝] 第二次清除 DT309/DT310 仍失败：{Message}", clearResult.Message);
+                await _notificationService.ShowWarningAsync(
+                    "基板安装异常信号清除失败，请检查 PLC 通信后重试。",
+                    "启动拒绝");
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _installRejectDialogInProgress, 0);
+        }
+    }
+
+    /// <summary>按拒绝代码生成不暴露 DT 地址的操作员提示。</summary>
+    private static string BuildInstallRejectMessage(string workstation, ushort code)
+    {
+        string sensorMessage = code switch
+        {
+            1 => "接近传感器未检测到基板，请重新安装后再启动。",
+            2 => "物检传感器未检测到基板，请重新安装后再启动。",
+            _ => "请检查基板和传感器后重新启动。"
+        };
+
+        return code is 1 or 2
+            ? $"{workstation}基板安装不到位。\n{sensorMessage}"
+            : $"{workstation}基板安装状态异常，请检查基板和传感器后重新启动。";
+    }
+
     private static bool IsEmergencyStopTriggered(PlcControlSignals? previousInputs, PlcControlSignals currentInputs)
     {
         return previousInputs == null
@@ -3340,6 +3558,67 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
     #endregion
 
+    #region 临时 DT309/DT310 验收入口
+
+    /// <summary>判断临时安装拒绝注入是否满足验收使用条件。</summary>
+    private bool CanUseInstallRejectAcceptanceTools()
+    {
+        return IsInstallRejectAcceptanceToolVisible
+            && _plcDevice.IsConnected
+            && _inspectionEngine?.IsRunning != true
+            && UiState != TestUIState.Testing
+            && _currentControlAction == InspectionControlAction.None;
+    }
+
+    [RelayCommand]
+    private Task InjectLeftProximityRejectAsync()
+        => WriteInstallRejectForAcceptanceAsync(1, 0);
+
+    [RelayCommand]
+    private Task InjectLeftPresenceRejectAsync()
+        => WriteInstallRejectForAcceptanceAsync(2, 0);
+
+    [RelayCommand]
+    private Task InjectRightProximityRejectAsync()
+        => WriteInstallRejectForAcceptanceAsync(0, 1);
+
+    [RelayCommand]
+    private Task InjectRightPresenceRejectAsync()
+        => WriteInstallRejectForAcceptanceAsync(0, 2);
+
+    [RelayCommand]
+    private Task ClearInstallRejectAcceptanceSignalsAsync()
+        => WriteInstallRejectForAcceptanceAsync(0, 0);
+
+    /// <summary>
+    /// 临时验收写入 DT309/DT310。该入口不写 DT120，也不绕过运行页正式轮询。
+    /// </summary>
+    private async Task WriteInstallRejectForAcceptanceAsync(ushort leftCode, ushort rightCode)
+    {
+        if (!CanUseInstallRejectAcceptanceTools())
+        {
+            _logger.LogWarning(
+                "[验收注入][拒绝] 当前条件不允许写入 DT309/DT310：Connected={Connected}, UiState={UiState}, Action={Action}, EngineRunning={EngineRunning}",
+                _plcDevice.IsConnected,
+                UiState,
+                _currentControlAction,
+                _inspectionEngine?.IsRunning == true);
+            return;
+        }
+
+        var result = await _plcDevice.WriteWorkstationInstallRejectForAcceptanceAsync(
+            leftCode,
+            rightCode,
+            CancellationToken.None);
+        if (!result.IsSuccess)
+        {
+            _logger.LogWarning("[验收注入][失败] DT309={LeftCode}, DT310={RightCode}：{Message}",
+                leftCode, rightCode, result.Message);
+        }
+    }
+
+    #endregion
+
     /// <summary>
     /// 弹出急停模态弹窗。
     /// 弹窗只接收操作员解除请求；真正的清信号、读回确认和状态切换统一由 CompleteEmergencyStopReleaseAsync 完成。
@@ -4162,6 +4441,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     private void OnScannerBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
     {
+        if (_suspendRunPageBarcodeHandling)
+        {
+            _logger.LogDebug("[扫码路由] 选择弹窗打开，运行页忽略本次产品条码");
+            return;
+        }
+
         Application.Current.Dispatcher.Invoke(() =>
         {
             if (UiState == TestUIState.Testing)

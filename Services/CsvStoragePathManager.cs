@@ -25,7 +25,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private readonly ILogger<CsvStoragePathManager> _logger;
         private readonly int _maxRowsPerFile;
 
-        private const string TEST_LOG_FOLDER_NAME = "TestLog";
+        private const string DATA_LOG_FOLDER_NAME = "DataLog";
 
         /// <summary>
         /// 构造函数
@@ -39,7 +39,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _maxRowsPerFile = _settings.MaxRowsPerFile;
 
             // 启动时确保默认路径存在
-            var rootPath = GetTestLogRootPath();
+            var rootPath = GetDataLogRootPath();
             EnsureDirectoryExistsCore(rootPath);
 
             _logger.LogInformation(
@@ -53,21 +53,21 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public int MaxRowsPerFile => _maxRowsPerFile;
 
         /// <summary>
-        /// 根据用户选择的存储根目录，生成实际 TestLog 目录。
+        /// 根据用户选择的存储根目录，生成实际 DataLog 目录。
         /// </summary>
-        public static string BuildTestLogRootPath(string rootPath)
+        public static string BuildDataLogRootPath(string rootPath)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
-            return Path.Combine(rootPath, TEST_LOG_FOLDER_NAME);
+            return Path.Combine(rootPath, DATA_LOG_FOLDER_NAME);
         }
 
         /// <summary>
         /// 获取当前实际使用的 CSV 日志根目录。
         /// </summary>
-        public string GetTestLogRootPath()
+        public string GetDataLogRootPath()
         {
             var effectiveRoot = _settings.GetEffectiveRootPath();
-            return BuildTestLogRootPath(effectiveRoot);
+            return BuildDataLogRootPath(effectiveRoot);
         }
 
         /// <summary>
@@ -76,7 +76,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public string GetMonthFolderPath(DateTime date)
         {
             string yearMonth = date.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-            return Path.Combine(GetTestLogRootPath(), yearMonth);
+            return Path.Combine(GetDataLogRootPath(), yearMonth);
         }
 
         /// <summary>

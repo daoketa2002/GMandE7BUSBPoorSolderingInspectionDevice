@@ -249,7 +249,7 @@
                                         </CheckBox.Content>
                                     </CheckBox>
 
-                                    <TextBlock Text="默认路径下，CSV 日志将保存在程序所在目录的「TestLog」文件夹中。"
+                                    <TextBlock Text="默认路径下，CSV 日志将保存在程序所在目录的「DataLog」文件夹中。"
                                                 FontSize="12"
                                                 Foreground="#95A5A6"
                                                 Margin="20,0,0,12"
@@ -282,7 +282,7 @@
                                                  VerticalContentAlignment="Center"
                                                  Padding="8,0"
                                                  BorderBrush="#CED4DA"
-                                                 ToolTip="请点击“浏览”选择自定义存储文件夹。CSV 文件将保存在所选目录下的「TestLog」文件夹中。">
+                                                 ToolTip="请点击“浏览”选择自定义存储文件夹。CSV 文件将保存在所选目录下的「DataLog」文件夹中。">
                                             <TextBox.Style>
                                                 <Style TargetType="TextBox">
                                                     <Setter Property="Background" Value="White"/>
@@ -329,7 +329,7 @@
                                         </Button>
                                     </Grid>
 
-                                    <TextBlock Text="例如：D:\产线数据   →   CSV 将保存在 D:\产线数据\TestLog\"
+                                    <TextBlock Text="例如：D:\产线数据   →   CSV 将保存在 D:\产线数据\DataLog\"
                                                FontSize="12"
                                                Foreground="#95A5A6"
                                                Margin="0,6,0,0"
@@ -348,14 +348,14 @@
                                             </Grid.ColumnDefinitions>
 
                                             <TextBlock Grid.Column="0"
-                                                       Text="📌 当前 TestLog 路径："
+                                                       Text="📌 当前 DataLog 路径："
                                                        FontSize="13"
                                                        FontWeight="SemiBold"
                                                        Foreground="#2980B9"
                                                        VerticalAlignment="Center"/>
 
                                             <TextBlock Grid.Column="1"
-                                                       Text="{Binding CurrentTestLogPath}"
+                                                       Text="{Binding CurrentDataLogPath}"
                                                        FontSize="13"
                                                        Foreground="#2C3E50"
                                                        Margin="8,0,0,0"
@@ -364,7 +364,7 @@
 
                                             <Button Grid.Column="2"
                                                     Content="📂 打开文件夹"
-                                                    Command="{Binding OpenTestLogFolderCommand}"
+                                                    Command="{Binding OpenDataLogFolderCommand}"
                                                     Width="110" Height="30"
                                                     FontSize="12" FontWeight="SemiBold"
                                                     Foreground="White" Background="#27AE60"

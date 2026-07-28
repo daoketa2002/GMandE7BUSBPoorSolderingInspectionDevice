@@ -4,7 +4,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 
 /// <summary>
 /// 正式检测记录的最小持久化契约。
-/// 当前业务使用 CSV 保存记录，并通过索引完成近期重复测试检查。
+/// 当前业务使用 CSV 保存记录，并通过正式 CSV 完成近期重复测试检查。
 /// </summary>
 public interface ITestRecordStorage
 {

@@ -81,7 +81,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         [NotifyCanExecuteChangedFor(nameof(SaveAllConfigCommand))]
         [NotifyCanExecuteChangedFor(nameof(NavigateBackToMainMenuCommand))]
         [NotifyCanExecuteChangedFor(nameof(BrowseStoragePathCommand))]
-        [NotifyCanExecuteChangedFor(nameof(OpenTestLogFolderCommand))]
+        [NotifyCanExecuteChangedFor(nameof(OpenDataLogFolderCommand))]
         [NotifyCanExecuteChangedFor(nameof(TestPlcConnectionCommand))]
         [NotifyCanExecuteChangedFor(nameof(TestScannerConnectionCommand))]
         [NotifyCanExecuteChangedFor(nameof(TestDmmConnectionCommand))]
@@ -104,7 +104,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private bool _useDefaultStoragePath = true;
 
         [ObservableProperty]
-        private string _currentTestLogPath = string.Empty;
+        private string _currentDataLogPath = string.Empty;
 
         public bool CanCustomizePath => !UseDefaultStoragePath;
 
@@ -240,7 +240,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             bool showAsWarning = false;
             bool showAsError = false;
             string previousCsvRootPath = _csvStorageSettings.RootPath;
-            string previousTestLogPath = CurrentTestLogPath;
+            string previousDataLogPath = CurrentDataLogPath;
             bool csvPathApplied = false;
 
             IsSavingConfig = true;
@@ -308,7 +308,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             catch (Exception ex)
             {
                 if (!csvPathApplied)
-                    RestoreCsvPathPreview(previousCsvRootPath, previousTestLogPath);
+                    RestoreCsvPathPreview(previousCsvRootPath, previousDataLogPath);
 
                 _logger.Error(ex, "保存配置失败");
                 resultMessage = $"配置保存失败：{ex.Message}";
@@ -402,7 +402,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 FlowControl = source.FlowControl
             };
 
-        private void RestoreCsvPathPreview(string rootPath, string previousTestLogPath)
+        private void RestoreCsvPathPreview(string rootPath, string previousDataLogPath)
         {
             bool useDefaultPath = string.IsNullOrWhiteSpace(rootPath)
                 || rootPath.Equals("Default", StringComparison.OrdinalIgnoreCase);
@@ -410,7 +410,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             UseDefaultStoragePath = useDefaultPath;
             CustomStoragePath = useDefaultPath ? string.Empty : rootPath;
             CsvStorageRootPath = rootPath;
-            CurrentTestLogPath = previousTestLogPath;
+            CurrentDataLogPath = previousDataLogPath;
         }
 
         private static async Task WaitForSaveOverlayToCloseAsync()
@@ -468,7 +468,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 if (result == true && !string.IsNullOrEmpty(dialog.FolderName))
                 {
                     CustomStoragePath = dialog.FolderName;
-                    UpdateTestLogPreview();
+                    UpdateDataLogPreview();
                     _logger.Information("用户选择存储路径: {Path}", CustomStoragePath);
                 }
             }
@@ -479,24 +479,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             }
         }
 
-        /// <summary>打开当前 TestLog 文件夹</summary>
+        /// <summary>打开当前 DataLog 文件夹</summary>
         [RelayCommand(CanExecute = nameof(CanEditSettings))]
-        private void OpenTestLogFolder()
+        private void OpenDataLogFolder()
         {
             try
             {
-                var testLogPath = _csvPathManager.GetTestLogRootPath();
-                Directory.CreateDirectory(testLogPath);
+                var dataLogPath = _csvPathManager.GetDataLogRootPath();
+                Directory.CreateDirectory(dataLogPath);
 
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = testLogPath,
+                    FileName = dataLogPath,
                     UseShellExecute = true
                 });
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "打开 TestLog 文件夹失败");
+                _logger.Error(ex, "打开 DataLog 文件夹失败");
                 _notificationService.ShowErrorAsync($"打开文件夹失败：{ex.Message}");
             }
         }
@@ -991,14 +991,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 }
 
                 CsvStorageRootPath = rootPath;
-                UpdateTestLogPreview();
+                    UpdateDataLogPreview();
             }
             catch (Exception ex)
             {
                 _logger.Warning(ex, "加载CSV存储路径失败，使用默认值");
                 UseDefaultStoragePath = true;
                 CustomStoragePath = string.Empty;
-                UpdateTestLogPreview();
+                    UpdateDataLogPreview();
             }
         }
 
@@ -1018,7 +1018,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             _csvStorageSettings.ApplyRuntimeRootPath(newPath);
             _logger.Information("CSV存储路径已保存: {Path}", newPath);
-            UpdateTestLogPreview();
+            UpdateDataLogPreview();
         }
 
         /// <summary>
@@ -1047,16 +1047,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         }
 
         /// <summary>
-        /// 刷新系统设置界面的 TestLog 路径预览。
+        /// 刷新系统设置界面的 DataLog 路径预览。
         /// 路径规则必须与实际 CSV 保存规则保持一致。
         /// </summary>
-        private void UpdateTestLogPreview()
+        private void UpdateDataLogPreview()
         {
             string rootPath = UseDefaultStoragePath || string.IsNullOrWhiteSpace(CustomStoragePath)
                 ? AppDomain.CurrentDomain.BaseDirectory
                 : CustomStoragePath;
 
-            CurrentTestLogPath = CsvStoragePathManager.BuildTestLogRootPath(rootPath);
+            CurrentDataLogPath = CsvStoragePathManager.BuildDataLogRootPath(rootPath);
         }
 
         #endregion
