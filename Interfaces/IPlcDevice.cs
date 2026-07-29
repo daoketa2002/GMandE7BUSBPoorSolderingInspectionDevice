@@ -206,6 +206,13 @@ public interface IPlcDevice : ICommunicationDevice
         CancellationToken ct = default);
 
     /// <summary>
+    /// 写入安装拒绝提示关闭确认脉冲：DT311=1，约 500ms 后 DT311=0。
+    /// 脉冲时序由 PLC 设备层封装，调用方不直接拆分寄存器写入。
+    /// </summary>
+    Task<PlcOperationResult> PulseInstallRejectAcknowledgementAsync(
+        CancellationToken ct = default);
+
+    /// <summary>
     /// 读取继电器动作完成标志（DT302 单寄存器）。
     /// 仅用于 InspectionEngine.WaitRelaySwitchCompletedAsync 的内部轮询。
     /// </summary>

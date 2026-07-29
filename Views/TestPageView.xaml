@@ -1021,8 +1021,6 @@
                         <RowDefinition Height="Auto"/>
                         <!-- 调试工具区（可折叠，仅 Fake 模式） -->
                         <RowDefinition Height="Auto"/>
-                        <!-- 临时 DT309/DT310 验收工具区 -->
-                        <RowDefinition Height="Auto"/>
                         <!-- 弹性空白，将按钮推到顶部 -->
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>

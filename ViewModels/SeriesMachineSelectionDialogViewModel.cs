@@ -4,6 +4,7 @@ using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Services;
 using Microsoft.Extensions.Logging;
 using System.Collections.ObjectModel;
 using System.Windows;
@@ -15,16 +16,20 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
 {
     private readonly ISeriesMachineStorageService _storageService;
     private readonly IReferenceSelectionStateService _selectionStateService;
+    private readonly IPlanStorageService _planStorageService;
     private readonly IPlcDevice _plcDevice;
     private readonly IScannerBarcodeService _scannerBarcodeService;
     private readonly INotificationService _notificationService;
     private readonly ILogger<SeriesMachineSelectionDialogViewModel> _logger;
     private SeriesMachineCatalog _catalog = new();
     private bool _barcodeSubscribed;
+    /// <summary>方案扫码查询版本，丢弃晚于后续扫码返回的旧结果。</summary>
+    private int _planLookupVersion;
 
     public SeriesMachineSelectionDialogViewModel(
         ISeriesMachineStorageService storageService,
         IReferenceSelectionStateService selectionStateService,
+        IPlanStorageService planStorageService,
         IPlcDevice plcDevice,
         IScannerBarcodeService scannerBarcodeService,
         INotificationService notificationService,
@@ -32,6 +37,7 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
     {
         _storageService = storageService ?? throw new ArgumentNullException(nameof(storageService));
         _selectionStateService = selectionStateService ?? throw new ArgumentNullException(nameof(selectionStateService));
+        _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
         _scannerBarcodeService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
         _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
@@ -95,7 +101,9 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
 
     partial void OnSelectedMachineChanged(ReferenceMachineModel? value)
     {
-        MachineNameInput = value?.Name ?? string.Empty;
+        // 取消选择时保留扫码或用户刚输入的机种，避免新增系列流程擦掉待维护名称。
+        if (value != null)
+            MachineNameInput = value.Name;
         OnPropertyChanged(nameof(SelectionPreviewText));
     }
 
@@ -147,52 +155,109 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
 
     private void OnBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
     {
-        void ApplyBarcode()
+        var machineName = e.ModelName.Trim();
+        if (string.IsNullOrWhiteSpace(machineName))
+            return;
+
+        void StartBarcodeLookup()
         {
-            var machineName = e.ModelName.Trim();
-            if (string.IsNullOrWhiteSpace(machineName))
-                return;
-
-            var currentMatch = SelectedSeries?.Machines.FirstOrDefault(item =>
-                string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase));
-            if (currentMatch != null)
-            {
-                SelectedMachine = currentMatch;
-                MachineNameInput = currentMatch.Name;
-                HintText = $"扫码已选中机种：{machineName}";
-                return;
-            }
-
-            var matches = _catalog.Series
-                .Where(series => series.Machines.Any(item =>
-                    string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-            if (matches.Count == 1)
-            {
-                SelectedSeries = SeriesItems.FirstOrDefault(item => item.Id == matches[0].Id);
-                SelectedMachine = SelectedSeries?.Machines.FirstOrDefault(item =>
-                    string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase));
-                MachineNameInput = machineName;
-                HintText = $"扫码已定位到：{matches[0].Name} / {machineName}";
-                return;
-            }
-
-            SelectedMachine = null;
             MachineNameInput = machineName;
-            HintText = matches.Count > 1
-                ? $"多个系列存在机种 {machineName}，请选择正确系列。"
-                : $"未找到机种 {machineName}，请确认系列后点击新增。";
+            _ = ApplyBarcodePlanSelectionAsync(machineName);
         }
 
         if (Application.Current?.Dispatcher is { } dispatcher)
-            dispatcher.BeginInvoke((Action)ApplyBarcode);
+            dispatcher.BeginInvoke((Action)StartBarcodeLookup);
         else
-            ApplyBarcode();
+            StartBarcodeLookup();
+    }
+
+    /// <summary>
+    /// 根据扫码机种查询方案目录，并只在唯一方案时自动填充系列、机种和工位。
+    /// </summary>
+    private async Task ApplyBarcodePlanSelectionAsync(string machineName)
+    {
+        int lookupVersion = Interlocked.Increment(ref _planLookupVersion);
+        try
+        {
+            var allPlans = await _planStorageService.LoadAllPlansAsync();
+            if (!_barcodeSubscribed
+                || lookupVersion != Volatile.Read(ref _planLookupVersion)
+                || !string.Equals(MachineNameInput.Trim(), machineName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var matches = allPlans
+                .Where(plan => string.Equals(plan.MachineType?.Trim(), machineName,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matches.Count == 1)
+            {
+                var plan = matches[0];
+                var seriesName = plan.Series?.Trim() ?? string.Empty;
+                var planMachineName = plan.MachineType?.Trim() ?? machineName;
+
+                SeriesNameInput = seriesName;
+                MachineNameInput = planMachineName;
+
+                if (string.IsNullOrWhiteSpace(seriesName)
+                    || string.IsNullOrWhiteSpace(planMachineName)
+                    || !WorkstationConstants.IsValid(plan.Workstation))
+                {
+                    SelectedSeries = null;
+                    SelectedMachine = null;
+                    HintText = !WorkstationConstants.IsValid(plan.Workstation)
+                        ? $"方案 {plan.PlanName} 的工位配置无效，请修正方案后重试。"
+                        : $"方案 {plan.PlanName} 的系列或机种配置为空，请修正方案后重试。";
+                    _logger.LogWarning("[扫码联动][方案异常] 机种={MachineType}, 方案={PlanName}, 工位={Workstation}",
+                        planMachineName, plan.PlanName, plan.Workstation);
+                    return;
+                }
+
+                var matchedSeries = SeriesItems.FirstOrDefault(series =>
+                    string.Equals(series.Name.Trim(), seriesName, StringComparison.OrdinalIgnoreCase));
+                SelectedSeries = matchedSeries;
+                SelectedMachine = matchedSeries?.Machines.FirstOrDefault(machine =>
+                    string.Equals(machine.Name.Trim(), planMachineName, StringComparison.OrdinalIgnoreCase));
+                SeriesNameInput = seriesName;
+                MachineNameInput = planMachineName;
+                Workstation = plan.Workstation.Trim();
+                HintText = $"扫码已根据方案填充：{seriesName} / {planMachineName} / {Workstation}";
+                _logger.LogInformation("[扫码联动][唯一方案] 已填充：{Series}/{MachineType}/{Workstation}, Plan={PlanName}",
+                    seriesName, planMachineName, Workstation, plan.PlanName);
+                return;
+            }
+
+            // 零方案或多方案均不使用方案目录猜测系列和工位。
+            var currentMatch = SelectedSeries?.Machines.FirstOrDefault(item =>
+                string.Equals(item.Name.Trim(), machineName, StringComparison.OrdinalIgnoreCase));
+            SelectedMachine = currentMatch;
+            MachineNameInput = machineName;
+            HintText = matches.Count == 0
+                ? $"未找到机种 {machineName} 对应的检测方案，无法自动填充系列和工位。"
+                : $"机种 {machineName} 存在多个检测方案，请删除多余方案后重新扫码。";
+            _logger.LogWarning("[扫码联动][未自动选择] 机种={MachineType}, 方案数量={Count}",
+                machineName, matches.Count);
+        }
+        catch (Exception ex)
+        {
+            if (!_barcodeSubscribed
+                || lookupVersion != Volatile.Read(ref _planLookupVersion)
+                || !string.Equals(MachineNameInput.Trim(), machineName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _logger.LogError(ex, "[扫码联动][异常] 查询机种方案失败：{MachineType}", machineName);
+            HintText = $"读取机种 {machineName} 的检测方案失败，请检查方案设置。";
+        }
     }
 
     [RelayCommand]
     private async Task AddSeriesAsync()
     {
+        var pendingMachineName = MachineNameInput.Trim();
         var name = SeriesNameInput.Trim();
         var error = NameValidationHelper.ValidateSeriesName(name);
         if (error != null)
@@ -212,6 +277,8 @@ public partial class SeriesMachineSelectionDialogViewModel : ObservableObject
         await _storageService.SaveAsync(_catalog);
         ReloadSeriesItems();
         SelectedSeries = series;
+        if (SelectedMachine == null && !string.IsNullOrWhiteSpace(pendingMachineName))
+            MachineNameInput = pendingMachineName;
         _logger.LogWarning("[参照目录][审计] 新增系列: {Series}", name);
     }
 

@@ -405,6 +405,26 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return Task.FromResult(PlcOperationResult.Success("Fake DT309=0, DT310=0 已清除"));
     }
 
+    /// <summary>
+    /// Fake 复现 DT311 确认脉冲，保留寄存器高低电平和实际保持时间。
+    /// </summary>
+    public async Task<PlcOperationResult> PulseInstallRejectAcknowledgementAsync(
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        WriteRegister(PlcAddressMap.InstallRejectAcknowledgement, 1);
+        _logger.LogWarning("[Fake][PLC][安装拒绝确认] DT311=1 写入成功");
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+        WriteRegister(PlcAddressMap.InstallRejectAcknowledgement, 0);
+        stopwatch.Stop();
+
+        _logger.LogWarning("[Fake][PLC][安装拒绝确认] DT311=0 清除成功，HoldElapsedMs={HoldElapsedMs}",
+            stopwatch.ElapsedMilliseconds);
+        return PlcOperationResult.Success("Fake DT311 确认脉冲已完成");
+    }
+
     public Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)
     {
         lock (_syncRoot)

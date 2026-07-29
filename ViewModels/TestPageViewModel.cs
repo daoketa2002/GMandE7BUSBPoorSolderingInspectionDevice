@@ -218,6 +218,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>方案加载版本号。机种或方案变更后递增，用于丢弃晚到的异步加载结果。</summary>
     private int _planLoadVersion;
 
+    /// <summary>仅由扫码设置的待自动选方案机种，手动输入不触发唯一方案自动选择。</summary>
+    private string? _pendingBarcodePlanAutoSelectMachine;
+
     /// <summary>当前方案列表或检测项目仍在加载，加载期间不能显示为可启动。</summary>
     private bool _isPlanLoading;
 
@@ -1092,6 +1095,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     partial void OnModelNameChanged(string value)
     {
+        if (!string.Equals(_pendingBarcodePlanAutoSelectMachine, value.Trim(), StringComparison.OrdinalIgnoreCase))
+            _pendingBarcodePlanAutoSelectMachine = null;
+
         UpdateReferenceMachineMismatch();
         if (!_suppressDuplicateCheck)
         {
@@ -1161,6 +1167,40 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         bool isCurrent = await RefreshPlanNameOptionsAsync(newMachineType, loadVersion);
         if (!isCurrent)
             return;
+
+        if (string.Equals(_pendingBarcodePlanAutoSelectMachine, newMachineType.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingBarcodePlanAutoSelectMachine = null;
+            if (PlanNameOptions.Count == 1)
+            {
+                // 复用现有 OnSchemeNameChanged，继续由统一逻辑加载检测项目和更新引擎配置。
+                // 即使新旧机种的唯一方案同名，也先清空一次以确保重新加载检测项目。
+                SchemeName = string.Empty;
+                SchemeName = PlanNameOptions[0];
+                _logger.LogInformation("[扫码联动][运行页] 已自动选择唯一方案：机种={MachineType}, 方案={PlanName}",
+                    newMachineType, SchemeName);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(SchemeName))
+            {
+                // 扫码切换到零方案或多方案机种时，清除上一机种遗留方案，避免误用。
+                SchemeName = string.Empty;
+            }
+
+            if (PlanNameOptions.Count > 1)
+            {
+                AddLog($"⚠️ 机种 [{newMachineType}] 存在多个检测方案，请手动选择方案");
+                _logger.LogWarning("[扫码联动][运行页] 机种存在多个方案，未自动选择：机种={MachineType}, 数量={Count}",
+                    newMachineType, PlanNameOptions.Count);
+            }
+            else
+            {
+                AddLog($"⚠️ 机种 [{newMachineType}] 没有可用检测方案");
+                _logger.LogWarning("[扫码联动][运行页] 机种没有方案：机种={MachineType}", newMachineType);
+            }
+        }
 
         ValidateCurrentSchemeName();
 
@@ -2591,7 +2631,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 显示工位安装拒绝提示，并在弹窗关闭后完成 DT120 和 DT309/DT310 清零握手。
+    /// 显示工位安装拒绝提示，并在弹窗关闭后完成 DT120、DT311 和 DT309/DT310 握手。
     /// </summary>
     private async Task HandleWorkstationInstallRejectAsync(
         WorkstationInstallRejectSignals signals,
@@ -2654,6 +2694,16 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 }
             }
 
+            // DT309/DT310 仍保留原始拒绝代码时先发送 DT311，PLC 才能将确认归属到本次拒绝。
+            var acknowledgementResult = await _plcDevice
+                .PulseInstallRejectAcknowledgementAsync(CancellationToken.None);
+            if (!acknowledgementResult.IsSuccess)
+            {
+                _logger.LogWarning("[启动复核][安装拒绝] DT311 确认握手失败，但继续清除 DT309/DT310：{Message}",
+                    acknowledgementResult.Message);
+                AddLog("安装拒绝确认握手失败，请检查 PLC 通信日志。");
+            }
+
             var clearResult = await _plcDevice.ClearWorkstationInstallRejectSignalsAsync(CancellationToken.None);
             if (!clearResult.IsSuccess)
             {
@@ -2688,8 +2738,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         string sensorMessage = code switch
         {
-            1 => "接近传感器未检测到基板，请重新安装后再启动。",
-            2 => "物检传感器未检测到基板，请重新安装后再启动。",
+            2 => "接近传感器未检测到基板，请重新安装后再启动。",
+            1 => "物检传感器未检测到基板，请重新安装后再启动。",
             _ => "请检查基板和传感器后重新启动。"
         };
 
@@ -4412,9 +4462,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     return;
                 }
 
+                _pendingBarcodePlanAutoSelectMachine = e.ModelName.Trim();
                 ModelName = e.ModelName;
                 SerialNumber = e.SerialPart ?? string.Empty;
-                ValidateCurrentSchemeName();
 
                 _logger.LogInformation(
                     "[扫码UI] 运行页已应用条码, Model={Model}, Serial={Serial}",

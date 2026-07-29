@@ -691,6 +691,62 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 写入 DT311=1，保持约 500ms 后清零。
+    /// 清零等待不使用页面控制动作的取消令牌，避免确认脉冲被中途截断。
+    /// </summary>
+    public async Task<PlcOperationResult> PulseInstallRejectAcknowledgementAsync(
+        CancellationToken ct = default)
+    {
+        var writeResult = await WriteSignalAsync(
+            "DT311(安装拒绝提示关闭确认)",
+            PlcAddressMap.InstallRejectAcknowledgement,
+            1,
+            ct).ConfigureAwait(false);
+
+        if (!writeResult.IsSuccess)
+        {
+            _logger.LogWarning("[PLC动作][安装拒绝确认] DT311=1 写入失败：{Message}", writeResult.Message);
+            return writeResult;
+        }
+
+        _logger.LogWarning("[PLC动作][安装拒绝确认] DT311=1 写入成功");
+        var stopwatch = Stopwatch.StartNew();
+        await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+
+        var clearResult = await WriteSignalAsync(
+            "DT311(安装拒绝提示关闭确认)",
+            PlcAddressMap.InstallRejectAcknowledgement,
+            0,
+            CancellationToken.None).ConfigureAwait(false);
+
+        if (!clearResult.IsSuccess)
+        {
+            _logger.LogWarning("[PLC动作][安装拒绝确认] DT311=0 清除失败，已执行一次重试：{Message}",
+                clearResult.Message);
+            await Task.Delay(200, CancellationToken.None).ConfigureAwait(false);
+            clearResult = await WriteSignalAsync(
+                "DT311(安装拒绝提示关闭确认重试)",
+                PlcAddressMap.InstallRejectAcknowledgement,
+                0,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+
+        stopwatch.Stop();
+        if (clearResult.IsSuccess)
+        {
+            _logger.LogWarning("[PLC动作][安装拒绝确认] DT311=0 清除成功，HoldElapsedMs={HoldElapsedMs}",
+                stopwatch.ElapsedMilliseconds);
+        }
+        else
+        {
+            _logger.LogError("[PLC动作][安装拒绝确认] DT311=0 最终清除失败，HoldElapsedMs={HoldElapsedMs}：{Message}",
+                stopwatch.ElapsedMilliseconds, clearResult.Message);
+        }
+
+        return clearResult;
+    }
+
+    /// <summary>
     /// 读取继电器动作完成标志（DT302）。
     /// </summary>
     public async Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)
