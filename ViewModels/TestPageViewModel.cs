@@ -2738,8 +2738,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         string sensorMessage = code switch
         {
-            2 => "接近传感器未检测到基板，请重新安装后再启动。",
-            1 => "物检传感器未检测到基板，请重新安装后再启动。",
+            1 => "接近传感器未检测到基板，请重新安装后再启动。",
+            2 => "物检传感器未检测到基板，请重新安装后再启动。",
             _ => "请检查基板和传感器后重新启动。"
         };
 
