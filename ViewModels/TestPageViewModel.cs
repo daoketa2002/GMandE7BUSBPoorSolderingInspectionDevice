@@ -2562,8 +2562,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             else
             {
                 await HandleWorkstationInstallRejectAsync(installRejectSignals, inputs.IsStartRequested);
-                if (Volatile.Read(ref _installRejectDialogInProgress) != 0)
-                    return;
+                // 安装异常处理完成后立即结束本轮快照处理，避免弹窗关闭后继续使用旧 DT120=1 启动检测。
+                return;
             }
         }
 
@@ -2673,17 +2673,38 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
 
         _handledInstallRejectKey = key;
+        bool isDuringInspection = _inspectionEngine?.IsRunning == true
+            || UiState == TestUIState.Testing;
+        string logCategory = isDuringInspection ? "检测异常" : "启动复核";
+        string dialogTitle = isDuringInspection ? "基板安装异常" : "启动拒绝";
+        if (isDuringInspection)
+        {
+            message += "\n本轮检测已中止，请重新安装并执行复位。";
+        }
+
         _logger.LogWarning(
-            "[启动复核][安装拒绝] Workstation={Workstation}, Address={Address}, Code={Code}, DT120={StartRequested}, UiState={UiState}",
+            "[{LogCategory}][安装拒绝] Workstation={Workstation}, Address={Address}, Code={Code}, DT120={StartRequested}, UiState={UiState}, InspectionEngineIsRunning={InspectionEngineIsRunning}, ExecutionStage={ExecutionStage}",
+            logCategory,
             workstation,
             string.Equals(workstation, WorkstationConstants.Left, StringComparison.OrdinalIgnoreCase) ? 309 : 310,
             currentCode,
             startRequested ? 1 : 0,
-            UiState);
+            UiState,
+            _inspectionEngine?.IsRunning == true,
+            _inspectionEngine?.CurrentExecutionStage ?? "Unavailable");
         try
         {
-            AddLog($"启动拒绝：{message.Replace("\n", " ", StringComparison.Ordinal)}");
-            await _notificationService.ShowWarningAsync(message, "启动拒绝");
+            if (isDuringInspection)
+            {
+                await AbortInspectionForInstallRejectAsync(
+                    workstation,
+                    currentCode,
+                    startRequested,
+                    _inspectionEngine?.CurrentExecutionStage ?? "Unavailable");
+            }
+
+            AddLog($"{logCategory}：{message.Replace("\n", " ", StringComparison.Ordinal)}");
+            await _notificationService.ShowWarningAsync(message, dialogTitle);
 
             if (startRequested)
             {
@@ -2699,7 +2720,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 .PulseInstallRejectAcknowledgementAsync(CancellationToken.None);
             if (!acknowledgementResult.IsSuccess)
             {
-                _logger.LogWarning("[启动复核][安装拒绝] DT311 确认握手失败，但继续清除 DT309/DT310：{Message}",
+                _logger.LogWarning("[{LogCategory}][安装拒绝] DT311 确认握手失败，但继续清除 DT309/DT310：{Message}",
+                    logCategory,
                     acknowledgementResult.Message);
                 AddLog("安装拒绝确认握手失败，请检查 PLC 通信日志。");
             }
@@ -2707,7 +2729,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var clearResult = await _plcDevice.ClearWorkstationInstallRejectSignalsAsync(CancellationToken.None);
             if (!clearResult.IsSuccess)
             {
-                _logger.LogWarning("[启动复核][安装拒绝] 第一次清除 DT309/DT310 失败：{Message}", clearResult.Message);
+                _logger.LogWarning("[{LogCategory}][安装拒绝] 第一次清除 DT309/DT310 失败：{Message}",
+                    logCategory,
+                    clearResult.Message);
                 await Task.Delay(200);
                 clearResult = await _plcDevice.ClearWorkstationInstallRejectSignalsAsync(CancellationToken.None);
             }
@@ -2716,21 +2740,88 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             {
                 _handledInstallRejectKey = null;
                 _lastInstallRejectSignals = new WorkstationInstallRejectSignals();
-                _logger.LogWarning("[启动复核][安装拒绝] 清除成功 DT309=0, DT310=0，入口已重新武装");
-                AddLog("基板安装异常信号已清除，可重新启动。");
+                _logger.LogWarning("[{LogCategory}][安装拒绝] 清除成功 DT309=0, DT310=0，入口已重新武装",
+                    logCategory);
+                AddLog(isDuringInspection
+                    ? "基板安装异常信号已清除，保持异常状态，请复位后重新启动。"
+                    : "基板安装异常信号已清除，可重新启动。");
             }
             else
             {
-                _logger.LogWarning("[启动复核][安装拒绝] 第二次清除 DT309/DT310 仍失败：{Message}", clearResult.Message);
+                _logger.LogWarning("[{LogCategory}][安装拒绝] 第二次清除 DT309/DT310 仍失败：{Message}",
+                    logCategory,
+                    clearResult.Message);
                 await _notificationService.ShowWarningAsync(
                     "基板安装异常信号清除失败，请检查 PLC 通信后重试。",
-                    "启动拒绝");
+                    dialogTitle);
             }
         }
         finally
         {
             Interlocked.Exchange(ref _installRejectDialogInProgress, 0);
         }
+    }
+
+    /// <summary>
+    /// 测试中出现基板安装异常时，中止当前检测并锁定异常状态，等待操作员复位。
+    /// </summary>
+    private async Task AbortInspectionForInstallRejectAsync(
+        string workstation,
+        ushort rejectCode,
+        bool startRequested,
+        string executionStage)
+    {
+        bool engineWasRunning = _inspectionEngine?.IsRunning == true;
+        TestUIState stateBeforeAbort = UiState;
+
+        // 先屏蔽旧回调并递增运行版本，再请求停止，避免晚到结果覆盖 Error 状态。
+        _ignoreInspectionCallbacksUntilNextStart = true;
+        int runVersion = Interlocked.Increment(ref _inspectionRunVersion);
+        _inspectionStarted = false;
+        SetUiState(TestUIState.Error);
+
+        InspectionStopWaitResult stopResult = InspectionStopWaitResult.AlreadyStopped;
+        if (_inspectionEngine != null)
+        {
+            stopResult = await _inspectionEngine.StopAndWaitAsync(
+                TimeSpan.FromSeconds(2),
+                InspectionStopReason.Error,
+                CancellationToken.None);
+        }
+
+        // 停止等待返回后再次锁定 Error，防止同一轮异步收口刷新成普通状态。
+        SetUiState(TestUIState.Error);
+        string finalStage = _inspectionEngine?.CurrentExecutionStage ?? executionStage;
+        if (stopResult == InspectionStopWaitResult.Timeout)
+        {
+            _logger.LogError(
+                "[检测异常][安装异常][停止超时] Workstation={Workstation}, Address={Address}, Code={Code}, DT120={StartRequested}, StateBefore={StateBefore}, EngineWasRunning={EngineWasRunning}, ExecutionStage={ExecutionStage}, FinalStage={FinalStage}, StopResult={StopResult}, RunVersion={RunVersion}",
+                workstation,
+                string.Equals(workstation, WorkstationConstants.Left, StringComparison.OrdinalIgnoreCase) ? 309 : 310,
+                rejectCode,
+                startRequested ? 1 : 0,
+                stateBeforeAbort,
+                engineWasRunning,
+                executionStage,
+                finalStage,
+                stopResult,
+                runVersion);
+            AddLog("基板安装异常导致检测中止超时，保持异常状态，请处理设备后复位。");
+            return;
+        }
+
+        _logger.LogWarning(
+            "[检测异常][安装异常][已中止] Workstation={Workstation}, Address={Address}, Code={Code}, DT120={StartRequested}, StateBefore={StateBefore}, EngineWasRunning={EngineWasRunning}, ExecutionStage={ExecutionStage}, FinalStage={FinalStage}, StopResult={StopResult}, RunVersion={RunVersion}",
+            workstation,
+            string.Equals(workstation, WorkstationConstants.Left, StringComparison.OrdinalIgnoreCase) ? 309 : 310,
+            rejectCode,
+            startRequested ? 1 : 0,
+            stateBeforeAbort,
+            engineWasRunning,
+            executionStage,
+            finalStage,
+            stopResult,
+            runVersion);
     }
 
     /// <summary>按拒绝代码生成不暴露 DT 地址的操作员提示。</summary>
@@ -4118,7 +4209,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
-            // DMM 断线事件会先将页面切到 AwaitingReset；检测任务随后返回时不得覆盖成 Error。
+            // 其他收口流程若已先切到 AwaitingReset，检测任务返回时不得覆盖既有状态。
             if (UiState == TestUIState.AwaitingReset)
             {
                 await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -4260,14 +4351,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     ?.MarkMeasurementFailed("通信超时");
             }
 
-            // 设备恢复后不自动续跑旧项目，先屏蔽旧检测回调并要求操作员复位。
+            // 设备恢复后不自动续跑旧项目，先屏蔽旧检测回调并保持 Error，等待操作员复位。
             _ignoreInspectionCallbacksUntilNextStart = true;
             Interlocked.Increment(ref _inspectionRunVersion);
             _inspectionStarted = false;
             if (!emergencyDialogPendingOrActive && UiState != TestUIState.EmergencyStop)
-                SetUiState(TestUIState.AwaitingReset);
+                SetUiState(TestUIState.Error);
             _logger.LogWarning(
-                "[设备恢复][{DeviceType}] 通信中断，本轮检测已停止，等待复位；不自动续跑旧项目",
+                "[设备异常][{DeviceType}] 通信中断，本轮检测已中止，最终状态为 Error；设备恢复后不自动续跑旧项目，等待复位",
                 deviceType);
 
             if (_inspectionEngine?.IsRunning == true)
@@ -4279,7 +4370,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 if (stopResult == InspectionStopWaitResult.Timeout)
                 {
                     _logger.LogWarning(
-                        "[设备恢复][{DeviceType}] 检测引擎停止未完全确认，仍保持请复位状态；Reason={Reason}",
+                        "[设备异常][{DeviceType}] 检测引擎停止未完全确认，仍保持 Error 状态；Reason={Reason}",
                         deviceType,
                         stopResult);
                 }
@@ -4301,9 +4392,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[设备恢复][{DeviceType}] 断线收口异常，保持请复位状态", deviceType);
+            _logger.LogError(ex, "[设备异常][{DeviceType}] 断线收口异常，保持 Error 状态，处理设备连接后复位", deviceType);
             if (!emergencyDialogPendingOrActive && UiState != TestUIState.EmergencyStop)
-                SetUiState(TestUIState.AwaitingReset);
+                SetUiState(TestUIState.Error);
         }
         finally
         {
