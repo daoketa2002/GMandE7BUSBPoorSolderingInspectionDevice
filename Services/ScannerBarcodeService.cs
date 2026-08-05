@@ -11,6 +11,7 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
+using GMandE7BUSBPoorSolderingInspectionDevice.Common.Validators;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
@@ -226,20 +227,23 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// 解析规则：
         /// - 第1段 → 机种名称（ModelName）
         /// - 第2段 → 日期（DatePart，可选）
-        /// - 第3段 → 序列号（SerialPart，可选）
-        /// - 无法解析时，整个条码作为 ModelName
+        /// - 第3段 → 序列号（SerialPart）
+        /// - 必须正好三段，机种和序列号通过现有基础校验
+        /// - 日期段只保留，不参与产品条码有效性判断
         /// </summary>
         private BarcodeParsedEventArgs ParseBarcode(string barcode)
         {
-            string modelName = barcode;
+            string rawBarcode = barcode ?? string.Empty;
+            string modelName = string.Empty;
             string? datePart = null;
             string? serialPart = null;
+            bool isValid = false;
+            string? failureReason = null;
 
             try
             {
-                // 按逗号分割
-                var parts = barcode.Split(new[] { ',', '，' },
-                    StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                // 不使用 RemoveEmptyEntries，必须保留空字段原本的位置，避免损坏条码字段错位。
+                var parts = rawBarcode.Split(new[] { ',', '，' }, StringSplitOptions.TrimEntries);
 
                 if (parts.Length >= 1)
                 {
@@ -254,15 +258,60 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     serialPart = parts[2].Trim();
                 }
 
-                _logger.LogInformation("[扫码解析] 条码解析完成: Model={Model}, Date={Date}, Serial={Serial}",
-                    modelName, datePart, serialPart);
+                if (parts.Length != 3)
+                {
+                    failureReason = "条码段数不正确，应为“机种名称,日期段,序列号”";
+                }
+                else if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    failureReason = "条码中的机种名称为空";
+                }
+                else if (string.IsNullOrWhiteSpace(serialPart))
+                {
+                    failureReason = "条码中的序列号为空";
+                }
+                else
+                {
+                    var machineTypeError = NameValidationHelper.ValidateMachineType(modelName);
+                    if (machineTypeError != null)
+                    {
+                        failureReason = "条码中的机种名称格式无效";
+                    }
+                    else if (!InputValidationHelper.IsValidSerialNumber(serialPart))
+                    {
+                        failureReason = "条码中的序列号格式无效";
+                    }
+                    else
+                    {
+                        isValid = true;
+                    }
+                }
+
+                if (isValid)
+                {
+                    _logger.LogInformation("[扫码解析] 条码解析有效: Model={Model}, Date={Date}, Serial={Serial}",
+                        modelName, datePart, serialPart);
+                }
+                else
+                {
+                    _logger.LogWarning("[扫码解析][失败] Raw={RawBarcode}, Reason={FailureReason}",
+                        rawBarcode, failureReason);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "条码解析异常，使用原始值: {Barcode}", barcode);
+                failureReason = "条码解析发生异常";
+                _logger.LogWarning(ex, "[扫码解析][失败] Raw={RawBarcode}, Reason={FailureReason}",
+                    rawBarcode, failureReason);
             }
 
-            return new BarcodeParsedEventArgs(barcode, modelName, datePart, serialPart);
+            return new BarcodeParsedEventArgs(
+                rawBarcode,
+                modelName,
+                datePart,
+                serialPart,
+                isValid,
+                failureReason);
         }
 
         /// <summary>

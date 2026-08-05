@@ -91,13 +91,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// </summary>
         public DateTime Timestamp { get; }
 
-        public BarcodeParsedEventArgs(string rawBarcode, string modelName, string? datePart, string? serialPart)
+        /// <summary>
+        /// 是否符合运行页使用的产品条码格式和基础字段校验。
+        /// </summary>
+        public bool IsProductBarcodeValid { get; }
+
+        /// <summary>
+        /// 产品条码无效时面向操作员的固定失败原因；有效时为空。
+        /// </summary>
+        public string? ParseFailureReason { get; }
+
+        public BarcodeParsedEventArgs(
+            string rawBarcode,
+            string modelName,
+            string? datePart,
+            string? serialPart,
+            bool isProductBarcodeValid,
+            string? parseFailureReason)
         {
-            RawBarcode = rawBarcode;
-            ModelName = modelName;
+            RawBarcode = rawBarcode ?? string.Empty;
+            ModelName = modelName ?? string.Empty;
             DatePart = datePart;
             SerialPart = serialPart;
             Timestamp = DateTime.Now;
+            IsProductBarcodeValid = isProductBarcodeValid;
+            ParseFailureReason = parseFailureReason;
         }
     }
 }

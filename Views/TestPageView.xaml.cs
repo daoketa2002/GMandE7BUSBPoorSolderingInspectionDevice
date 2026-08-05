@@ -130,6 +130,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
 
                 if (sender == ModelNameTextBox)
                 {
+                    // 提交检查只负责触发 ViewModel 的统一提示，业务文案仍由 ViewModel 管理。
+                    _viewModel.NotifyManualModelNameCommitted();
                     // 机种名称 → 跳转到序列号
                     SerialNumberTextBox.Focus();
                     SerialNumberTextBox.SelectAll();
@@ -139,6 +141,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
                     SerialNumberTextBox.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
                 }
             }
+        }
+
+        /// <summary>机种输入框完成本次手动输入时，复用 Enter 的不一致检查。</summary>
+        private void ModelNameTextBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            _viewModel.NotifyManualModelNameCommitted();
         }
     }
 }

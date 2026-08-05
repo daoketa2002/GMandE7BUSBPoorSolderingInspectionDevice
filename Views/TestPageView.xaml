@@ -724,7 +724,9 @@
                                  FontSize="16" MaxLength="50" Padding="6,0,30,0"
                                  Height="36" VerticalContentAlignment="Center"
                                  ToolTip="实际机种与参照机种不一致，请确认扫码是否正确"
-                                 x:Name="ModelNameTextBox" KeyDown="InputTextBox_KeyDown">
+                                 x:Name="ModelNameTextBox"
+                                 KeyDown="InputTextBox_KeyDown"
+                                 LostKeyboardFocus="ModelNameTextBox_LostKeyboardFocus">
                             <TextBox.Style>
                                 <Style TargetType="TextBox">
                                     <Setter Property="BorderBrush" Value="#CED4DA"/>

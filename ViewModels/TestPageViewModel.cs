@@ -240,6 +240,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>仅由扫码设置的待自动选方案机种，手动输入不触发唯一方案自动选择。</summary>
     private string? _pendingBarcodePlanAutoSelectMachine;
 
+    /// <summary>最近一次已提示的参照机种不一致组合，避免 Enter 和失焦重复弹窗。</summary>
+    private string? _lastReferenceMismatchPromptKey;
+
+    /// <summary>最近一次已提示的异常扫码事件，使用时间戳区分内容相同的后续扫码。</summary>
+    private string? _lastInvalidBarcodePromptKey;
+
     /// <summary>当前方案列表或检测项目仍在加载，加载期间不能显示为可启动。</summary>
     private bool _isPlanLoading;
 
@@ -1179,6 +1185,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         InvalidateCurrentSerialVerification();
         UpdateReferenceMachineMismatch();
+        if (!IsReferenceMachineMismatch)
+            _lastReferenceMismatchPromptKey = null;
 
         int loadVersion = Interlocked.Increment(ref _planLoadVersion);
         _isPlanLoading = true;
@@ -1211,8 +1219,60 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             || string.IsNullOrWhiteSpace(ReferenceWorkstation)
             ? "未选择参照信息"
             : $"{ReferenceSeries} / {ReferenceMachineType} / {ReferenceWorkstation}";
+        _lastReferenceMismatchPromptKey = null;
         UpdateReferenceMachineMismatch();
         ChangeReferenceSelectionCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// 在手动机种输入完成时检查参照机种不一致，只在 Enter 或失焦时调用。
+    /// </summary>
+    public void NotifyManualModelNameCommitted()
+    {
+        ShowReferenceMachineMismatchIfNeeded(isScannerInput: false);
+    }
+
+    /// <summary>
+    /// 复用现有参照机种比较结果显示提醒，不回滚用户已经输入的机种。
+    /// </summary>
+    private void ShowReferenceMachineMismatchIfNeeded(bool isScannerInput)
+    {
+        UpdateReferenceMachineMismatch();
+        if (!IsReferenceMachineMismatch)
+        {
+            _lastReferenceMismatchPromptKey = null;
+            return;
+        }
+
+        string source = isScannerInput ? "扫码" : "输入";
+        string key = $"{source}|{ReferenceMachineType.Trim()}|{ModelName.Trim()}";
+        if (string.Equals(_lastReferenceMismatchPromptKey, key, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _lastReferenceMismatchPromptKey = key;
+        string message = isScannerInput
+            ? $"扫码机种与参照机种不一致。\n\n参照机种：{ReferenceMachineType}\n扫码机种：{ModelName}\n\n请确认当前基板或条码是否正确。"
+            : $"输入机种与参照机种不一致。\n\n参照机种：{ReferenceMachineType}\n输入机种：{ModelName}\n\n请确认输入是否正确。";
+
+        _logger.LogWarning(
+            "[机种校验][不一致] 来源={Source}, 参照机种={ReferenceMachineType}, 实际机种={ModelName}",
+            source,
+            ReferenceMachineType,
+            ModelName);
+        _ = ShowWarningSafelyAsync(message, "机种不一致");
+    }
+
+    /// <summary>统一观察非阻塞提示任务，避免弹窗异常成为未观察任务。</summary>
+    private async Task ShowWarningSafelyAsync(string message, string title)
+    {
+        try
+        {
+            await _notificationService.ShowWarningAsync(message, title).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[普通弹窗][失败] 标题={Title}", title);
+        }
     }
 
     private void OnReferenceSelectionChanged(object? sender, EventArgs e)
@@ -4752,15 +4812,30 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                     return;
                 }
 
-                _pendingBarcodePlanAutoSelectMachine = e.ModelName.Trim();
-                ModelName = e.ModelName;
-                SerialNumber = e.SerialPart ?? string.Empty;
+                if (e is null
+                    || string.IsNullOrWhiteSpace(e.RawBarcode)
+                    || !e.IsProductBarcodeValid)
+                {
+                    if (e is not null)
+                        HandleInvalidProductBarcode(e);
+                    else
+                        _logger.LogWarning("[扫码校验][失败] 收到空的条码解析结果");
+                    return;
+                }
+
+                // 只有产品条码通过完整性校验后，才允许写入运行页属性和触发后续联动。
+                string modelName = e.ModelName.Trim();
+                string serialNumber = e.SerialPart?.Trim() ?? string.Empty;
+                _pendingBarcodePlanAutoSelectMachine = modelName;
+                ModelName = modelName;
+                SerialNumber = serialNumber;
 
                 _logger.LogInformation(
                     "[扫码UI] 运行页已应用条码, Model={Model}, Serial={Serial}",
-                    e.ModelName,
-                    e.SerialPart);
-                AddLog($"📷 扫描到条码: 机种={e.ModelName}, 序列号={e.SerialPart}");
+                    modelName,
+                    serialNumber);
+                AddLog($"📷 扫描到条码: 机种={modelName}, 序列号={serialNumber}");
+                ShowReferenceMachineMismatchIfNeeded(isScannerInput: true);
             }
             catch (Exception ex)
             {
@@ -4783,6 +4858,66 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             dispatcher.BeginInvoke((Action)ApplyBarcode, DispatcherPriority.Normal);
         }
+    }
+
+    /// <summary>
+    /// 处理已收到但不符合产品条码格式的扫码，不改变当前机种和方案。
+    /// </summary>
+    private void HandleInvalidProductBarcode(BarcodeParsedEventArgs e)
+    {
+        string failureReason = string.IsNullOrWhiteSpace(e.ParseFailureReason)
+            ? "条码解析发生异常"
+            : e.ParseFailureReason!;
+        string promptKey = $"{e.Timestamp.Ticks}|{e.RawBarcode}|{failureReason}";
+        if (string.Equals(_lastInvalidBarcodePromptKey, promptKey, StringComparison.Ordinal))
+            return;
+
+        _lastInvalidBarcodePromptKey = promptKey;
+        _logger.LogWarning(
+            "[扫码校验][失败] Raw={RawBarcode}, Reason={FailureReason}",
+            e.RawBarcode,
+            failureReason);
+
+        // 清理动作必须抑制属性回调重新启动重复记录检查，但保留机种和方案。
+        _pendingBarcodePlanAutoSelectMachine = null;
+        _suppressDuplicateCheck = true;
+        try
+        {
+            InvalidateCurrentSerialVerification();
+            SerialNumber = string.Empty;
+        }
+        finally
+        {
+            _suppressDuplicateCheck = false;
+        }
+
+        RefreshReadyOrCanStartState();
+        string displayRawBarcode = FormatRawBarcodeForDisplay(e.RawBarcode);
+        string message =
+            $"条码内容不完整或格式异常，可能存在污损。\n\n扫码内容：\n{displayRawBarcode}\n\n失败原因：{failureReason}\n\n请检查条码后重新扫码，或手动输入正确的机种名称和序列号。";
+        _ = ShowWarningSafelyAsync(message, "扫码失败");
+    }
+
+    /// <summary>
+    /// 将原始扫码内容格式化为安全、可读且有长度上限的弹窗文本。
+    /// 文件日志仍使用未截断的原始值。
+    /// </summary>
+    private static string FormatRawBarcodeForDisplay(string? rawBarcode)
+    {
+        if (string.IsNullOrEmpty(rawBarcode))
+            return "(空)";
+
+        string display = rawBarcode.Trim()
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
+
+        if (display.Length == 0)
+            return "(空)";
+
+        return display.Length <= 200
+            ? display
+            : display[..200] + "…";
     }
 
     /// <summary>检测引擎状态变更 → 映射为 UI 状态。</summary>
@@ -4930,6 +5065,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogInformation("进入运行界面");
         InvalidateCurrentSerialVerification();
+        _lastReferenceMismatchPromptKey = null;
+        _lastInvalidBarcodePromptKey = null;
 
         var hasOperator = _operatorStateService?.HasOperator == true;
         var operatorName = hasOperator ? _operatorStateService.CurrentOperatorName : string.Empty;
@@ -4994,6 +5131,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         _logger.LogInformation("离开运行界面");
         InvalidateCurrentSerialVerification();
+        _lastReferenceMismatchPromptKey = null;
+        _lastInvalidBarcodePromptKey = null;
         await CancelFinalResultAutoClearAsync("离开运行页").ConfigureAwait(false);
         StopPlcPolling();
         if (Volatile.Read(ref _plcPollingSuspendCount) != 0)

@@ -44,6 +44,9 @@ var tests = new List<(string Name, Action Body)>
     ("CTRL-RECOVER-01 running page button depth styles", TestRunningPageButtonDepthStylesContract),
     ("REF-CLEAN formal source contract", TestRefClean01ForbiddenSourceContract),
     ("测试控制台使用 UTF-8 输出编码", TestConsoleOutputEncodingIsUtf8),
+    ("SCAN-VERIFY-01 产品条码解析有效性和失败原因", TestScanVerify01BarcodeParsing),
+    ("SCAN-VERIFY-01 原始扫码内容格式化规则", TestScanVerify01RawBarcodeFormatting),
+    ("SCAN-VERIFY-01 运行页先校验再应用条码", TestScanVerify01RunPageContract),
     ("Stage D semi-physical logging contract", TestStageDSemiPhysicalLogContract),
     ("阶段 E Fake 日志前缀和模拟返回契约", TestStageEFakeLogContract),
     ("阶段 F 全局异常处理器只注册一次", TestStageFGlobalExceptionContract),
@@ -1318,6 +1321,138 @@ static void TestStageALogLevels()
     AssertEqual(true, testPage.Contains("_logger.LogInformation(\"[停止流程][审计] 停止收口完成", StringComparison.Ordinal));
     AssertEqual(false, testPage.Contains("_logger.LogWarning(\"[调试按钮][启动][请求]", StringComparison.Ordinal));
     AssertEqual(true, testPage.Contains("_logger.LogInformation(\"[调试按钮][启动][请求]", StringComparison.Ordinal));
+}
+
+static void TestScanVerify01BarcodeParsing()
+{
+    var english = ParseScannerBarcode("T998248391,250919,00004Z");
+    AssertEqual(true, english.IsProductBarcodeValid);
+    AssertEqual("T998248391", english.ModelName);
+    AssertEqual("250919", english.DatePart);
+    AssertEqual("00004Z", english.SerialPart);
+    AssertEqual<string?>(null, english.ParseFailureReason);
+
+    var chinese = ParseScannerBarcode("T998248391，250919，00004Z");
+    AssertEqual(true, chinese.IsProductBarcodeValid);
+    AssertEqual("00004Z", chinese.SerialPart);
+
+    var missingSerial = ParseScannerBarcode("T998248391,250919");
+    AssertEqual(false, missingSerial.IsProductBarcodeValid);
+    AssertEqual("条码段数不正确，应为“机种名称,日期段,序列号”", missingSerial.ParseFailureReason);
+
+    var emptySerial = ParseScannerBarcode("T998248391,250919,");
+    AssertEqual(false, emptySerial.IsProductBarcodeValid);
+    AssertEqual("T998248391", emptySerial.ModelName);
+    AssertEqual(string.Empty, emptySerial.SerialPart);
+    AssertEqual("条码中的序列号为空", emptySerial.ParseFailureReason);
+
+    var emptyModel = ParseScannerBarcode(",250919,00004Z");
+    AssertEqual(false, emptyModel.IsProductBarcodeValid);
+    AssertEqual(string.Empty, emptyModel.ModelName);
+    AssertEqual("条码中的机种名称为空", emptyModel.ParseFailureReason);
+
+    foreach (var malformed in new[]
+    {
+        "T998248391",
+        "T998248391,250919",
+        "T998248391,250919,00004Z,EXTRA"
+    })
+    {
+        var result = ParseScannerBarcode(malformed);
+        AssertEqual(false, result.IsProductBarcodeValid);
+        AssertEqual("条码段数不正确，应为“机种名称,日期段,序列号”", result.ParseFailureReason);
+    }
+
+    var invalidMachine = ParseScannerBarcode("BAD_NAME_,250919,00004Z");
+    AssertEqual(false, invalidMachine.IsProductBarcodeValid);
+    AssertEqual("条码中的机种名称格式无效", invalidMachine.ParseFailureReason);
+
+    var invalidSerial = ParseScannerBarcode("T998248391,250919," + new string('S', 51));
+    AssertEqual(false, invalidSerial.IsProductBarcodeValid);
+    AssertEqual("条码中的序列号格式无效", invalidSerial.ParseFailureReason);
+}
+
+static void TestScanVerify01RawBarcodeFormatting()
+{
+    var formatter = typeof(TestPageViewModel).GetMethod(
+        "FormatRawBarcodeForDisplay",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("找不到原始扫码内容格式化方法");
+
+    string Format(string? value)
+        => (string)(formatter.Invoke(null, new object?[] { value })
+            ?? throw new InvalidOperationException("原始扫码内容格式化结果为空"));
+
+    AssertEqual("(空)", Format(null));
+    AssertEqual("(空)", Format(" \r\n\t "));
+    AssertEqual("A\\r\\nB\\tC", Format("  A\r\nB\tC  "));
+
+    string longRaw = new string('X', 201);
+    string formatted = Format(longRaw);
+    AssertEqual(201, formatted.Length);
+    AssertEqual(true, formatted.StartsWith(new string('X', 200), StringComparison.Ordinal));
+    AssertEqual('…', formatted[^1]);
+}
+
+static void TestScanVerify01RunPageContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+    var handlerStart = source.IndexOf(
+        "private void OnScannerBarcodeParsed",
+        StringComparison.Ordinal);
+    var invalidCheck = source.IndexOf(
+        "if (e is null",
+        handlerStart,
+        StringComparison.Ordinal);
+    var applyModel = source.IndexOf(
+        "_pendingBarcodePlanAutoSelectMachine = modelName",
+        handlerStart,
+        StringComparison.Ordinal);
+
+    AssertEqual(true, handlerStart >= 0);
+    AssertEqual(true, invalidCheck > handlerStart);
+    AssertEqual(true, applyModel > invalidCheck);
+    AssertEqual(true, source.Contains("HandleInvalidProductBarcode(e)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("InvalidateCurrentSerialVerification()", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("FormatRawBarcodeForDisplay", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("ShowReferenceMachineMismatchIfNeeded(isScannerInput: true)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("NotifyManualModelNameCommitted", StringComparison.Ordinal));
+
+    var view = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Views",
+        "TestPageView.xaml"));
+    AssertEqual(true, view.Contains("IsReferenceMachineMismatch", StringComparison.Ordinal));
+    AssertEqual(true, view.Contains("LostKeyboardFocus=\"ModelNameTextBox_LostKeyboardFocus\"", StringComparison.Ordinal));
+
+    var scannerContract = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Interfaces",
+        "IScannerBarcodeService.cs"));
+    AssertEqual(true, scannerContract.Contains("IsProductBarcodeValid", StringComparison.Ordinal));
+    AssertEqual(true, scannerContract.Contains("ParseFailureReason", StringComparison.Ordinal));
+
+    var startValidator = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "Inspection",
+        "InspectionStartValidator.cs"));
+    AssertEqual(false, startValidator.Contains("IsReferenceMachineMismatch", StringComparison.Ordinal));
+}
+
+static BarcodeParsedEventArgs ParseScannerBarcode(string rawBarcode)
+{
+    using var service = new ScannerBarcodeService(NullLogger<ScannerBarcodeService>.Instance);
+    var parser = typeof(ScannerBarcodeService).GetMethod(
+        "ParseBarcode",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("找不到条码解析方法");
+
+    return (BarcodeParsedEventArgs)(parser.Invoke(service, new object[] { rawBarcode })
+        ?? throw new InvalidOperationException("条码解析结果为空"));
 }
 
 static void TestDmmEmptyResponseThrows()
