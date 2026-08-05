@@ -119,6 +119,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Views
         }
 
         /// <summary>
+        /// 点击运行页非输入区域时主动清除机种输入框焦点。
+        /// 具体的机种匹配确认仍由 LostKeyboardFocus 统一触发。
+        /// </summary>
+        private void TestPageView_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!ModelNameTextBox.IsKeyboardFocusWithin)
+                return;
+
+            if (e.OriginalSource is DependencyObject clickedElement
+                && (ReferenceEquals(clickedElement, ModelNameTextBox)
+                    || ModelNameTextBox.IsAncestorOf(clickedElement)))
+            {
+                return;
+            }
+
+            Keyboard.ClearFocus();
+        }
+
+        /// <summary>
         /// 输入框回车键自动跳转焦点
         /// 机种名称 → 序列号。作业员由选择弹窗维护。
         /// </summary>

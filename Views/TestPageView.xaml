@@ -18,10 +18,11 @@
              xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
              xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
              xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
-             mc:Ignorable="d"
-             d:DataContext="{d:DesignInstance Type=vm:TestPageViewModel}"
-             d:DesignWidth="1200" d:DesignHeight="800"
-             FontFamily="Microsoft YaHei">
+              mc:Ignorable="d"
+              d:DataContext="{d:DesignInstance Type=vm:TestPageViewModel}"
+              d:DesignWidth="1200" d:DesignHeight="800"
+              FontFamily="Microsoft YaHei"
+              PreviewMouseDown="TestPageView_PreviewMouseDown">
 
     <UserControl.Resources>
         <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
@@ -723,7 +724,6 @@
                         <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}"
                                  FontSize="16" MaxLength="50" Padding="6,0,30,0"
                                  Height="36" VerticalContentAlignment="Center"
-                                 ToolTip="实际机种与参照机种不一致，请确认扫码是否正确"
                                  x:Name="ModelNameTextBox"
                                  KeyDown="InputTextBox_KeyDown"
                                  LostKeyboardFocus="ModelNameTextBox_LostKeyboardFocus">
@@ -735,6 +735,7 @@
                                         <DataTrigger Binding="{Binding IsReferenceMachineMismatch}" Value="True">
                                             <Setter Property="BorderBrush" Value="#E74C3C"/>
                                             <Setter Property="BorderThickness" Value="2"/>
+                                            <Setter Property="ToolTip" Value="实际机种与参照机种不一致，请确认扫码是否正确"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>

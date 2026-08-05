@@ -47,6 +47,7 @@ var tests = new List<(string Name, Action Body)>
     ("SCAN-VERIFY-01 产品条码解析有效性和失败原因", TestScanVerify01BarcodeParsing),
     ("SCAN-VERIFY-01 原始扫码内容格式化规则", TestScanVerify01RawBarcodeFormatting),
     ("SCAN-VERIFY-01 运行页先校验再应用条码", TestScanVerify01RunPageContract),
+    ("UI-MISMATCH-FIX-01 机种提示与空白失焦确认契约", TestUiMismatchFix01SourceContract),
     ("Stage D semi-physical logging contract", TestStageDSemiPhysicalLogContract),
     ("阶段 E Fake 日志前缀和模拟返回契约", TestStageEFakeLogContract),
     ("阶段 F 全局异常处理器只注册一次", TestStageFGlobalExceptionContract),
@@ -1453,6 +1454,53 @@ static BarcodeParsedEventArgs ParseScannerBarcode(string rawBarcode)
 
     return (BarcodeParsedEventArgs)(parser.Invoke(service, new object[] { rawBarcode })
         ?? throw new InvalidOperationException("条码解析结果为空"));
+}
+
+static void TestUiMismatchFix01SourceContract()
+{
+    var view = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Views",
+        "TestPageView.xaml"));
+    var modelTextBoxStart = view.IndexOf(
+        "<TextBox Text=\"{Binding ModelName",
+        StringComparison.Ordinal);
+    var modelTextBoxEnd = view.IndexOf(
+        "</TextBox>",
+        modelTextBoxStart,
+        StringComparison.Ordinal);
+    AssertEqual(true, modelTextBoxStart >= 0);
+    AssertEqual(true, modelTextBoxEnd > modelTextBoxStart);
+
+    var modelTextBox = view[modelTextBoxStart..modelTextBoxEnd];
+    AssertEqual(false, modelTextBox.Contains(
+        "ToolTip=\"实际机种与参照机种不一致，请确认扫码是否正确\"",
+        StringComparison.Ordinal));
+    AssertEqual(true, modelTextBox.Contains(
+        "<Setter Property=\"ToolTip\" Value=\"实际机种与参照机种不一致，请确认扫码是否正确\"/>",
+        StringComparison.Ordinal));
+    AssertEqual(true, view.Contains(
+        "PreviewMouseDown=\"TestPageView_PreviewMouseDown\"",
+        StringComparison.Ordinal));
+
+    var codeBehind = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Views",
+        "TestPageView.xaml.cs"));
+    var handlerStart = codeBehind.IndexOf(
+        "private void TestPageView_PreviewMouseDown",
+        StringComparison.Ordinal);
+    var handlerEnd = codeBehind.IndexOf(
+        "private void InputTextBox_KeyDown",
+        handlerStart,
+        StringComparison.Ordinal);
+    AssertEqual(true, handlerStart >= 0);
+    AssertEqual(true, handlerEnd > handlerStart);
+
+    var handler = codeBehind[handlerStart..handlerEnd];
+    AssertEqual(true, handler.Contains("Keyboard.ClearFocus();", StringComparison.Ordinal));
+    AssertEqual(false, handler.Contains("NotifyManualModelNameCommitted", StringComparison.Ordinal));
+    AssertEqual(false, handler.Contains("e.Handled", StringComparison.Ordinal));
 }
 
 static void TestDmmEmptyResponseThrows()
