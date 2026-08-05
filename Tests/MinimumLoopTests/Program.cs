@@ -126,6 +126,8 @@ var tests = new List<(string Name, Action Body)>
             "启动请求发送失败，请检查 PLC 通信状态后重试。", StringComparison.Ordinal));
         AssertEqual(false, source.Contains("ShowWarningAsync($\"写 DT234 失败", StringComparison.Ordinal));
     }),
+    ("RUN-SN-GATE-01 序列号确认状态纳入启动门禁", TestRunSnGate01StartGateContract),
+    ("RUN-SN-GATE-01 序列号清理和 DT234 时序契约", TestRunSnGate01SourceContract),
     ("设备连接失败计数区分健康检查和自动重连", () =>
     {
         var sourcePath = Path.Combine(
@@ -1178,9 +1180,84 @@ static InspectionValidationResult ValidateStartPolarity(string leftPolarity, str
         OperatorName = "测试员",
         IsPlcConnected = true,
         IsDmmConnected = true,
+        IsCurrentSerialConfirmed = true,
         Config = config,
         UiItemCount = config.TestPoints.Count
     });
+}
+
+static void TestRunSnGate01StartGateContract()
+{
+    AssertEqual(false, InspectionStartValidator.Validate(
+        CreateValidRunSnGateRequest(isCurrentSerialConfirmed: false)).IsValid);
+    AssertEqual("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。",
+        InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isCurrentSerialConfirmed: false)).ErrorMessage);
+    AssertEqual("正在检查该序列号的历史测试记录，请稍后重新启动。",
+        InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isDuplicateCheckInProgress: true)).ErrorMessage);
+    AssertEqual("请先处理当前的重复测试提醒，再重新启动。",
+        InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isDuplicateDecisionPending: true)).ErrorMessage);
+    AssertEqual("序列号历史记录检查失败，请重新输入序列号后再试。",
+        InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isDuplicateCheckFailed: true)).ErrorMessage);
+    AssertEqual(true, InspectionStartValidator.Validate(CreateValidRunSnGateRequest()).IsValid);
+    AssertEqual(true, InspectionStartValidator.Validate(
+        CreateValidRunSnGateRequest(uiState: TestUIState.CompletedPass)).IsValid);
+}
+
+static void TestRunSnGate01SourceContract()
+{
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+    var validatorSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "Inspection",
+        "InspectionStartValidator.cs"));
+
+    AssertEqual(true, viewModelSource.Contains("CurrentSerialVerificationState", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("CancelDuplicateRecordCheck();", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ClearSerialForNextBoardAfterCompletion();", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ClearStartRequestWithSingleRetryAsync", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("请先处理当前的重复测试提醒，再重新启动。", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.IndexOf(
+        "var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken)", StringComparison.Ordinal)
+        < viewModelSource.IndexOf("PrepareCompletedRunForNextStartAsync(startingToken)", StringComparison.Ordinal));
+    AssertEqual(true, validatorSource.Contains("IsCurrentSerialConfirmed", StringComparison.Ordinal));
+    AssertEqual(true, validatorSource.Contains("IsDuplicateCheckInProgress", StringComparison.Ordinal));
+    AssertEqual(true, validatorSource.Contains("IsDuplicateDecisionPending", StringComparison.Ordinal));
+    AssertEqual(true, validatorSource.Contains("IsDuplicateCheckFailed", StringComparison.Ordinal));
+}
+
+static InspectionStartValidationRequest CreateValidRunSnGateRequest(
+    bool isCurrentSerialConfirmed = true,
+    bool isDuplicateCheckInProgress = false,
+    bool isDuplicateDecisionPending = false,
+    bool isDuplicateCheckFailed = false,
+    TestUIState uiState = TestUIState.Ready)
+{
+    var config = new InspectionConfig
+    {
+        TestPoints = { CreateOpenContinuityTestPoint() }
+    };
+
+    return new InspectionStartValidationRequest
+    {
+        UiState = uiState,
+        ModelName = "GM",
+        SerialNumber = "SN-TEST",
+        SchemeName = "序列号门禁方案",
+        OperatorName = "测试员",
+        IsPlcConnected = true,
+        IsDmmConnected = true,
+        IsCurrentSerialConfirmed = isCurrentSerialConfirmed,
+        IsDuplicateCheckInProgress = isDuplicateCheckInProgress,
+        IsDuplicateDecisionPending = isDuplicateDecisionPending,
+        IsDuplicateCheckFailed = isDuplicateCheckFailed,
+        Config = config,
+        UiItemCount = config.TestPoints.Count
+    };
 }
 
 static void TestRunModeResolution()
@@ -2377,6 +2454,11 @@ static TestPointConfig CreateOpenContinuityTestPoint()
 {
     return new TestPointConfig
     {
+        Name = "序列号门禁测试点",
+        PinLeft = "A1",
+        PinRight = "B1",
+        PinLeftPolarity = PinPolarityConstants.Positive,
+        PinRightPolarity = PinPolarityConstants.Negative,
         CheckMode = CheckModeConstants.Continuity,
         ModeValue = "OPEN"
     };

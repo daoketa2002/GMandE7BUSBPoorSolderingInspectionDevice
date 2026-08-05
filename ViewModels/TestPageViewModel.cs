@@ -147,6 +147,25 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>重复测试检查防抖取消源。</summary>
     private CancellationTokenSource? _duplicateCheckCts;
 
+    /// <summary>当前机种和序列号组合的本轮重复记录确认状态。</summary>
+    private enum CurrentSerialVerificationState
+    {
+        NotConfirmed,
+        Checking,
+        AwaitingDuplicateDecision,
+        Confirmed,
+        Failed
+    }
+
+    /// <summary>当前序列号确认状态，只有 Confirmed 才允许进入正式启动复核。</summary>
+    private CurrentSerialVerificationState _currentSerialVerificationState;
+
+    /// <summary>已完成确认的机种和序列号组合键，防止确认结果被其他输入复用。</summary>
+    private string? _confirmedSerialKey;
+
+    /// <summary>最近一次重复记录查询失败原因，仅用于诊断日志，不直接展示内部状态名。</summary>
+    private string? _duplicateCheckFailureMessage;
+
     /// <summary>已提示并允许继续的机种和序列号组合，避免同一组合反复弹窗。</summary>
     private string? _lastDuplicateCheckKey;
 
@@ -292,6 +311,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         AwaitingReset,
         DuplicateStart,
         PlanLoading,
+        SerialNotConfirmed,
+        DuplicateCheckInProgress,
+        DuplicateDecisionPending,
+        DuplicateCheckFailed,
         Unknown
     }
 
@@ -669,6 +692,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             IsPlcConnected = IsPlcConnected,
             IsDmmConnected = IsDmmConnected,
             IsPlanLoading = _isPlanLoading,
+            IsCurrentSerialConfirmed = IsCurrentSerialVerified(),
+            IsDuplicateCheckInProgress = _currentSerialVerificationState == CurrentSerialVerificationState.Checking,
+            IsDuplicateDecisionPending = _currentSerialVerificationState == CurrentSerialVerificationState.AwaitingDuplicateDecision,
+            IsDuplicateCheckFailed = _currentSerialVerificationState == CurrentSerialVerificationState.Failed,
             // 正式启动复核在取得 Starting 门禁后执行；该门禁本身不应反向拒绝本次启动。
             IsControlActionInProgress = _currentControlAction != InspectionControlAction.None
                                        && !(allowCurrentStartingAction
@@ -940,9 +967,12 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (validation.IsValid)
             return new(true, string.Empty, "启动条件校验通过", StartRejectReason.None);
 
-        var (reason, operatorMessage) = GetStartRejectMessage();
+        var (reason, operatorMessage) = GetStartRejectMessage(allowCurrentStartingAction);
         string diagnosticMessage =
             $"Reason={reason}, ValidatorMessage={validation.ErrorMessage}, UiState={UiState}, " +
+            $"SerialVerificationState={_currentSerialVerificationState}, " +
+            $"ConfirmedSerialKey={_confirmedSerialKey}, CurrentSerialKey={BuildCurrentSerialKey()}, " +
+            $"DuplicateCheckFailureMessage={_duplicateCheckFailureMessage}, " +
             $"ControlAction={_currentControlAction}, PlcConnected={IsPlcConnected}, " +
             $"DmmConnected={IsDmmConnected}, PlanLoading={_isPlanLoading}, " +
             $"EngineRunning={_inspectionEngine?.IsRunning == true}, PlcInputs={_lastPlcInputs}";
@@ -954,11 +984,35 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         => new(false, operatorMessage, diagnosticMessage, StartRejectReason.Unknown);
 
     /// <summary>将当前快照映射为操作员可执行的启动拒绝提示。</summary>
-    private (StartRejectReason Reason, string OperatorMessage) GetStartRejectMessage()
+    private (StartRejectReason Reason, string OperatorMessage) GetStartRejectMessage(
+        bool allowCurrentStartingAction = false)
     {
-        if (_isPlanLoading) return (StartRejectReason.PlanLoading, "当前方案仍在加载，请等待加载完成后再启动。");
+        if (UiState is TestUIState.Testing
+            or TestUIState.Paused
+            or TestUIState.AwaitingReset
+            or TestUIState.Resetting
+            or TestUIState.Error)
+            return (StartRejectReason.AwaitingReset, "当前状态需要先复位，无法启动检测。");
+        if (UiState == TestUIState.EmergencyStop)
+            return (StartRejectReason.EmergencyStopActive, "设备处于急停状态，请先复位后再启动检测。");
+        if ((_currentControlAction != InspectionControlAction.None || UiState == TestUIState.Resetting)
+            && !(allowCurrentStartingAction && _currentControlAction == InspectionControlAction.Starting))
+            return (StartRejectReason.Busy, "系统正在处理其他动作，请等待当前操作完成。");
+        if (_inspectionEngine?.IsRunning == true || UiState == TestUIState.Testing)
+            return (StartRejectReason.DuplicateStart, "检测已在运行中，无需重复启动。");
         if (string.IsNullOrWhiteSpace(ModelName)) return (StartRejectReason.MissingModel, "请扫码或手动输入机种名称。");
-        if (string.IsNullOrWhiteSpace(SerialNumber)) return (StartRejectReason.MissingSerialNumber, "请扫码或手动输入序列号。");
+        if (string.IsNullOrWhiteSpace(SerialNumber)
+            || !InputValidationHelper.IsValidSerialNumber(SerialNumber))
+            return (StartRejectReason.SerialNotConfirmed, "本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+        if (_currentSerialVerificationState == CurrentSerialVerificationState.Checking)
+            return (StartRejectReason.DuplicateCheckInProgress, "正在检查该序列号的历史测试记录，请稍后重新启动。");
+        if (_currentSerialVerificationState == CurrentSerialVerificationState.AwaitingDuplicateDecision)
+            return (StartRejectReason.DuplicateDecisionPending, "请先处理当前的重复测试提醒，再重新启动。");
+        if (_currentSerialVerificationState == CurrentSerialVerificationState.Failed)
+            return (StartRejectReason.DuplicateCheckFailed, "序列号历史记录检查失败，请重新输入序列号后再试。");
+        if (!IsCurrentSerialVerified())
+            return (StartRejectReason.SerialNotConfirmed, "本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+        if (_isPlanLoading) return (StartRejectReason.PlanLoading, "当前方案仍在加载，请等待加载完成后再启动。");
         if (string.IsNullOrWhiteSpace(SchemeName) || IsSchemeNameInvalid) return (StartRejectReason.InvalidPlan, "请选择当前机种的有效检测方案。");
         if (TestItems.Count == 0) return (StartRejectReason.NoTestItems, "当前方案没有检测项目，请检查方案设置。");
         if (string.IsNullOrWhiteSpace(OperatorName)) return (StartRejectReason.MissingOperator, "请重新选择作业员。");
@@ -966,12 +1020,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (!IsDmmConnected) return (StartRejectReason.DmmOffline, "万用表未连接，请检查万用表电源、网线和系统设置。");
         if (_lastPlcInputs?.IsResetRequested == true) return (StartRejectReason.ResetNotReleased, "请松开或检查复位按钮。");
         if (_lastPlcInputs?.IsStopRequested == true) return (StartRejectReason.StopNotReleased, "请松开停止按钮或先执行复位。");
-        if (_lastPlcInputs?.IsEmergencyStop == true || UiState == TestUIState.EmergencyStop) return (StartRejectReason.EmergencyStopActive, "请解除急停并完成复位后再启动。");
-        if (UiState == TestUIState.AwaitingReset) return (StartRejectReason.AwaitingReset, "上一轮检测尚未复位，请先复位。");
-        if (UiState == TestUIState.Paused) return (StartRejectReason.AwaitingReset, "当前已停止，请先复位后再启动。");
-        if (UiState == TestUIState.Error) return (StartRejectReason.AwaitingReset, "当前处于异常状态，请先复位后再启动。");
-        if (_inspectionEngine?.IsRunning == true || UiState == TestUIState.Testing) return (StartRejectReason.DuplicateStart, "检测已在运行中，无需重复启动。");
-        if (_currentControlAction != InspectionControlAction.None || UiState == TestUIState.Resetting) return (StartRejectReason.Busy, "系统正在处理其他动作，请等待当前操作完成。");
+        if (_lastPlcInputs?.IsEmergencyStop == true) return (StartRejectReason.EmergencyStopActive, "请解除急停并完成复位后再启动。");
         return (StartRejectReason.Unknown, "当前条件不满足，无法启动检测，请检查运行状态。");
     }
 
@@ -991,9 +1040,39 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         await _notificationService.ShowWarningAsync(result.OperatorMessage, "启动拒绝");
         if (clearStartRequest)
         {
-            await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
-            _logger.LogWarning("[启动复核][拒绝] 已安全清除启动请求，来源={Source}", source);
+            var clearResult = await ClearStartRequestWithSingleRetryAsync();
+            if (clearResult.IsSuccess)
+            {
+                _logger.LogWarning("[启动复核][拒绝] 已安全清除启动请求，来源={Source}", source);
+            }
+            else
+            {
+                _logger.LogError(
+                    "[启动复核][拒绝] DT120 清除失败，来源={Source}, Message={Message}",
+                    source,
+                    clearResult.Message);
+                AddLog("DT120 清除失败，请检查 PLC");
+            }
         }
+    }
+
+    /// <summary>清除启动请求，通信瞬态失败时只允许进行一次有限重试。</summary>
+    private async Task<PlcOperationResult> ClearStartRequestWithSingleRetryAsync()
+    {
+        var firstResult = await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+        if (firstResult.IsSuccess)
+            return firstResult;
+
+        _logger.LogWarning("[启动复核][拒绝] 第一次清除 DT120 失败，100ms 后重试：{Message}", firstResult.Message);
+        await Task.Delay(100);
+
+        var retryResult = await _plcDevice.ClearStartRequestAsync(CancellationToken.None);
+        if (!retryResult.IsSuccess)
+        {
+            _logger.LogWarning("[启动复核][拒绝] 第二次清除 DT120 仍失败：{Message}", retryResult.Message);
+        }
+
+        return retryResult;
     }
 
     #endregion
@@ -1098,11 +1177,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (!string.Equals(_pendingBarcodePlanAutoSelectMachine, value.Trim(), StringComparison.OrdinalIgnoreCase))
             _pendingBarcodePlanAutoSelectMachine = null;
 
+        InvalidateCurrentSerialVerification();
         UpdateReferenceMachineMismatch();
-        if (!_suppressDuplicateCheck)
-        {
-            _lastDuplicateCheckKey = null;
-        }
 
         int loadVersion = Interlocked.Increment(ref _planLoadVersion);
         _isPlanLoading = true;
@@ -1153,11 +1229,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     partial void OnSerialNumberChanged(string value)
     {
-        if (!_suppressDuplicateCheck)
-        {
-            _lastDuplicateCheckKey = null;
-        }
-
+        InvalidateCurrentSerialVerification();
         ScheduleDuplicateRecordCheck();
         RefreshReadyOrCanStartState();
     }
@@ -1215,18 +1287,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     private void ScheduleDuplicateRecordCheck()
     {
+        // 必须先取消旧查询，再判断当前输入是否完整，避免清空序列号后旧任务晚到弹窗。
+        CancelDuplicateRecordCheck();
+
         if (_suppressDuplicateCheck)
             return;
 
         if (string.IsNullOrWhiteSpace(ModelName) || string.IsNullOrWhiteSpace(SerialNumber))
             return;
 
-        _duplicateCheckCts?.Cancel();
-        _duplicateCheckCts?.Dispose();
         _duplicateCheckCts = new CancellationTokenSource();
         var token = _duplicateCheckCts.Token;
         var machineType = ModelName.Trim();
         var serialNumber = SerialNumber.Trim();
+        _currentSerialVerificationState = CurrentSerialVerificationState.Checking;
+        _duplicateCheckFailureMessage = null;
 
         _ = CheckDuplicateRecordAfterDelayAsync(machineType, serialNumber, token);
     }
@@ -1255,7 +1330,39 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             var exists = await _testRecordStorage.ExistsRecentTestRecordAsync(
                 machineType, serialNumber, startTime, endTime).ConfigureAwait(false);
 
-            if (!exists || token.IsCancellationRequested)
+            if (token.IsCancellationRequested)
+                return;
+
+            var currentResult = await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (token.IsCancellationRequested
+                    || _suppressDuplicateCheck
+                    || !string.Equals(ModelName.Trim(), machineType, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(SerialNumber.Trim(), serialNumber, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                if (!exists)
+                {
+                    _currentSerialVerificationState = CurrentSerialVerificationState.Confirmed;
+                    _confirmedSerialKey = key;
+                    _duplicateCheckFailureMessage = null;
+                    _logger.LogInformation("[重复测试][确认] 最近一个月无重复记录：机种={MachineType}, SN={SerialNumber}",
+                        machineType, serialNumber);
+                    RefreshReadyOrCanStartState();
+                }
+                else
+                {
+                    // 在排队显示弹窗前先进入等待决策态，避免这段极短窗口误放行启动。
+                    _currentSerialVerificationState = CurrentSerialVerificationState.AwaitingDuplicateDecision;
+                    _confirmedSerialKey = null;
+                }
+
+                return true;
+            });
+
+            if (!currentResult || !exists || token.IsCancellationRequested)
                 return;
 
             var showPromptOperation = Application.Current.Dispatcher.InvokeAsync(
@@ -1268,7 +1375,21 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[重复测试] 检查最近记录失败");
+            if (token.IsCancellationRequested)
+                return;
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (string.Equals(BuildCurrentSerialKey(), $"{machineType}|{serialNumber}", StringComparison.OrdinalIgnoreCase))
+                {
+                    _currentSerialVerificationState = CurrentSerialVerificationState.Failed;
+                    _confirmedSerialKey = null;
+                    _duplicateCheckFailureMessage = ex.Message;
+                    RefreshReadyOrCanStartState();
+                }
+            });
+            _logger.LogWarning(ex, "[重复测试] 检查最近记录失败：机种={MachineType}, SN={SerialNumber}",
+                machineType, serialNumber);
         }
     }
 
@@ -1286,6 +1407,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
+        _currentSerialVerificationState = CurrentSerialVerificationState.AwaitingDuplicateDecision;
+        _confirmedSerialKey = null;
+
         AddLog($"检测到最近一个月重复测试记录：机种={machineType}, 序列号={serialNumber}");
         _logger.LogWarning("[重复测试][审计] 最近一个月已有记录：机种={MachineType}, SN={SerialNumber}",
             machineType, serialNumber);
@@ -1297,6 +1421,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (confirmed)
         {
             _lastDuplicateCheckKey = key;
+            _confirmedSerialKey = key;
+            _duplicateCheckFailureMessage = null;
+            _currentSerialVerificationState = CurrentSerialVerificationState.Confirmed;
+            RefreshReadyOrCanStartState();
             AddLog("操作员确认继续重复测试");
             return;
         }
@@ -1304,16 +1432,50 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _suppressDuplicateCheck = true;
         try
         {
-            ModelName = string.Empty;
+            InvalidateCurrentSerialVerification();
             SerialNumber = string.Empty;
-            _lastDuplicateCheckKey = null;
         }
         finally
         {
             _suppressDuplicateCheck = false;
         }
 
-        AddLog("操作员取消重复测试，已清空机种和序列号");
+        AddLog("操作员取消重复测试，已清空序列号并保留机种和方案");
+    }
+
+    /// <summary>取消当前重复记录查询并释放旧取消源。</summary>
+    private void CancelDuplicateRecordCheck()
+    {
+        var cts = _duplicateCheckCts;
+        _duplicateCheckCts = null;
+        if (cts == null)
+            return;
+
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    /// <summary>使当前机种和序列号的确认结果失效，防止旧查询结果污染新输入。</summary>
+    private void InvalidateCurrentSerialVerification()
+    {
+        _currentSerialVerificationState = CurrentSerialVerificationState.NotConfirmed;
+        _confirmedSerialKey = null;
+        _duplicateCheckFailureMessage = null;
+        _lastDuplicateCheckKey = null;
+        CancelDuplicateRecordCheck();
+    }
+
+    /// <summary>构造当前输入对应的确认键。</summary>
+    private string BuildCurrentSerialKey()
+        => $"{ModelName.Trim()}|{SerialNumber.Trim()}";
+
+    /// <summary>确认状态、确认键和当前输入完全一致时，才允许启动。</summary>
+    private bool IsCurrentSerialVerified()
+    {
+        return _currentSerialVerificationState == CurrentSerialVerificationState.Confirmed
+            && !string.IsNullOrWhiteSpace(_confirmedSerialKey)
+            && !string.IsNullOrWhiteSpace(SerialNumber)
+            && string.Equals(_confirmedSerialKey, BuildCurrentSerialKey(), StringComparison.OrdinalIgnoreCase);
     }
 
     #endregion
@@ -1541,6 +1703,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 {
                     SetUiState(finalResult == "OK" ? TestUIState.CompletedPass : TestUIState.CompletedFail);
                     AddLog($"本轮检测完成：{finalResult}");
+                    ClearSerialForNextBoardAfterCompletion();
                 }
                 else
                 {
@@ -1651,10 +1814,35 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 正常完成收口后只清除本轮序列号及其确认状态，保留机种、方案和上一轮结果显示。
+    /// </summary>
+    private void ClearSerialForNextBoardAfterCompletion()
+    {
+        if (UiState is not (TestUIState.CompletedPass or TestUIState.CompletedFail or TestUIState.SingleItemNgStopped))
+            return;
+
+        _suppressDuplicateCheck = true;
+        try
+        {
+            InvalidateCurrentSerialVerification();
+            SerialNumber = string.Empty;
+        }
+        finally
+        {
+            _suppressDuplicateCheck = false;
+        }
+
+        AddLog("本轮检测完成，已清空序列号；机种、方案和上一轮结果保持不变");
+        _logger.LogInformation("[检测完成][下一块基板] 已清空序列号，保留机种={MachineType}, 方案={PlanName}, 最终结果={FinalJudgment}",
+            ModelName, SchemeName, FinalJudgment);
+    }
+
+    /// <summary>
     /// 回到准备态，使用强制收口自动计算待机/可启动。
     /// </summary>
     private void ResetToReadyState()
     {
+        InvalidateCurrentSerialVerification();
         SerialNumber = string.Empty;
         ClearTestItemsForRestart();
         FinalJudgment = null;
@@ -3029,27 +3217,38 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 or TestUIState.CompletedFail
                 or TestUIState.SingleItemNgStopped;
 
-            var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken).ConfigureAwait(false);
-            if (!pcReadyResult.IsSuccess)
-            {
-                await RejectStartAsync(CreateStartFailureResult("启动允许信号发送失败，请检查 PLC 通信状态后重试。",
-                    $"写 DT234=1 失败：{pcReadyResult.Message}"), source);
-                return;
-            }
-
-            startingToken.ThrowIfCancellationRequested();
-
             if (isCompletedRun)
             {
+                // 完成态旧结果必须在 DT234 写成功后才清除；清理失败时仍保留上一轮显示。
+                var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken).ConfigureAwait(false);
+                if (!pcReadyResult.IsSuccess)
+                {
+                    await RejectStartAsync(CreateStartFailureResult("启动允许信号发送失败，请检查 PLC 通信状态后重试。",
+                        $"写 DT234=1 失败：{pcReadyResult.Message}"), source);
+                    return;
+                }
+
+                startingToken.ThrowIfCancellationRequested();
                 if (!await PrepareCompletedRunForNextStartAsync(startingToken).ConfigureAwait(false))
                 {
                     await _plcDevice.ClearPcReadyAsync(CancellationToken.None).ConfigureAwait(false);
-                    await _plcDevice.ClearStartRequestAsync(CancellationToken.None).ConfigureAwait(false);
+                    var clearStartResult = await ClearStartRequestWithSingleRetryAsync();
+                    if (!clearStartResult.IsSuccess)
+                        _logger.LogWarning("[下一轮启动][拒绝] 下一轮准备失败后清除 DT120 仍失败：{Message}", clearStartResult.Message);
                     return;
                 }
             }
             else
             {
+                var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken).ConfigureAwait(false);
+                if (!pcReadyResult.IsSuccess)
+                {
+                    await RejectStartAsync(CreateStartFailureResult("启动允许信号发送失败，请检查 PLC 通信状态后重试。",
+                        $"写 DT234=1 失败：{pcReadyResult.Message}"), source);
+                    return;
+                }
+
+                startingToken.ThrowIfCancellationRequested();
                 // 新一轮已通过全部启动复核，之前的耗时现在才允许归零。
                 await Application.Current.Dispatcher.InvokeAsync(ResetElapsedTime);
             }
@@ -4730,6 +4929,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     public async Task OnNavigatedToAsync(object? parameter = null)
     {
         _logger.LogInformation("进入运行界面");
+        InvalidateCurrentSerialVerification();
 
         var hasOperator = _operatorStateService?.HasOperator == true;
         var operatorName = hasOperator ? _operatorStateService.CurrentOperatorName : string.Empty;
@@ -4786,15 +4986,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         // ★ 启动 PLC 轮询替代传感器模拟
         StartPlcPolling();
+        ScheduleDuplicateRecordCheck();
         AddLog("正在等待 PLC 启动信号...");
     }
 
     public async Task OnNavigatedFromAsync()
     {
         _logger.LogInformation("离开运行界面");
-        _duplicateCheckCts?.Cancel();
-        _duplicateCheckCts?.Dispose();
-        _duplicateCheckCts = null;
+        InvalidateCurrentSerialVerification();
         await CancelFinalResultAutoClearAsync("离开运行页").ConfigureAwait(false);
         StopPlcPolling();
         if (Volatile.Read(ref _plcPollingSuspendCount) != 0)
@@ -4986,9 +5185,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         _displayInspectionStopwatch.Stop();
         _referenceSelectionStateService.SelectionChanged -= OnReferenceSelectionChanged;
-        _duplicateCheckCts?.Cancel();
-        _duplicateCheckCts?.Dispose();
-        _duplicateCheckCts = null;
+        InvalidateCurrentSerialVerification();
         try
         {
             _finalResultAutoClearCts?.Cancel();

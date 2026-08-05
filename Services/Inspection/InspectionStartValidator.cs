@@ -22,6 +22,14 @@ public sealed class InspectionStartValidationRequest
     public bool IsDmmConnected { get; init; }
     /// <summary>方案列表或检测项目仍在异步加载时，不允许依据旧数据启动。</summary>
     public bool IsPlanLoading { get; init; }
+    /// <summary>当前机种和序列号组合是否已完成本轮重复记录确认。</summary>
+    public bool IsCurrentSerialConfirmed { get; init; }
+    /// <summary>最近一个月重复记录查询是否仍在进行。</summary>
+    public bool IsDuplicateCheckInProgress { get; init; }
+    /// <summary>是否正在等待操作员处理重复测试提醒。</summary>
+    public bool IsDuplicateDecisionPending { get; init; }
+    /// <summary>最近一个月重复记录查询是否失败。</summary>
+    public bool IsDuplicateCheckFailed { get; init; }
     /// <summary>已有运行控制动作时，禁止并发启动。</summary>
     public bool IsControlActionInProgress { get; init; }
     /// <summary>检测引擎已运行时，禁止重复启动。</summary>
@@ -55,14 +63,21 @@ public static class InspectionStartValidator
             return Fail("系统正在处理其他动作，请等待当前操作完成");
         if (request.IsInspectionEngineRunning)
             return Fail("检测已在运行中，无需重复启动");
-        if (request.IsPlanLoading)
-            return Fail("当前方案仍在加载，请等待加载完成后再启动");
-
         // 基本信息检查
         if (string.IsNullOrWhiteSpace(request.ModelName))
             return Fail("未输入机种名称，无法启动");
         if (!InputValidationHelper.IsValidSerialNumber(request.SerialNumber))
-            return Fail("序列号为空、超长或包含控制字符，无法启动");
+            return Fail("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+        if (request.IsDuplicateCheckInProgress)
+            return Fail("正在检查该序列号的历史测试记录，请稍后重新启动。");
+        if (request.IsDuplicateDecisionPending)
+            return Fail("请先处理当前的重复测试提醒，再重新启动。");
+        if (request.IsDuplicateCheckFailed)
+            return Fail("序列号历史记录检查失败，请重新输入序列号后再试。");
+        if (!request.IsCurrentSerialConfirmed)
+            return Fail("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+        if (request.IsPlanLoading)
+            return Fail("当前方案仍在加载，请等待加载完成后再启动");
         if (string.IsNullOrWhiteSpace(request.SchemeName) || request.IsSchemeNameInvalid)
             return Fail("当前方案无效或不属于当前机种，无法启动");
         if (!InputValidationHelper.IsValidOperatorName(request.OperatorName))
