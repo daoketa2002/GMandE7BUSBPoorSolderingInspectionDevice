@@ -301,32 +301,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             _logger.LogWarning("[扫码恢复][排空] 已取消，累计字节={Bytes}", result.DrainedBytes);
         }
 
-        /// <summary>开发验收入口：模拟一条超长帧，不连接业务链路。</summary>
-        public void SimulateLongFrameForAcceptance(int totalBytes = 519)
-        {
-            var args = new ScannerFrameRejectedEventArgs(
-                totalBytes,
-                "开发验收模拟超长帧",
-                new string('A', 32));
-            _logger.LogWarning("[开发验收][扫码] 模拟超长帧: TotalBytes={TotalBytes}", totalBytes);
-            PublishBarcodeFrameRejectedSafely(args);
-        }
-
-        /// <summary>开发验收入口：模拟恢复排空累计字节，不操作真实串口。</summary>
-        public void SimulateRecoveryDrainForAcceptance(int drainedBytes = 519)
-        {
-            BeginRecoveryDrain();
-            lock (_recoveryDrainSync)
-            {
-                _recoveryDrainBytes = drainedBytes;
-                _recoveryDrainStartedTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
-                _recoveryDrainLastDataTimestamp = _recoveryDrainStartedTimestamp;
-                _recoveryDrainConnectionVersion = int.MinValue;
-            }
-
-            TryCompleteRecoveryDrain();
-        }
-
         #endregion
 
         #region 连接管理

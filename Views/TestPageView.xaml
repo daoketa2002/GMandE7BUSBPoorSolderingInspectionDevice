@@ -1048,7 +1048,6 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <!-- 第1行：启动(DT120) | 停止(DT122) -->
@@ -1077,19 +1076,6 @@
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#E74C3C"
                                             ToolTip="写入 DT123=1，触发急停收口流程"/>
-                                </UniformGrid>
-
-                                <!-- 扫描枪恢复临时验收入口，仅开发配置且 Fake/半实物模式可见。 -->
-                                <UniformGrid Grid.Row="2" Rows="1" Columns="2"
-                                             Visibility="{Binding IsScannerRecoveryAcceptanceToolsVisible, Converter={StaticResource BoolToVisibilityConverter}}">
-                                    <Button Content="模拟扫描枪超长帧"
-                                            Command="{Binding SimulateScannerLongFrameCommand}"
-                                            Style="{StaticResource DebugButtonStyle}"
-                                            Background="#D35400" />
-                                    <Button Content="模拟恢复排空积压"
-                                            Command="{Binding SimulateScannerRecoveryDrainCommand}"
-                                            Style="{StaticResource DebugButtonStyle}"
-                                            Background="#16A085" />
                                 </UniformGrid>
 
                             </Grid>

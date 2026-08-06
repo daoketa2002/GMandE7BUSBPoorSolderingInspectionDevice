@@ -18,11 +18,6 @@ public partial class ScannerRecoveryDialog : Window
         Closed += OnClosed;
     }
 
-    public void StartAcceptanceDrainMode()
-    {
-        _viewModel.EnableAcceptanceDrainMode();
-    }
-
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         await _viewModel.InitializeAsync();

@@ -77,7 +77,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private readonly IDeviceConnectionManager _deviceManager;
     private readonly IMultimeterDevice _multimeterDevice;
     private readonly IPlcDevice _plcDevice;
-    private readonly IScannerDevice _scannerDevice;
     private readonly InspectionEngine? _inspectionEngine;
 
     #endregion
@@ -350,7 +349,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         IReferenceSelectionStateService referenceSelectionStateService,
         IDeviceConnectionManager deviceManager,
         IScannerBarcodeService scannerBarcodeService,
-        IScannerDevice scannerDevice,
         ITestRecordStorage testRecordStorage,
         IPlcDevice plcDevice,
         IMultimeterDevice multimeterDevice,
@@ -370,7 +368,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
-        _scannerDevice = scannerDevice ?? throw new ArgumentNullException(nameof(scannerDevice));
         _multimeterDevice = multimeterDevice ?? throw new ArgumentNullException(nameof(multimeterDevice));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
@@ -675,11 +672,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private bool ShowTechnicalDetails => IsFakeMode || IsSemiPhysicalDebugMode;
     /// <summary>调试面板可见（Fake 或半实物）</summary>
     public bool IsDebugControlPanelVisible => IsFakeMode || IsSemiPhysicalDebugMode;
-
-    /// <summary>扫描枪恢复临时验收入口只在开发配置且 Fake/半实物模式显示。</summary>
-    public bool IsScannerRecoveryAcceptanceToolsVisible
-        => _configuration.GetValue<bool>("Hardware:EnableScannerRecoveryAcceptanceTools")
-            && IsDebugControlPanelVisible;
 
     /// <summary>真实模式复位可见（非 Fake 且非半实物）</summary>
     public bool IsRealModeResetVisible => !IsFakeMode && !IsSemiPhysicalDebugMode;
@@ -4117,40 +4109,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     #region 统一调试命令（Fake 和半实物共用）
-
-    [RelayCommand]
-    private void SimulateScannerLongFrame()
-    {
-        if (!IsScannerRecoveryAcceptanceToolsVisible)
-            return;
-
-        if (_scannerDevice is HoneywellH1900Scanner scanner)
-        {
-            scanner.SimulateLongFrameForAcceptance();
-            AddLog("[开发验收] 已模拟扫描枪 519 字节超长帧");
-        }
-    }
-
-    [RelayCommand]
-    private void SimulateScannerRecoveryDrain()
-    {
-        if (!IsScannerRecoveryAcceptanceToolsVisible)
-            return;
-
-        _suspendRunPageBarcodeHandling = true;
-        try
-        {
-            var dialog = _serviceProvider.GetRequiredService<ScannerRecoveryDialog>();
-            dialog.Owner = Application.Current?.MainWindow;
-            dialog.StartAcceptanceDrainMode();
-            dialog.ShowDialog();
-            AddLog("[开发验收] 已完成模拟恢复排空流程");
-        }
-        finally
-        {
-            _suspendRunPageBarcodeHandling = false;
-        }
-    }
 
     /// <summary>
     /// 调试启动：写 DT120=1，走 PLC 轮询启动复核链路，不直接 RunInspectionAsync。

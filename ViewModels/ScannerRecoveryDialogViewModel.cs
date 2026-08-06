@@ -1,9 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
-using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
-using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using Microsoft.Extensions.Logging;
 using System.Windows;
 
@@ -14,21 +12,17 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
 {
     private readonly IDeviceConnectionManager _deviceManager;
     private readonly IScannerBarcodeService _scannerBarcodeService;
-    private readonly IScannerDevice _scannerDevice;
     private readonly ILogger<ScannerRecoveryDialogViewModel> _logger;
     private bool _subscribed;
     private bool _disposed;
-    private bool _acceptanceDrainMode;
 
     public ScannerRecoveryDialogViewModel(
         IDeviceConnectionManager deviceManager,
         IScannerBarcodeService scannerBarcodeService,
-        IScannerDevice scannerDevice,
         ILogger<ScannerRecoveryDialogViewModel> logger)
     {
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _scannerBarcodeService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
-        _scannerDevice = scannerDevice ?? throw new ArgumentNullException(nameof(scannerDevice));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -60,12 +54,6 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
         SubscribeToScannerBarcode();
         ClearVerificationResult();
 
-        if (_acceptanceDrainMode)
-        {
-            await InitializeAcceptanceDrainAsync();
-            return;
-        }
-
         IsBusy = true;
         CanClose = false;
         CanDeepRecoverButton = false;
@@ -95,39 +83,6 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
             StatusText = "普通串口重连失败。\n请点击“深度恢复”尝试重启扫描枪数据通道。";
             ReceiveStatusText = "接收状态：尚未建立有效连接";
             CanDeepRecoverButton = true;
-        }
-        finally
-        {
-            IsBusy = false;
-            CanClose = true;
-        }
-    }
-
-    /// <summary>由开发验收按钮设置，仅模拟排空流程，不调用 Windows 服务或真实串口。</summary>
-    public void EnableAcceptanceDrainMode() => _acceptanceDrainMode = true;
-
-    private async Task InitializeAcceptanceDrainAsync()
-    {
-        IsBusy = true;
-        CanClose = false;
-        CanDeepRecoverButton = false;
-        StatusText = "正在清理恢复前积压的扫码数据，请暂勿扫码……";
-
-        try
-        {
-            if (_scannerDevice is not HoneywellH1900Scanner scanner)
-            {
-                StatusText = "当前扫描枪驱动不支持开发验收排空。";
-                return;
-            }
-
-            scanner.SimulateRecoveryDrainForAcceptance();
-            var drainResult = await scanner.WaitForRecoveryDrainAsync().ConfigureAwait(true);
-            StatusText = "扫描枪数据通道已重启。\n请扫描任意条码，确认恢复结果。";
-            ReceiveStatusText = $"接收状态：已清理 {drainResult.DrainedBytes} 字节，等待扫码……";
-            _logger.LogInformation(
-                "[开发验收][扫码恢复] 模拟排空完成: DrainedBytes={DrainedBytes}",
-                drainResult.DrainedBytes);
         }
         finally
         {
