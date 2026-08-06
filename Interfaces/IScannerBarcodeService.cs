@@ -23,6 +23,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// <summary>原始扫码事件，保留完整字符串供作业员号等非产品条码场景使用。</summary>
         event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
 
+        /// <summary>扫描枪超长帧被驱动层完整丢弃事件。</summary>
+        event EventHandler<ScannerFrameRejectedEventArgs>? BarcodeFrameRejected;
+
         /// <summary>
         /// 扫描枪连接状态变更事件
         /// </summary>

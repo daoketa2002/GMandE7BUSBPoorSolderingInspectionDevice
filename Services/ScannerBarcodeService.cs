@@ -46,6 +46,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
         public event EventHandler<BarcodeParsedEventArgs>? BarcodeParsed;
         public event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
+        public event EventHandler<ScannerFrameRejectedEventArgs>? BarcodeFrameRejected;
         public event EventHandler<bool>? ConnectionStateChanged;
 
         /// <summary>
@@ -120,6 +121,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
             // ⭐ 订阅条码接收事件（原始数据 → 解析 → 转发）
             _scannerDevice.BarcodeReceived += OnScannerBarcodeReceived;
+            _scannerDevice.BarcodeFrameRejected += OnScannerBarcodeFrameRejected;
 
             // ⭐ 订阅连接状态变更事件（转发给 ViewModel）
             _scannerDevice.ConnectionStateChanged += OnScannerConnectionChanged;
@@ -154,6 +156,35 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                 parsed.ModelName,
                 parsed.SerialPart);
             PublishBarcodeParsedSafely(parsed);
+        }
+
+        private void OnScannerBarcodeFrameRejected(object? sender, ScannerFrameRejectedEventArgs e)
+        {
+            _logger.LogWarning(
+                "[扫码转发][拒绝] 超长扫码帧已忽略: TotalBytes={TotalBytes}, Reason={Reason}, HexPreview={HexPreview}",
+                e.TotalBytes,
+                e.Reason,
+                e.HexPreview);
+            PublishBarcodeFrameRejectedSafely(e);
+        }
+
+        private void PublishBarcodeFrameRejectedSafely(ScannerFrameRejectedEventArgs args)
+        {
+            var handlers = BarcodeFrameRejected;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<ScannerFrameRejectedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码转发][异常] BarcodeFrameRejected 订阅者执行失败");
+                }
+            }
         }
 
         private void PublishBarcodeReceivedSafely(BarcodeReceivedEventArgs args)
@@ -352,6 +383,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             if (_scannerDevice != null && _subscribed)
             {
                 _scannerDevice.BarcodeReceived -= OnScannerBarcodeReceived;
+                _scannerDevice.BarcodeFrameRejected -= OnScannerBarcodeFrameRejected;
                 _scannerDevice.ConnectionStateChanged -= OnScannerConnectionChanged;
                 _subscribed = false;
             }

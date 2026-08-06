@@ -24,5 +24,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices
         /// ScannerBarcodeService 订阅此事件进行解析和转发
         /// </summary>
         event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
+
+        /// <summary>扫描枪异常帧被拒绝事件。</summary>
+        event EventHandler<ScannerFrameRejectedEventArgs>? BarcodeFrameRejected;
+
+        /// <summary>在关闭串口前进入恢复排空状态。</summary>
+        void BeginRecoveryDrain();
+
+        /// <summary>等待串口重新打开后完成历史数据排空。</summary>
+        Task<ScannerRecoveryDrainResult> WaitForRecoveryDrainAsync(
+            CancellationToken cancellationToken = default);
+
+        /// <summary>取消当前恢复排空状态，确保失败路径不会遗留门禁。</summary>
+        void CancelRecoveryDrain();
     }
 }

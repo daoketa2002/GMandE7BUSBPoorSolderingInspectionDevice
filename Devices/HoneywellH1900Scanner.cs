@@ -2,6 +2,7 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
 using System.Linq;
@@ -41,6 +42,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// H1900扫描枪连续发送字符间隔通常 < 10ms，100ms足够覆盖且无感知延迟
         /// </summary>
         private const int BARCODE_COMPLETE_TIMEOUT_MS = 100;
+
+        /// <summary>单帧最大允许字节数，覆盖现有机种/序列号上限并保留日期段余量。</summary>
+        public const int MaxBarcodeFrameBytes = 128;
+
+        private const int RECOVERY_DRAIN_MIN_MS = 500;
+        private const int RECOVERY_DRAIN_QUIET_MS = 500;
+        private const int RECOVERY_DRAIN_MAX_MS = 2000;
+        private const int REJECTED_FRAME_HEX_PREVIEW_BYTES = 32;
 
         #endregion
 
@@ -97,6 +106,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         // ⭐ 防抖计数器：记录连续检测到断开的次数
         private int _disconnectDetectedCount = 0;
 
+        private readonly object _recoveryDrainSync = new();
+        private bool _recoveryDrainActive;
+        private long _recoveryDrainStartedTimestamp;
+        private long _recoveryDrainLastDataTimestamp;
+        private int _recoveryDrainBytes;
+        private int _recoveryDrainConnectionVersion = -1;
+        private TaskCompletionSource<ScannerRecoveryDrainResult>? _recoveryDrainCompletion;
+
         #endregion
 
         #region 事件
@@ -105,6 +122,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         /// 条码扫描成功事件（IScannerDevice 接口实现）
         /// </summary>
         public event EventHandler<BarcodeReceivedEventArgs>? BarcodeReceived;
+
+        /// <summary>异常超长扫码帧被完整丢弃时触发。</summary>
+        public event EventHandler<ScannerFrameRejectedEventArgs>? BarcodeFrameRejected;
 
         /// <summary>
         /// 连接状态变更事件（ICommunicationDevice 接口实现）
@@ -224,6 +244,87 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         public HoneywellH1900Scanner(ILogger<HoneywellH1900Scanner> logger)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
+        /// <summary>
+        /// 在深度恢复关闭串口前设置排空门禁，确保重新打开瞬间的历史数据不会进入业务。
+        /// </summary>
+        public void BeginRecoveryDrain()
+        {
+            lock (_recoveryDrainSync)
+            {
+                _recoveryDrainActive = true;
+                _recoveryDrainStartedTimestamp = Stopwatch.GetTimestamp();
+                _recoveryDrainLastDataTimestamp = _recoveryDrainStartedTimestamp;
+                _recoveryDrainBytes = 0;
+                _recoveryDrainConnectionVersion = -1;
+                _recoveryDrainCompletion = new TaskCompletionSource<ScannerRecoveryDrainResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            _logger.LogWarning("[扫码恢复][排空] 已进入排空状态，后续串口字节只统计不发布");
+        }
+
+        /// <summary>等待读取任务完成 500ms 静默排空，最长不超过 2 秒。</summary>
+        public async Task<ScannerRecoveryDrainResult> WaitForRecoveryDrainAsync(
+            CancellationToken cancellationToken = default)
+        {
+            Task<ScannerRecoveryDrainResult>? completion;
+            lock (_recoveryDrainSync)
+            {
+                completion = _recoveryDrainCompletion?.Task;
+            }
+
+            if (completion is null)
+                return new ScannerRecoveryDrainResult();
+
+            return await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>取消排空状态并释放排空等待者，供恢复失败和页面离开路径调用。</summary>
+        public void CancelRecoveryDrain()
+        {
+            TaskCompletionSource<ScannerRecoveryDrainResult>? completion;
+            ScannerRecoveryDrainResult result;
+            lock (_recoveryDrainSync)
+            {
+                if (!_recoveryDrainActive && _recoveryDrainCompletion is null)
+                    return;
+
+                completion = _recoveryDrainCompletion;
+                result = CreateRecoveryDrainResult(timedOut: true);
+                _recoveryDrainActive = false;
+                _recoveryDrainCompletion = null;
+            }
+
+            completion?.TrySetResult(result);
+            _logger.LogWarning("[扫码恢复][排空] 已取消，累计字节={Bytes}", result.DrainedBytes);
+        }
+
+        /// <summary>开发验收入口：模拟一条超长帧，不连接业务链路。</summary>
+        public void SimulateLongFrameForAcceptance(int totalBytes = 519)
+        {
+            var args = new ScannerFrameRejectedEventArgs(
+                totalBytes,
+                "开发验收模拟超长帧",
+                new string('A', 32));
+            _logger.LogWarning("[开发验收][扫码] 模拟超长帧: TotalBytes={TotalBytes}", totalBytes);
+            PublishBarcodeFrameRejectedSafely(args);
+        }
+
+        /// <summary>开发验收入口：模拟恢复排空累计字节，不操作真实串口。</summary>
+        public void SimulateRecoveryDrainForAcceptance(int drainedBytes = 519)
+        {
+            BeginRecoveryDrain();
+            lock (_recoveryDrainSync)
+            {
+                _recoveryDrainBytes = drainedBytes;
+                _recoveryDrainStartedTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+                _recoveryDrainLastDataTimestamp = _recoveryDrainStartedTimestamp;
+                _recoveryDrainConnectionVersion = int.MinValue;
+            }
+
+            TryCompleteRecoveryDrain();
         }
 
         #endregion
@@ -780,7 +881,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         {
             var readBuffer = new byte[256];
             var barcodeBuffer = new StringBuilder();
+            var rejectedFramePreview = new List<byte>(REJECTED_FRAME_HEX_PREVIEW_BYTES);
+            var currentFrameBytes = 0;
+            var currentFrameRejected = false;
             var normalExit = false;
+
+            EnsureRecoveryDrainClockStarted(connectionVersion);
 
             try
             {
@@ -799,23 +905,66 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                             break;
                         }
 
+                        if (HandleRecoveryDrainBytes(bytesRead))
+                        {
+                            barcodeBuffer.Clear();
+                            currentFrameBytes = 0;
+                            currentFrameRejected = false;
+                            rejectedFramePreview.Clear();
+                            continue;
+                        }
+
                         var data = serialPort.Encoding.GetString(readBuffer, 0, bytesRead);
-                        barcodeBuffer.Append(data);
+                        currentFrameBytes += bytesRead;
+                        if (!currentFrameRejected)
+                        {
+                            barcodeBuffer.Append(data);
+                            if (currentFrameBytes > MaxBarcodeFrameBytes)
+                            {
+                                currentFrameRejected = true;
+                                _logger.LogWarning(
+                                    "[扫码组包][拒绝] 当前帧超过最大长度，继续读取至 100ms 静默: Version={Version}, TotalBytes={TotalBytes}, MaxBytes={MaxBytes}",
+                                    connectionVersion,
+                                    currentFrameBytes,
+                                    MaxBarcodeFrameBytes);
+                            }
+                        }
+
+                        var previewBytes = Math.Min(bytesRead, REJECTED_FRAME_HEX_PREVIEW_BYTES - rejectedFramePreview.Count);
+                        if (previewBytes > 0)
+                            rejectedFramePreview.AddRange(readBuffer.AsSpan(0, previewBytes).ToArray());
+
                         _logger.LogInformation(
                             "[扫码接收] Port={Port}, Version={Version}, BytesRead={BytesRead}, BufferLength={BufferLength}",
                             serialPort.PortName,
                             connectionVersion,
                             bytesRead,
-                            barcodeBuffer.Length);
+                            currentFrameBytes);
                         PublishRawDataSafely(data);
                     }
                     catch (TimeoutException)
                     {
-                        if (barcodeBuffer.Length > 0)
+                        if (currentFrameBytes > 0)
                         {
-                            CompleteBarcode(serialPort, connectionVersion, barcodeBuffer);
+                            if (currentFrameRejected)
+                            {
+                                RejectBarcodeFrame(
+                                    currentFrameBytes,
+                                    "扫码帧超过允许的最大字节数",
+                                    rejectedFramePreview);
+                            }
+                            else
+                            {
+                                CompleteBarcode(serialPort, connectionVersion, barcodeBuffer);
+                            }
+
                             barcodeBuffer.Clear();
+                            rejectedFramePreview.Clear();
+                            currentFrameBytes = 0;
+                            currentFrameRejected = false;
                         }
+
+                        TryCompleteRecoveryDrain();
                     }
                     catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested
                         || !IsCurrentConnection(serialPort, connectionVersion))
@@ -895,6 +1044,103 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 barcode.Length,
                 barcode);
             PublishBarcodeReceivedSafely(new BarcodeReceivedEventArgs(barcode, barcode));
+        }
+
+        private bool HandleRecoveryDrainBytes(int bytesRead)
+        {
+            lock (_recoveryDrainSync)
+            {
+                if (!_recoveryDrainActive)
+                    return false;
+
+                _recoveryDrainBytes += bytesRead;
+                _recoveryDrainLastDataTimestamp = Stopwatch.GetTimestamp();
+                _logger.LogInformation(
+                    "[扫码恢复][排空] 已清理串口字节: Bytes={Bytes}, TotalBytes={TotalBytes}",
+                    bytesRead,
+                    _recoveryDrainBytes);
+                return true;
+            }
+        }
+
+        private void EnsureRecoveryDrainClockStarted(int connectionVersion)
+        {
+            lock (_recoveryDrainSync)
+            {
+                if (!_recoveryDrainActive || _recoveryDrainConnectionVersion == connectionVersion)
+                    return;
+
+                _recoveryDrainConnectionVersion = connectionVersion;
+                _recoveryDrainStartedTimestamp = Stopwatch.GetTimestamp();
+                _recoveryDrainLastDataTimestamp = _recoveryDrainStartedTimestamp;
+                _logger.LogInformation(
+                    "[扫码恢复][排空] 已从新串口连接开始计时: Version={Version}",
+                    connectionVersion);
+            }
+        }
+
+        private void TryCompleteRecoveryDrain()
+        {
+            TaskCompletionSource<ScannerRecoveryDrainResult>? completion = null;
+            ScannerRecoveryDrainResult? result = null;
+
+            lock (_recoveryDrainSync)
+            {
+                if (!_recoveryDrainActive)
+                    return;
+
+                var now = Stopwatch.GetTimestamp();
+                var elapsedMs = Stopwatch.GetElapsedTime(_recoveryDrainStartedTimestamp, now).TotalMilliseconds;
+                var quietMs = Stopwatch.GetElapsedTime(_recoveryDrainLastDataTimestamp, now).TotalMilliseconds;
+                var timedOut = elapsedMs >= RECOVERY_DRAIN_MAX_MS;
+                if (!timedOut
+                    && (elapsedMs < RECOVERY_DRAIN_MIN_MS || quietMs < RECOVERY_DRAIN_QUIET_MS))
+                {
+                    return;
+                }
+
+                result = CreateRecoveryDrainResult(timedOut);
+                completion = _recoveryDrainCompletion;
+                _recoveryDrainActive = false;
+                _recoveryDrainCompletion = null;
+            }
+
+            completion?.TrySetResult(result!);
+            _logger.LogInformation(
+                "[扫码恢复][排空] 排空完成: Bytes={Bytes}, ElapsedMs={ElapsedMs}, TimedOut={TimedOut}",
+                result!.DrainedBytes,
+                result.ElapsedMs,
+                result.TimedOut);
+        }
+
+        private ScannerRecoveryDrainResult CreateRecoveryDrainResult(bool timedOut)
+        {
+            var elapsedMs = _recoveryDrainStartedTimestamp == 0
+                ? 0
+                : (int)Math.Min(
+                    Stopwatch.GetElapsedTime(_recoveryDrainStartedTimestamp).TotalMilliseconds,
+                    int.MaxValue);
+            return new ScannerRecoveryDrainResult
+            {
+                DrainedBytes = _recoveryDrainBytes,
+                ElapsedMs = elapsedMs,
+                TimedOut = timedOut
+            };
+        }
+
+        private void RejectBarcodeFrame(
+            int totalBytes,
+            string reason,
+            IReadOnlyCollection<byte> previewBytes)
+        {
+            var hexPreview = Convert.ToHexString(previewBytes.ToArray());
+            var args = new ScannerFrameRejectedEventArgs(totalBytes, reason, hexPreview);
+            _logger.LogWarning(
+                "[扫码组包][拒绝] 超长帧已丢弃: TotalBytes={TotalBytes}, Reason={Reason}, HexPreview={HexPreview}",
+                totalBytes,
+                reason,
+                hexPreview);
+            PublishBarcodeFrameRejectedSafely(args);
         }
 
         private void HandleReadLoopUnexpectedExit(
@@ -1069,6 +1315,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[扫码接收][异常] BarcodeReceived 订阅者执行失败");
+                }
+            }
+        }
+
+        private void PublishBarcodeFrameRejectedSafely(ScannerFrameRejectedEventArgs args)
+        {
+            var handlers = BarcodeFrameRejected;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<ScannerFrameRejectedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码组包][异常] BarcodeFrameRejected 订阅者执行失败");
                 }
             }
         }

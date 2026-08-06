@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="GMandE7BUSBPoorSolderingInspectionDevice.csproj" />
+  <Project Path="GMScannerRecoveryService\GMScannerRecoveryService.csproj" />
 </Solution>

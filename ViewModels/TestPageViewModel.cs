@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Threading;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Fakes;
 using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Multimeter;
+using GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces.Devices;
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
@@ -76,6 +77,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private readonly IDeviceConnectionManager _deviceManager;
     private readonly IMultimeterDevice _multimeterDevice;
     private readonly IPlcDevice _plcDevice;
+    private readonly IScannerDevice _scannerDevice;
     private readonly InspectionEngine? _inspectionEngine;
 
     #endregion
@@ -266,6 +268,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// 否则旧 ViewModel 会继续响应单例 InspectionEngine 的完成事件并重复弹保存窗口。
     /// </summary>
     private bool _hardwareEventsSubscribed;
+    private int _scannerFrameWarningShowing;
 
     /// <summary>
     /// Reset Timeout 错误弹窗是否已显示（0=未显示，1=已显示）。
@@ -347,6 +350,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         IReferenceSelectionStateService referenceSelectionStateService,
         IDeviceConnectionManager deviceManager,
         IScannerBarcodeService scannerBarcodeService,
+        IScannerDevice scannerDevice,
         ITestRecordStorage testRecordStorage,
         IPlcDevice plcDevice,
         IMultimeterDevice multimeterDevice,
@@ -366,6 +370,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _testRecordStorage = testRecordStorage ?? throw new ArgumentNullException(nameof(testRecordStorage));
         _plcDevice = plcDevice ?? throw new ArgumentNullException(nameof(plcDevice));
+        _scannerDevice = scannerDevice ?? throw new ArgumentNullException(nameof(scannerDevice));
         _multimeterDevice = multimeterDevice ?? throw new ArgumentNullException(nameof(multimeterDevice));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
@@ -593,29 +598,31 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     [RelayCommand]
-    private async Task ReconnectScannerAsync()
+    private Task ReconnectScannerAsync()
     {
-        AddLog("🔄 正在尝试重新连接扫描仪...");
+        if (_suspendRunPageBarcodeHandling)
+            return Task.CompletedTask;
 
+        _suspendRunPageBarcodeHandling = true;
+        AddLog("🔄 正在打开扫描枪连接恢复窗口...");
         try
         {
-            await _deviceManager.ReconnectDeviceAsync("Scanner");
-            if (IsScannerConnected)
-                AddLog("✅ 扫描仪重连成功");
-            else
-            {
-                AddLog("❌ 扫描仪重连失败 - 请检查：1.USB线是否插好 2.端口配置是否正确 3.设备管理器中COM口是否存在");
-                await _notificationService.ShowWarningAsync(
-                    "扫描仪连接失败！\n\n请检查：\n1. USB线是否插好\n2. 设备管理器中COM口是否存在\n3. 系统设定中端口配置是否正确",
-                    "连接失败");
-            }
+            var dialog = _serviceProvider.GetRequiredService<ScannerRecoveryDialog>();
+            dialog.Owner = Application.Current?.MainWindow;
+            dialog.ShowDialog();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "扫描仪重连异常");
             AddLog($"❌ 扫描仪重连异常: {ex.Message}");
-            await _notificationService.ShowErrorAsync($"扫描仪重连失败：{ex.Message}", "错误");
         }
+        finally
+        {
+            _suspendRunPageBarcodeHandling = false;
+            AddLog("扫描枪连接恢复窗口已关闭，请重新扫描当前产品条码。");
+        }
+
+        return Task.CompletedTask;
     }
 
     [RelayCommand(CanExecute = nameof(CanReconnectElectricalDevice))]
@@ -668,6 +675,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private bool ShowTechnicalDetails => IsFakeMode || IsSemiPhysicalDebugMode;
     /// <summary>调试面板可见（Fake 或半实物）</summary>
     public bool IsDebugControlPanelVisible => IsFakeMode || IsSemiPhysicalDebugMode;
+
+    /// <summary>扫描枪恢复临时验收入口只在开发配置且 Fake/半实物模式显示。</summary>
+    public bool IsScannerRecoveryAcceptanceToolsVisible
+        => _configuration.GetValue<bool>("Hardware:EnableScannerRecoveryAcceptanceTools")
+            && IsDebugControlPanelVisible;
 
     /// <summary>真实模式复位可见（非 Fake 且非半实物）</summary>
     public bool IsRealModeResetVisible => !IsFakeMode && !IsSemiPhysicalDebugMode;
@@ -4106,6 +4118,40 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     #region 统一调试命令（Fake 和半实物共用）
 
+    [RelayCommand]
+    private void SimulateScannerLongFrame()
+    {
+        if (!IsScannerRecoveryAcceptanceToolsVisible)
+            return;
+
+        if (_scannerDevice is HoneywellH1900Scanner scanner)
+        {
+            scanner.SimulateLongFrameForAcceptance();
+            AddLog("[开发验收] 已模拟扫描枪 519 字节超长帧");
+        }
+    }
+
+    [RelayCommand]
+    private void SimulateScannerRecoveryDrain()
+    {
+        if (!IsScannerRecoveryAcceptanceToolsVisible)
+            return;
+
+        _suspendRunPageBarcodeHandling = true;
+        try
+        {
+            var dialog = _serviceProvider.GetRequiredService<ScannerRecoveryDialog>();
+            dialog.Owner = Application.Current?.MainWindow;
+            dialog.StartAcceptanceDrainMode();
+            dialog.ShowDialog();
+            AddLog("[开发验收] 已完成模拟恢复排空流程");
+        }
+        finally
+        {
+            _suspendRunPageBarcodeHandling = false;
+        }
+    }
+
     /// <summary>
     /// 调试启动：写 DT120=1，走 PLC 轮询启动复核链路，不直接 RunInspectionAsync。
     /// </summary>
@@ -4547,6 +4593,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _deviceManager.DmmConnectionStateChanged += OnDmmConnectionStateChanged;
         _deviceManager.ScannerConnectionStateChanged += OnScannerConnectionStateChanged;
         _deviceManager.BarcodeScanned += OnScannerBarcodeParsed;
+        _deviceManager.ScannerFrameRejected += OnScannerFrameRejected;
 
         if (_inspectionEngine != null)
         {
@@ -4567,6 +4614,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _deviceManager.DmmConnectionStateChanged -= OnDmmConnectionStateChanged;
         _deviceManager.ScannerConnectionStateChanged -= OnScannerConnectionStateChanged;
         _deviceManager.BarcodeScanned -= OnScannerBarcodeParsed;
+        _deviceManager.ScannerFrameRejected -= OnScannerFrameRejected;
 
         if (_inspectionEngine != null)
         {
@@ -4857,6 +4905,58 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         else
         {
             dispatcher.BeginInvoke((Action)ApplyBarcode, DispatcherPriority.Normal);
+        }
+    }
+
+    private void OnScannerFrameRejected(object? sender, ScannerFrameRejectedEventArgs e)
+    {
+        if (_suspendRunPageBarcodeHandling)
+        {
+            _logger.LogInformation(
+                "[扫码UI][忽略] 恢复弹窗打开期间收到异常帧，不再弹第二个异常窗口: TotalBytes={TotalBytes}",
+                e.TotalBytes);
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _scannerFrameWarningShowing, 1, 0) != 0)
+            return;
+
+        void ShowWarning()
+        {
+            AddLog("⚠️ 扫码数据异常，已忽略，请重新扫码");
+            _ = ShowScannerFrameRejectedWarningAsync(e);
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+        {
+            Interlocked.Exchange(ref _scannerFrameWarningShowing, 0);
+            _logger.LogWarning("[扫码UI][忽略] Dispatcher 不可用，无法显示超长帧提示");
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+            ShowWarning();
+        else
+            dispatcher.BeginInvoke((Action)ShowWarning);
+    }
+
+    private async Task ShowScannerFrameRejectedWarningAsync(ScannerFrameRejectedEventArgs args)
+    {
+        try
+        {
+            _logger.LogWarning(
+                "[扫码UI][异常帧] 已忽略超长扫码数据: TotalBytes={TotalBytes}, Reason={Reason}, HexPreview={HexPreview}",
+                args.TotalBytes,
+                args.Reason,
+                args.HexPreview);
+            await _notificationService.ShowWarningAsync(
+                "本次收到的扫码数据长度异常，\n可能包含多次扫码内容或历史残留数据。\n\n本次数据未使用，请重新扫描当前产品条码。",
+                "扫码数据异常");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _scannerFrameWarningShowing, 0);
         }
     }
 

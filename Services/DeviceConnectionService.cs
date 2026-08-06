@@ -41,11 +41,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         private readonly IScannerDevice _scannerDevice;
         private readonly IScannerBarcodeService _scannerBarcodeService;
         private readonly IDeviceSettingsService _settingsService;
+        private readonly IScannerRecoveryClient _scannerRecoveryClient;
 
         // 三台设备独立互斥锁，允许并行连接
         private readonly SemaphoreSlim _plcLock = new(1, 1);
         private readonly SemaphoreSlim _dmmLock = new(1, 1);
         private readonly SemaphoreSlim _scannerLock = new(1, 1);
+        private readonly SemaphoreSlim _scannerDeepRecoveryLock = new(1, 1);
         private readonly SemaphoreSlim _scannerInitializationLock = new(1, 1);
 
         // 独立无状态临时测试器
@@ -112,6 +114,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         public event EventHandler<DeviceConnectionStateChangedEventArgs>? DmmConnectionStateChanged;
         public event EventHandler<DeviceConnectionStateChangedEventArgs>? ScannerConnectionStateChanged;
         public event EventHandler<BarcodeParsedEventArgs>? BarcodeScanned;
+        public event EventHandler<ScannerFrameRejectedEventArgs>? ScannerFrameRejected;
+        public event EventHandler<string>? ScannerDeepRecoveryProgressChanged;
         public event EventHandler<bool>? AllDevicesReadyChanged;
 
         #endregion
@@ -125,6 +129,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             IScannerDevice scannerDevice,
             IScannerBarcodeService scannerBarcodeService,
             IDeviceSettingsService settingsService,
+            IScannerRecoveryClient scannerRecoveryClient,
             IPlcConnectionTester plcConnectionTester,
             IDmmConnectionTester dmmConnectionTester)
         {
@@ -134,6 +139,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _scannerDevice = scannerDevice ?? throw new ArgumentNullException(nameof(scannerDevice));
             _scannerBarcodeService = scannerBarcodeService ?? throw new ArgumentNullException(nameof(scannerBarcodeService));
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _scannerRecoveryClient = scannerRecoveryClient ?? throw new ArgumentNullException(nameof(scannerRecoveryClient));
             _plcConnectionTester = plcConnectionTester ?? throw new ArgumentNullException(nameof(plcConnectionTester));
             _dmmConnectionTester = dmmConnectionTester ?? throw new ArgumentNullException(nameof(dmmConnectionTester));
 
@@ -244,6 +250,150 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     "手动重连",
                     _connectionCts?.Token ?? CancellationToken.None)
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 执行扫描枪深度恢复。
+        /// 该方法只持有扫描枪设备锁，不调用会再次获取该锁的高层重连方法，避免锁重入死锁。
+        /// </summary>
+        public async Task<ScannerDeepRecoveryResult> DeepRecoverScannerAsync(
+            CancellationToken cancellationToken = default)
+        {
+            if (!await _scannerDeepRecoveryLock.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            {
+                _logger.LogWarning("[扫描枪恢复][拒绝] 已有深度恢复请求正在执行");
+                return ScannerDeepRecoveryResult.Failure("Busy", "扫描枪深度恢复正在执行，请稍候");
+            }
+
+            var scannerLockAcquired = false;
+            HoneywellH1900Scanner? activeScanner = null;
+            var scannerDisconnected = false;
+            try
+            {
+                await _scannerLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                scannerLockAcquired = true;
+                if (_scannerDevice is not HoneywellH1900Scanner scanner)
+                    return ScannerDeepRecoveryResult.Failure("UnsupportedDevice", "当前扫描枪驱动不支持深度恢复");
+
+                activeScanner = scanner;
+
+                var settings = _settingsService.LoadSettings();
+                ApplyScannerConfig(settings);
+                var portName = scanner.PortName;
+                if (string.IsNullOrWhiteSpace(portName))
+                    return ScannerDeepRecoveryResult.Failure("InvalidPort", "扫描枪 COM 口配置为空");
+
+                SetReconnectInProgress(DeviceTypeNames.Scanner, true);
+                PublishConnecting(DeviceTypeNames.Scanner);
+                scanner.BeginRecoveryDrain();
+                PublishScannerDeepRecoveryProgress("正在重启扫描枪数据通道，请暂勿扫码……");
+                _logger.LogWarning(
+                    "[扫描枪恢复][审计] 开始深度恢复: Port={Port}, Source=运行页恢复弹窗",
+                    portName);
+
+                await scanner.DisconnectAsync().ConfigureAwait(false);
+                scannerDisconnected = true;
+                var serviceResult = await _scannerRecoveryClient
+                    .RestartAsync(portName, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!serviceResult.Succeeded)
+                {
+                    var reconnected = await ReconnectScannerAfterRecoveryFailureAsync(
+                        scanner,
+                        cancellationToken).ConfigureAwait(false);
+                    scannerDisconnected = !reconnected;
+                    scanner.CancelRecoveryDrain();
+                    await PublishStateChangeAsync(DeviceTypeNames.Scanner, reconnected).ConfigureAwait(false);
+                    return ScannerDeepRecoveryResult.Failure(
+                        serviceResult.ResultCode,
+                        serviceResult.Message,
+                        portName);
+                }
+
+                ApplyScannerConfig(_settingsService.LoadSettings());
+                var connected = await scanner.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                if (!connected)
+                {
+                    var reconnected = await ReconnectScannerAfterRecoveryFailureAsync(
+                        scanner,
+                        CancellationToken.None).ConfigureAwait(false);
+                    scannerDisconnected = !reconnected;
+                    scanner.CancelRecoveryDrain();
+                    await PublishStateChangeAsync(DeviceTypeNames.Scanner, reconnected).ConfigureAwait(false);
+                    return ScannerDeepRecoveryResult.Failure(
+                        "SerialReconnectFailed",
+                        "扫描枪数据通道已重启，但串口重新打开失败",
+                        portName);
+                }
+
+                PublishScannerDeepRecoveryProgress("正在清理恢复前积压的扫码数据，请暂勿扫码……");
+                var drainResult = await scanner
+                    .WaitForRecoveryDrainAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                await InitializeScannerBarcodeServiceAsync().ConfigureAwait(false);
+                await PublishStateChangeAsync(DeviceTypeNames.Scanner, true).ConfigureAwait(false);
+
+                _logger.LogWarning(
+                    "[扫描枪恢复][审计] 深度恢复成功: Port={Port}, DrainedBytes={DrainedBytes}, DrainElapsedMs={ElapsedMs}, TimedOut={TimedOut}",
+                    portName,
+                    drainResult.DrainedBytes,
+                    drainResult.ElapsedMs,
+                    drainResult.TimedOut);
+                return new ScannerDeepRecoveryResult
+                {
+                    Succeeded = true,
+                    ResultCode = "Success",
+                    Message = "扫描枪数据通道已重启并完成历史数据排空",
+                    PortName = portName,
+                    DrainResult = drainResult
+                };
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("[扫描枪恢复] 深度恢复被取消");
+                return ScannerDeepRecoveryResult.Failure("Canceled", "扫描枪深度恢复已取消");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[扫描枪恢复][异常] 深度恢复失败");
+                if (activeScanner is not null && scannerDisconnected && !activeScanner.IsConnected)
+                {
+                    var reconnected = await ReconnectScannerAfterRecoveryFailureAsync(
+                        activeScanner,
+                        CancellationToken.None).ConfigureAwait(false);
+                    scannerDisconnected = !reconnected;
+                    await PublishStateChangeAsync(DeviceTypeNames.Scanner, reconnected).ConfigureAwait(false);
+                    _logger.LogWarning(
+                        "[扫描枪恢复] 异常后已尝试普通串口回退重连: Connected={Connected}",
+                        reconnected);
+                }
+                return ScannerDeepRecoveryResult.Failure("RecoveryError", "扫描枪深度恢复失败，请联系维护人员处理");
+            }
+            finally
+            {
+                activeScanner?.CancelRecoveryDrain();
+
+                SetReconnectInProgress(DeviceTypeNames.Scanner, false);
+                if (scannerLockAcquired)
+                    _scannerLock.Release();
+                _scannerDeepRecoveryLock.Release();
+            }
+        }
+
+        private async Task<bool> ReconnectScannerAfterRecoveryFailureAsync(
+            HoneywellH1900Scanner scanner,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                ApplyScannerConfig(_settingsService.LoadSettings());
+                return await scanner.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[扫描枪恢复] 深度恢复失败后普通串口恢复也失败");
+                return false;
+            }
         }
 
         public async Task ConnectDeviceAsync(string deviceType)
@@ -1072,6 +1222,52 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     e.SerialPart);
                 PublishBarcodeScannedSafely(e);
             };
+            _scannerBarcodeService.BarcodeFrameRejected += (sender, e) =>
+            {
+                _logger.LogWarning(
+                    "[扫码转发][拒绝] 已发布异常帧事件: TotalBytes={TotalBytes}, Reason={Reason}",
+                    e.TotalBytes,
+                    e.Reason);
+                PublishScannerFrameRejectedSafely(e);
+            };
+        }
+
+        private void PublishScannerFrameRejectedSafely(ScannerFrameRejectedEventArgs args)
+        {
+            var handlers = ScannerFrameRejected;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<ScannerFrameRejectedEventArgs> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫码转发][异常] ScannerFrameRejected 订阅者执行失败");
+                }
+            }
+        }
+
+        private void PublishScannerDeepRecoveryProgress(string message)
+        {
+            var handlers = ScannerDeepRecoveryProgressChanged;
+            if (handlers == null)
+                return;
+
+            foreach (EventHandler<string> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, message);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[扫描枪恢复][异常] 恢复进度订阅者执行失败");
+                }
+            }
         }
 
         private void PublishBarcodeScannedSafely(BarcodeParsedEventArgs args)
@@ -1186,6 +1382,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             _plcLock.Dispose();
             _dmmLock.Dispose();
             _scannerLock.Dispose();
+            _scannerDeepRecoveryLock.Dispose();
             _scannerInitializationLock.Dispose();
 
             GC.SuppressFinalize(this);

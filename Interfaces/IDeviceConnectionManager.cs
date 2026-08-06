@@ -94,6 +94,10 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
         /// <param name="deviceType">设备类型："PLC" / "DMM" / "Scanner"</param>
         Task DisconnectDeviceAsync(string deviceType);
 
+        /// <summary>主动执行扫描枪 Windows 服务深度恢复和历史数据排空。</summary>
+        Task<ScannerDeepRecoveryResult> DeepRecoverScannerAsync(
+            CancellationToken cancellationToken = default);
+
         /// <summary>保存配置后，将新参数注入生产设备，并仅重连连接参数发生变化的设备。</summary>
         Task<DeviceReconnectSummary> ApplySettingsAndReconnectAsync(bool reconnectPlc, bool reconnectDmm, bool reconnectScanner);
 
@@ -134,6 +138,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Interfaces
 
         /// <summary>扫描枪条码接收事件（全局转发）</summary>
         event EventHandler<BarcodeParsedEventArgs>? BarcodeScanned;
+
+        /// <summary>扫描枪异常超长帧事件。</summary>
+        event EventHandler<ScannerFrameRejectedEventArgs>? ScannerFrameRejected;
+
+        /// <summary>扫描枪深度恢复阶段状态文本。</summary>
+        event EventHandler<string>? ScannerDeepRecoveryProgressChanged;
 
         /// <summary>设备就绪状态变更事件（所有设备全部就绪时触发）</summary>
         event EventHandler<bool>? AllDevicesReadyChanged;

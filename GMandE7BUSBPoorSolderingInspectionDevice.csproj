@@ -60,6 +60,11 @@
 		<Content Remove="Tests\**" />
 		<EmbeddedResource Remove="Tests\**" />
 		<None Remove="Tests\**" />
+		<!-- 独立 Windows 服务由自身项目编译，不能进入 WPF 主程序。 -->
+		<Compile Remove="GMScannerRecoveryService\**" />
+		<Content Remove="GMScannerRecoveryService\**" />
+		<EmbeddedResource Remove="GMScannerRecoveryService\**" />
+		<None Remove="GMScannerRecoveryService\**" />
 	</ItemGroup>
 
 </Project>

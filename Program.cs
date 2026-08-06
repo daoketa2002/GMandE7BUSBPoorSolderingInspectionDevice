@@ -288,6 +288,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // 5. 扫描枪条码服务（保留，因为 DeviceConnectionManager 依赖它转发扫码事件）
             services.AddSingleton<IScannerBarcodeService, ScannerBarcodeService>();
+            services.AddSingleton<IScannerRecoveryClient, ScannerRecoveryPipeClient>();
 
             // 6. 设备连接管理器（统一管理 PLC、万用表、扫描枪的连接/重连/状态发布）
             services.AddSingleton<IDeviceConnectionManager, DeviceConnectionService>();
@@ -308,6 +309,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<PlanSettingViewModel>();
             services.AddTransient<PlanEditViewModel>();
             services.AddTransient<SystemSettingsViewModel>();
+            services.AddTransient<ScannerRecoveryDialogViewModel>();
 
             // === Views ===
             services.AddTransient<MainWindow>();
@@ -319,6 +321,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
             services.AddTransient<PlanSettingView>();
             services.AddTransient<PlanEditView>();
             services.AddTransient<SystemSettingsView>();
+            services.AddTransient<ScannerRecoveryDialog>();
 
             // === 其他服务 ===
             services.AddLogging();
