@@ -20,10 +20,10 @@ public sealed class ScannerRecoveryWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "[扫描枪服务] 已启动: ServiceName={ServiceName}, PipeName={PipeName}, ExpectedVidPid={VidPid}",
+            "[扫描枪服务] 已启动: ServiceName={ServiceName}, PipeName={PipeName}, ExpectedVendorId={ExpectedVendorId}",
             ScannerRecoveryConstants.ServiceName,
             ScannerRecoveryConstants.PipeName,
-            ScannerRecoveryConstants.ExpectedVidPid);
+            ScannerRecoveryConstants.ExpectedVendorId);
 
         while (!stoppingToken.IsCancellationRequested)
         {

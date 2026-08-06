@@ -610,12 +610,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return Task.CompletedTask;
 
         _suspendRunPageBarcodeHandling = true;
+        BarcodeParsedEventArgs? confirmedBarcode = null;
         AddLog("🔄 正在打开扫描枪连接恢复窗口...");
         try
         {
             var dialog = _serviceProvider.GetRequiredService<ScannerRecoveryDialog>();
             dialog.Owner = Application.Current?.MainWindow;
-            dialog.ShowDialog();
+            if (dialog.ShowDialog() == true)
+                confirmedBarcode = dialog.VerifiedProductBarcode;
         }
         catch (Exception ex)
         {
@@ -625,7 +627,20 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         finally
         {
             _suspendRunPageBarcodeHandling = false;
-            AddLog("扫描枪连接恢复窗口已关闭，请重新扫描当前产品条码。");
+        }
+
+        if (confirmedBarcode is not null)
+        {
+            _logger.LogWarning(
+                "[扫描枪恢复][审计] 用户确认使用恢复弹窗条码: Model={Model}, Serial={Serial}",
+                confirmedBarcode.ModelName,
+                confirmedBarcode.SerialPart);
+            AddLog("✅ 已确认使用恢复弹窗中的当前产品条码。");
+            RouteScannerBarcodeParsed(confirmedBarcode);
+        }
+        else
+        {
+            AddLog("扫描枪连接恢复窗口已关闭，未接续条码；请重新扫描当前产品条码。");
         }
 
         return Task.CompletedTask;
@@ -4950,6 +4965,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     private void OnScannerBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
+        => RouteScannerBarcodeParsed(e);
+
+    /// <summary>统一处理硬件扫码和恢复弹窗确认后的产品条码。</summary>
+    private void RouteScannerBarcodeParsed(BarcodeParsedEventArgs e)
     {
         if (_suspendRunPageBarcodeHandling)
         {

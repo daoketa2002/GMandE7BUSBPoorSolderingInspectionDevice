@@ -35,13 +35,30 @@
         <StackPanel Grid.Row="2">
             <TextBlock Text="扫码内容：" FontSize="15" FontWeight="SemiBold" Foreground="#2C3E50" />
             <TextBox Text="{Binding BarcodeText}"
+                     IsEnabled="{Binding IsBarcodeReceptionEnabled}"
                      IsReadOnly="True"
                      TextWrapping="Wrap"
                      VerticalScrollBarVisibility="Auto"
                      MinHeight="70"
                      Margin="0,8,0,12"
                      FontFamily="Consolas"
-                     FontSize="15" />
+                     FontSize="15">
+                <TextBox.Style>
+                    <Style TargetType="TextBox">
+                        <Setter Property="Background" Value="White" />
+                        <Setter Property="Foreground" Value="#1F2933" />
+                        <Setter Property="BorderBrush" Value="#D5D8DC" />
+                        <Setter Property="BorderThickness" Value="1" />
+                        <Style.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Background" Value="#E5E7E9" />
+                                <Setter Property="Foreground" Value="#7B8794" />
+                                <Setter Property="BorderBrush" Value="#BFC5CA" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBox.Style>
+            </TextBox>
             <TextBlock Text="{Binding ReceiveStatusText}"
                        TextWrapping="Wrap"
                        FontSize="14"
@@ -49,7 +66,7 @@
         </StackPanel>
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
-            <Button Content="关闭"
+            <Button Content="{Binding CloseButtonText}"
                     Command="{Binding CloseDialogCommand}"
                     Width="110"
                     Height="38"

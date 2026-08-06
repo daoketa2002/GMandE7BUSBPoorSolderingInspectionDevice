@@ -23,4 +23,4 @@ dotnet publish .\GMScannerRecoveryService\GMScannerRecoveryService.csproj `
 
 将发布目录中的服务程序复制到 `Install-Service.cmd` 所在目录，再以管理员身份运行安装脚本。
 
-服务只接受本机命名管道 `GM.ScannerRecovery.v1` 的 `RestartScanner` 命令，并且只允许动态定位到 `VID_0C2E&PID_0914` 的 COM 设备。
+服务只接受本机命名管道 `GM.ScannerRecovery.v1` 的 `RestartScanner` 命令。恢复目标使用系统设置中的 COM 口动态定位，并校验设备属于 Honeywell（`VID_0C2E`）；允许生产现场更换不同 PID 的 Honeywell 扫描枪，同时避免误重启其他厂商的串口设备。

@@ -375,13 +375,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 var parity = ParseParity(_parity);
                 var stopBits = ParseStopBits(_stopBits);
                 var handshake = ParseFlowControl(_flowControl);
+                const bool dtrEnabled = true;
+                // H1900 的 USB 虚拟串口在无流控模式下仍需主机拉高 RTS，
+                // 否则设备深度恢复后的第一次扫码可能只识读但不上传数据。
+                var rtsEnabled = handshake is Handshake.None or Handshake.RequestToSend;
                 serialPort = new SerialPort(portName, baudRate, parity, _dataBits, stopBits)
                 {
                     ReadTimeout = READ_TIMEOUT_MS,
                     WriteTimeout = WRITE_TIMEOUT_MS,
                     Encoding = Encoding.ASCII,
-                    DtrEnable = true,
-                    RtsEnable = handshake == Handshake.RequestToSend,
+                    DtrEnable = dtrEnabled,
+                    RtsEnable = rtsEnabled,
                     Handshake = handshake
                 };
 
@@ -404,10 +408,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 StartMonitoring();
 
                 _logger.LogInformation(
-                    "[扫码连接] 连接成功并启动读取任务, Port={Port}, Version={Version}, ReadTaskStarted=true, Source={Source}",
+                    "[扫码连接] 连接成功并启动读取任务, Port={Port}, Version={Version}, ReadTaskStarted=true, Source={Source}, Handshake={Handshake}, DTR={Dtr}, RTS={Rts}",
                     portName,
                     version,
-                    reconnectSource);
+                    reconnectSource,
+                    handshake,
+                    dtrEnabled,
+                    rtsEnabled);
                 PublishConnectionStateSafely(true);
                 Notify(NotificationType.Success, $"扫描枪已连接: {portName} @ {baudRate}bps");
                 return true;

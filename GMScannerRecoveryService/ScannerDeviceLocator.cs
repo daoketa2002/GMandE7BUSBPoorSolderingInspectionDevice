@@ -43,18 +43,19 @@ public sealed class ScannerDeviceLocator
 
                 var pnpDeviceId = device["PNPDeviceID"]?.ToString() ?? string.Empty;
                 var deviceName = device["Name"]?.ToString() ?? string.Empty;
-                var vidPidMatched = pnpDeviceId.Contains(
-                    ScannerRecoveryConstants.ExpectedVidPid,
+                // COM 口由用户在系统设置中指定；厂商校验用于避免配置错误时重启其他串口设备。
+                var vendorMatched = pnpDeviceId.Contains(
+                    ScannerRecoveryConstants.ExpectedVendorId,
                     StringComparison.OrdinalIgnoreCase);
 
                 _logger.LogInformation(
-                    "[扫描枪服务][定位] Port={Port}, DeviceName={DeviceName}, DeviceInstanceId={DeviceInstanceId}, VidPidMatched={VidPidMatched}",
+                    "[扫描枪服务][定位] Port={Port}, DeviceName={DeviceName}, DeviceInstanceId={DeviceInstanceId}, VendorMatched={VendorMatched}",
                     normalizedPort,
                     deviceName,
                     pnpDeviceId,
-                    vidPidMatched);
+                    vendorMatched);
 
-                if (!vidPidMatched)
+                if (!vendorMatched)
                     return null;
 
                 return new ScannerDeviceInfo(normalizedPort, deviceName, pnpDeviceId);

@@ -1,3 +1,4 @@
+using GMandE7BUSBPoorSolderingInspectionDevice.Interfaces;
 using GMandE7BUSBPoorSolderingInspectionDevice.ViewModels;
 using System.ComponentModel;
 using System.Windows;
@@ -17,6 +18,10 @@ public partial class ScannerRecoveryDialog : Window
         Loaded += OnLoaded;
         Closed += OnClosed;
     }
+
+    /// <summary>向运行页提供用户在弹窗中确认使用的有效产品条码。</summary>
+    public BarcodeParsedEventArgs? VerifiedProductBarcode
+        => _viewModel.VerifiedProductBarcode;
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {

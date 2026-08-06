@@ -75,9 +75,32 @@ public sealed class PnpDeviceController
 
         var elapsedMs = Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds;
         _logger.LogInformation(
-            "[扫描枪服务][PnP] COM 口重新出现, Port={Port}, ElapsedMs={ElapsedMs}",
+            "[扫描枪服务][PnP] COM 口已重新出现，等待设备稳定: Port={Port}, DelayMs={DelayMs}, ElapsedMs={ElapsedMs}",
             device.PortName,
+            ScannerRecoveryConstants.PostEnableStabilizationMilliseconds,
             elapsedMs);
+
+        await Task.Delay(
+            ScannerRecoveryConstants.PostEnableStabilizationMilliseconds,
+            cancellationToken).ConfigureAwait(false);
+
+        if (!_deviceLocator.IsPortPresent(device.PortName))
+            return (false, "PortUnstable", "扫描枪 COM 口重新出现后再次消失");
+
+        var confirmedDevice = _deviceLocator.FindScanner(device.PortName);
+        if (confirmedDevice is null
+            || !string.Equals(
+                confirmedDevice.DeviceInstanceId,
+                device.DeviceInstanceId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "DeviceRecheckFailed", "扫描枪设备重新启用后身份确认失败");
+        }
+
+        _logger.LogInformation(
+            "[扫描枪服务][PnP] 设备稳定确认完成: Port={Port}, DeviceInstanceId={DeviceInstanceId}",
+            confirmedDevice.PortName,
+            confirmedDevice.DeviceInstanceId);
         return (true, "Success", "扫描枪设备重启成功");
     }
 

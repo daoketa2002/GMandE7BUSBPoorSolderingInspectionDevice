@@ -47,6 +47,16 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
     [ObservableProperty]
     private string _receiveStatusText = "接收状态：尚未收到扫码数据";
 
+    [ObservableProperty]
+    private string _closeButtonText = "关闭";
+
+    /// <summary>仅在扫描枪恢复流程完成后允许弹窗接收扫码数据。</summary>
+    [ObservableProperty]
+    private bool _isBarcodeReceptionEnabled;
+
+    /// <summary>恢复弹窗中首个通过现有产品条码校验、等待用户确认的条码。</summary>
+    public BarcodeParsedEventArgs? VerifiedProductBarcode { get; private set; }
+
     public event Action<bool?>? RequestClose;
 
     public async Task InitializeAsync()
@@ -57,6 +67,9 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
         IsBusy = true;
         CanClose = false;
         CanDeepRecoverButton = false;
+        IsBarcodeReceptionEnabled = false;
+        BarcodeText = "恢复过程中暂不接收扫码……";
+        ReceiveStatusText = "接收状态：正在重连，扫码暂不可用";
         StatusText = "正在重新连接扫描枪，请稍候……";
 
         try
@@ -64,7 +77,9 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
             await _deviceManager.ReconnectDeviceAsync("Scanner").ConfigureAwait(true);
             if (_deviceManager.IsScannerConnected)
             {
-                StatusText = "扫描枪串口已重新打开。\n请扫描任意条码，确认数据接收是否正常。";
+                IsBarcodeReceptionEnabled = true;
+                BarcodeText = "等待扫码……";
+                StatusText = BuildProductScanPrompt("扫描枪串口已重新打开。");
                 ReceiveStatusText = "接收状态：尚未收到扫码数据";
                 CanDeepRecoverButton = true;
                 _logger.LogInformation("[扫描枪恢复弹窗] 普通串口重连成功，等待用户验证");
@@ -98,6 +113,9 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
         IsBusy = true;
         CanClose = false;
         CanDeepRecoverButton = false;
+        IsBarcodeReceptionEnabled = false;
+        BarcodeText = "恢复过程中暂不接收扫码……";
+        ReceiveStatusText = "接收状态：正在重启数据通道，扫码暂不可用";
         StatusText = "正在重启扫描枪数据通道，请暂勿扫码……";
 
         try
@@ -108,7 +126,9 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
             if (result.Succeeded)
             {
                 var drainedBytes = result.DrainResult?.DrainedBytes ?? 0;
-                StatusText = "扫描枪数据通道已重启。\n请扫描任意条码，确认恢复结果。";
+                IsBarcodeReceptionEnabled = true;
+                BarcodeText = "等待扫码……";
+                StatusText = BuildProductScanPrompt("扫描枪数据通道已重启。");
                 ReceiveStatusText = $"接收状态：已清理 {drainedBytes} 字节，等待扫码……";
                 _logger.LogInformation(
                     "[扫描枪恢复弹窗] 深度恢复成功，已清理 {DrainedBytes} 字节",
@@ -152,6 +172,7 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
             return;
 
         _scannerBarcodeService.BarcodeReceived += OnBarcodeReceived;
+        _scannerBarcodeService.BarcodeParsed += OnBarcodeParsed;
         _deviceManager.ScannerDeepRecoveryProgressChanged += OnDeepRecoveryProgressChanged;
         _subscribed = true;
     }
@@ -162,6 +183,7 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
             return;
 
         _scannerBarcodeService.BarcodeReceived -= OnBarcodeReceived;
+        _scannerBarcodeService.BarcodeParsed -= OnBarcodeParsed;
         _deviceManager.ScannerDeepRecoveryProgressChanged -= OnDeepRecoveryProgressChanged;
         _subscribed = false;
     }
@@ -173,22 +195,78 @@ public partial class ScannerRecoveryDialogViewModel : ObservableObject, IDisposa
 
     private void OnBarcodeReceived(object? sender, BarcodeReceivedEventArgs e)
     {
+        if (!IsBarcodeReceptionEnabled)
+        {
+            _logger.LogWarning(
+                "[扫描枪恢复弹窗] 恢复进行中忽略扫码: Length={Length}",
+                e.RawResponse.Length);
+            return;
+        }
+
+        // 原始事件早于解析事件到达，先清除上一次结果，避免无效新条码沿用旧有效条码。
+        VerifiedProductBarcode = null;
         var displayText = FormatBarcodeForDisplay(e.Barcode);
         ApplyOnUiThread(() =>
         {
             BarcodeText = displayText;
-            ReceiveStatusText = $"接收状态：已收到扫码数据，长度 {e.RawResponse.Length} 字节";
-            StatusText = "扫描枪恢复成功。\n关闭窗口后，请重新扫描当前产品条码。";
+            CloseButtonText = "关闭";
+            ReceiveStatusText = $"接收状态：已收到扫码数据，长度 {e.RawResponse.Length} 字节，正在校验产品条码……";
+            StatusText = "已收到扫码数据，正在校验产品条码……";
             CanClose = true;
-            _logger.LogInformation("[扫描枪恢复弹窗] 已收到验证扫码，长度={Length}", e.RawResponse.Length);
+            _logger.LogInformation(
+                "[扫描枪恢复弹窗] 收到原始扫码，等待产品条码校验: Length={Length}",
+                e.RawResponse.Length);
+        });
+    }
+
+    private void OnBarcodeParsed(object? sender, BarcodeParsedEventArgs e)
+    {
+        if (!IsBarcodeReceptionEnabled)
+            return;
+
+        if (!e.IsProductBarcodeValid)
+        {
+            VerifiedProductBarcode = null;
+            ApplyOnUiThread(() =>
+            {
+                CloseButtonText = "关闭";
+                ReceiveStatusText = "接收状态：产品条码无效，未使用";
+                StatusText =
+                    $"本次条码不能用于生产：{e.ParseFailureReason ?? "产品条码校验失败"}\n" +
+                    "请重新扫描当前产品条码。";
+                _logger.LogWarning(
+                    "[扫描枪恢复弹窗] 产品条码无效，未保存: Reason={Reason}",
+                    e.ParseFailureReason ?? "产品条码校验失败");
+            });
+            return;
+        }
+
+        VerifiedProductBarcode = e;
+        ApplyOnUiThread(() =>
+        {
+            CloseButtonText = "使用此条码";
+            ReceiveStatusText = "接收状态：产品条码有效，等待确认使用";
+            StatusText =
+                $"已收到有效产品条码。\n机种：{e.ModelName}\n序列号：{e.SerialPart}\n\n" +
+                "请点击“使用此条码”返回运行页。";
+            _logger.LogInformation(
+                "[扫描枪恢复弹窗] 产品条码有效，等待用户确认: Model={Model}, Serial={Serial}",
+                e.ModelName,
+                e.SerialPart);
         });
     }
 
     private void ClearVerificationResult()
     {
+        VerifiedProductBarcode = null;
+        CloseButtonText = "关闭";
         BarcodeText = "等待扫码……";
         ReceiveStatusText = "接收状态：尚未收到扫码数据";
     }
+
+    private static string BuildProductScanPrompt(string prefix)
+        => prefix +
+           "\n\n请扫描当前产品条码。\n若蜂鸣后仍显示“等待扫码”，请松开扳机并再次扫描。";
 
     private static string FormatBarcodeForDisplay(string? rawBarcode)
     {

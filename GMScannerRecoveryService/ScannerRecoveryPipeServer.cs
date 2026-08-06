@@ -121,15 +121,15 @@ public sealed class ScannerRecoveryPipeServer
             if (device is null)
                 return ScannerRecoveryResponse.Failure(
                     "ScannerNotMatched",
-                    "COM 口不存在或不是指定扫描枪设备",
+                    "配置的 COM 口不存在，或该端口不是受支持的 Honeywell 扫描枪",
                     request.PortName);
 
             _logger.LogWarning(
-                "[扫描枪服务][审计] 开始恢复: Port={Port}, DeviceName={DeviceName}, DeviceInstanceId={DeviceInstanceId}, VidPid={VidPid}",
+                "[扫描枪服务][审计] 开始恢复: Port={Port}, DeviceName={DeviceName}, DeviceInstanceId={DeviceInstanceId}, ExpectedVendorId={ExpectedVendorId}",
                 device.PortName,
                 device.DeviceName,
                 device.DeviceInstanceId,
-                ScannerRecoveryConstants.ExpectedVidPid);
+                ScannerRecoveryConstants.ExpectedVendorId);
 
             var result = await _pnpDeviceController
                 .RestartAsync(device, cancellationToken)
