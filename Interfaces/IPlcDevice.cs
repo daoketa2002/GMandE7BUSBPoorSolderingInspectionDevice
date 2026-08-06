@@ -213,6 +213,13 @@ public interface IPlcDevice : ICommunicationDevice
         CancellationToken ct = default);
 
     /// <summary>
+    /// 通知 PLC 机种名称和序列号已输入完成，写 DT312=1。
+    /// DT312 由 PLC 清零，上位机不提供清零方法。
+    /// </summary>
+    Task<PlcOperationResult> NotifyProductIdentityEnteredAsync(
+        CancellationToken ct = default);
+
+    /// <summary>
     /// 读取继电器动作完成标志（DT302 单寄存器）。
     /// 仅用于 InspectionEngine.WaitRelaySwitchCompletedAsync 的内部轮询。
     /// </summary>

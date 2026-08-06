@@ -747,6 +747,18 @@ public class Fp0hPlcDevice : IPlcDevice, IDisposable
     }
 
     /// <summary>
+    /// 通知 PLC 机种名称和序列号已输入完成，仅写入 DT312=1。
+    /// DT312 的清零由 PLC 负责，上位机不读回也不主动清零。
+    /// </summary>
+    public Task<PlcOperationResult> NotifyProductIdentityEnteredAsync(
+        CancellationToken ct = default)
+        => WriteSignalAsync(
+            "DT312(机种和序列号输入完成)",
+            PlcAddressMap.ProductIdentityEnteredSignal,
+            1,
+            ct);
+
+    /// <summary>
     /// 读取继电器动作完成标志（DT302）。
     /// </summary>
     public async Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)

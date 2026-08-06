@@ -15,6 +15,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Models.PLC动作控制;
 /// - DT307：本次检测流程结束通知（上位机写，PLC 读）。保持约 500ms 后清 0。
 /// - DT309：左工位安装拒绝代码；DT310：右工位安装拒绝代码。
 /// - DT311：操作员已关闭安装拒绝提示的确认脉冲。
+/// - DT312：机种名称和序列号输入完成，PC 写 1，PLC 清零。
 /// </summary>
 public sealed class PlcAddressMap
 {
@@ -71,6 +72,12 @@ public sealed class PlcAddressMap
     /// 上位机写入 1，保持约 500ms 后清 0。
     /// </summary>
     public const ushort InstallRejectAcknowledgement = 311;
+
+    /// <summary>
+    /// DT312：运行页机种名称和序列号输入完成通知。
+    /// 上位机只写入 1，由 PLC 清零。
+    /// </summary>
+    public const ushort ProductIdentityEnteredSignal = 312;
 
     // ── 引脚输出范围 ──
 

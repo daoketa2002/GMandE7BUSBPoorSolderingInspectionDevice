@@ -132,6 +132,8 @@ var tests = new List<(string Name, Action Body)>
     }),
     ("RUN-SN-GATE-01 序列号确认状态纳入启动门禁", TestRunSnGate01StartGateContract),
     ("RUN-SN-GATE-01 序列号清理和 DT234 时序契约", TestRunSnGate01SourceContract),
+    ("PLC-DT312-01 地址、接口和单向写入契约", TestPlcDt312Contract),
+    ("PLC-DT312-01 Fake 写入及运行页输入通知契约", TestDt312InputNotificationContract),
     ("设备连接失败计数区分健康检查和自动重连", () =>
     {
         var sourcePath = Path.Combine(
@@ -1232,6 +1234,147 @@ static void TestRunSnGate01SourceContract()
     AssertEqual(true, validatorSource.Contains("IsDuplicateCheckInProgress", StringComparison.Ordinal));
     AssertEqual(true, validatorSource.Contains("IsDuplicateDecisionPending", StringComparison.Ordinal));
     AssertEqual(true, validatorSource.Contains("IsDuplicateCheckFailed", StringComparison.Ordinal));
+}
+
+static void TestPlcDt312Contract()
+{
+    var addressSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Models",
+        "PLC动作控制",
+        "PlcAddressMap.cs"));
+    var interfaceSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Interfaces",
+        "IPlcDevice.cs"));
+    var plcSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "Plc",
+        "Fp0hPlcDevice.cs"));
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    AssertEqual((ushort)312, PlcAddressMap.ProductIdentityEnteredSignal);
+    AssertEqual(true, addressSource.Contains(
+        "public const ushort ProductIdentityEnteredSignal = 312;",
+        StringComparison.Ordinal));
+    AssertEqual(true, interfaceSource.Contains(
+        "Task<PlcOperationResult> NotifyProductIdentityEnteredAsync(",
+        StringComparison.Ordinal));
+
+    foreach (var forbiddenName in new[]
+    {
+        "ClearProductIdentityEnteredAsync",
+        "ReadProductIdentityEnteredAsync",
+        "PulseProductIdentityEnteredAsync"
+    })
+    {
+        AssertEqual(false, interfaceSource.Contains(forbiddenName, StringComparison.Ordinal));
+    }
+
+    AssertEqual(true, plcSource.Contains(
+        "PlcAddressMap.ProductIdentityEnteredSignal,\n            1,",
+        StringComparison.Ordinal));
+    AssertEqual(false, plcSource.Contains(
+        "PlcAddressMap.ProductIdentityEnteredSignal,\n            0,",
+        StringComparison.Ordinal));
+    AssertEqual(false, viewModelSource.Contains(
+        "ClearProductIdentityEnteredAsync",
+        StringComparison.Ordinal));
+}
+
+static void TestDt312InputNotificationContract()
+{
+    var fakeSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "Fakes",
+        "FakeInspectionHardware.cs"));
+    var plcSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Devices",
+        "Plc",
+        "Fp0hPlcDevice.cs"));
+    var viewModelSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    var fake = new FakeInspectionHardware(NullLogger<FakeInspectionHardware>.Instance);
+    var result = fake.NotifyProductIdentityEnteredAsync().GetAwaiter().GetResult();
+    AssertEqual(true, result.IsSuccess);
+    AssertEqual((ushort)1, ReadFakeRegister(fake, PlcAddressMap.ProductIdentityEnteredSignal));
+
+    AssertEqual(true, fakeSource.Contains(
+        "WriteRegister(PlcAddressMap.ProductIdentityEnteredSignal, 1);",
+        StringComparison.Ordinal));
+    AssertEqual(false, fakeSource.Contains(
+        "WriteRegister(PlcAddressMap.ProductIdentityEnteredSignal, 0);",
+        StringComparison.Ordinal));
+    AssertEqual(true, plcSource.Contains("WriteSignalAsync(", StringComparison.Ordinal));
+
+    AssertEqual(true, viewModelSource.Contains(
+        "await Task.Delay(400, cts.Token)",
+        StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains(
+        "_lastNotifiedProductIdentityKey = null;",
+        StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains(
+        "allowRepeat: false",
+        StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains(
+        "allowRepeat: true",
+        StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains(
+        "_isApplyingScannerBarcode = true;",
+        StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains(
+        "CancelProductIdentityNotification();",
+        StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains(
+        "InputValidationHelper.IsValidSerialNumber(SerialNumber)",
+        StringComparison.Ordinal));
+
+    var scannerAssignmentIndex = viewModelSource.IndexOf(
+        "SerialNumber = serialNumber;",
+        StringComparison.Ordinal);
+    var scannerNotificationIndex = viewModelSource.IndexOf(
+        "allowRepeat: true",
+        StringComparison.Ordinal);
+    AssertEqual(true, scannerAssignmentIndex >= 0);
+    AssertEqual(true, scannerNotificationIndex > scannerAssignmentIndex);
+
+    var clearAllIndex = viewModelSource.IndexOf(
+        "private async Task ClearAllRunSignalsAsync",
+        StringComparison.Ordinal);
+    var nextMethodIndex = viewModelSource.IndexOf(
+        "[RelayCommand]",
+        clearAllIndex,
+        StringComparison.Ordinal);
+    AssertEqual(true, clearAllIndex >= 0);
+    AssertEqual(true, nextMethodIndex > clearAllIndex);
+    var clearAllBody = viewModelSource[clearAllIndex..nextMethodIndex];
+    AssertEqual(false, clearAllBody.Contains("DT312", StringComparison.Ordinal));
+    AssertEqual(false, clearAllBody.Contains("ProductIdentityEnteredSignal", StringComparison.Ordinal));
+}
+
+static ushort ReadFakeRegister(FakeInspectionHardware fake, ushort address)
+{
+    var registersField = typeof(FakeInspectionHardware).GetField(
+        "_registers",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("Fake PLC 寄存器字典不存在");
+
+    if (registersField.GetValue(fake) is not Dictionary<ushort, ushort> registers
+        || !registers.TryGetValue(address, out ushort value))
+    {
+        return 0;
+    }
+
+    return value;
 }
 
 static InspectionStartValidationRequest CreateValidRunSnGateRequest(
@@ -3334,6 +3477,8 @@ sealed class TestDeviceConnectionManager : IDeviceConnectionManager
     public event EventHandler<DeviceConnectionStateChangedEventArgs>? DmmConnectionStateChanged { add { } remove { } }
     public event EventHandler<DeviceConnectionStateChangedEventArgs>? ScannerConnectionStateChanged { add { } remove { } }
     public event EventHandler<BarcodeParsedEventArgs>? BarcodeScanned { add { } remove { } }
+    public event EventHandler<ScannerFrameRejectedEventArgs>? ScannerFrameRejected { add { } remove { } }
+    public event EventHandler<string>? ScannerDeepRecoveryProgressChanged { add { } remove { } }
     public event EventHandler<bool>? AllDevicesReadyChanged { add { } remove { } }
 
     public Task StartAllAsync() => Task.CompletedTask;
@@ -3341,6 +3486,8 @@ sealed class TestDeviceConnectionManager : IDeviceConnectionManager
     public Task ReconnectDeviceAsync(string deviceType) => Task.CompletedTask;
     public Task ConnectDeviceAsync(string deviceType) => Task.CompletedTask;
     public Task DisconnectDeviceAsync(string deviceType) => Task.CompletedTask;
+    public Task<ScannerDeepRecoveryResult> DeepRecoverScannerAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(ScannerDeepRecoveryResult.Failure("TEST_DISABLED", "最小回归测试未启用扫描枪深度恢复"));
     public Task<DeviceReconnectSummary> ApplySettingsAndReconnectAsync(bool reconnectPlc, bool reconnectDmm, bool reconnectScanner)
         => Task.FromResult(new DeviceReconnectSummary(
             new DeviceReconnectResult(DeviceTypeNames.Plc, reconnectPlc, PlcConnected, PlcStatusText),

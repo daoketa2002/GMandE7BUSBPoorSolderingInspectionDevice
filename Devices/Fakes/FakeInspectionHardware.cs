@@ -425,6 +425,20 @@ public sealed class FakeInspectionHardware : IPlcDevice, IMultimeterDevice
         return PlcOperationResult.Success("Fake DT311 确认脉冲已完成");
     }
 
+    /// <summary>
+    /// Fake 记录机种和序列号输入完成通知，保留 DT312=1 供测试确认上位机未清零。
+    /// </summary>
+    public Task<PlcOperationResult> NotifyProductIdentityEnteredAsync(
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        WriteRegister(PlcAddressMap.ProductIdentityEnteredSignal, 1);
+        _logger.LogInformation("[Fake][PLC][输入完成] DT312=1");
+
+        return Task.FromResult(
+            PlcOperationResult.Success("Fake DT312=1"));
+    }
+
     public Task<PlcOperationResult<bool>> ReadRelayCompletedAsync(CancellationToken ct = default)
     {
         lock (_syncRoot)

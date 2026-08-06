@@ -148,6 +148,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>重复测试检查防抖取消源。</summary>
     private CancellationTokenSource? _duplicateCheckCts;
 
+    /// <summary>机种和序列号输入完成通知的防抖取消源。</summary>
+    private CancellationTokenSource? _productIdentityNotifyCts;
+
+    /// <summary>最近一次已通知 PLC 的机种和序列号组合键。</summary>
+    private string? _lastNotifiedProductIdentityKey;
+
+    /// <summary>扫码批量赋值期间抑制属性回调触发手动输入防抖通知。</summary>
+    private bool _isApplyingScannerBarcode;
+
     /// <summary>当前机种和序列号组合的本轮重复记录确认状态。</summary>
     private enum CurrentSerialVerificationState
     {
@@ -1198,6 +1207,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         RefreshReadyOrCanStartState();
         _ = HandleModelNameChangedAsync(value, loadVersion);
         ScheduleDuplicateRecordCheck();
+        if (!_isApplyingScannerBarcode)
+            ScheduleProductIdentityNotification();
     }
 
     /// <summary>参照机种与实际输入机种只做可见提示，不参与启动校验。</summary>
@@ -1296,6 +1307,157 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         InvalidateCurrentSerialVerification();
         ScheduleDuplicateRecordCheck();
         RefreshReadyOrCanStartState();
+        if (!_isApplyingScannerBarcode)
+            ScheduleProductIdentityNotification();
+    }
+
+    /// <summary>
+    /// 为手动输入安排稳定性确认，避免每输入一个字符都向 PLC 写入 DT312。
+    /// </summary>
+    private void ScheduleProductIdentityNotification()
+    {
+        CancelProductIdentityNotification();
+        _lastNotifiedProductIdentityKey = null;
+
+        if (!IsInputEnabled
+            || string.IsNullOrWhiteSpace(ModelName)
+            || string.IsNullOrWhiteSpace(SerialNumber)
+            || !InputValidationHelper.IsValidSerialNumber(SerialNumber))
+        {
+            return;
+        }
+
+        string modelName = ModelName.Trim();
+        string serialNumber = SerialNumber.Trim();
+        var cts = new CancellationTokenSource();
+        _productIdentityNotifyCts = cts;
+        _ = NotifyProductIdentityAfterDelayAsync(modelName, serialNumber, cts);
+    }
+
+    /// <summary>等待手动输入稳定后，确认快照未变化再通知 PLC。</summary>
+    private async Task NotifyProductIdentityAfterDelayAsync(
+        string modelName,
+        string serialNumber,
+        CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(400, cts.Token).ConfigureAwait(true);
+
+            if (cts.IsCancellationRequested
+                || !ReferenceEquals(_productIdentityNotifyCts, cts)
+                || !IsInputEnabled
+                || !string.Equals(ModelName.Trim(), modelName, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(SerialNumber.Trim(), serialNumber, StringComparison.OrdinalIgnoreCase)
+                || !InputValidationHelper.IsValidSerialNumber(serialNumber))
+            {
+                return;
+            }
+
+            await NotifyProductIdentityAsync(
+                "Manual",
+                modelName,
+                serialNumber,
+                allowRepeat: false,
+                cts.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // 新输入或页面离开已取消旧的延时通知，不记录为 PLC 故障。
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "[输入完成通知][异常] Source=Manual, Model={Model}, Serial={Serial}",
+                modelName,
+                serialNumber);
+        }
+        finally
+        {
+            if (ReferenceEquals(_productIdentityNotifyCts, cts))
+            {
+                _productIdentityNotifyCts = null;
+                cts.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 写入输入完成通知。扫码允许同内容重复通知，手动输入按组合键防重复。
+    /// </summary>
+    private async Task NotifyProductIdentityAsync(
+        string source,
+        string modelName,
+        string serialNumber,
+        bool allowRepeat,
+        CancellationToken ct)
+    {
+        if (!IsInputEnabled
+            || !_hardwareEventsSubscribed
+            || string.IsNullOrWhiteSpace(modelName)
+            || string.IsNullOrWhiteSpace(serialNumber)
+            || !InputValidationHelper.IsValidSerialNumber(serialNumber))
+        {
+            return;
+        }
+
+        string key = $"{modelName.Trim()}|{serialNumber.Trim()}";
+        if (!allowRepeat && string.Equals(
+                _lastNotifiedProductIdentityKey,
+                key,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        PlcOperationResult result;
+        try
+        {
+            result = await _plcDevice.NotifyProductIdentityEnteredAsync(ct).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "[输入完成通知][失败] Source={Source}, Model={Model}, Serial={Serial}",
+                source,
+                modelName,
+                serialNumber);
+            return;
+        }
+
+        if (result.IsSuccess)
+        {
+            _lastNotifiedProductIdentityKey = key;
+            _logger.LogInformation(
+                "[输入完成通知] Source={Source}, DT312=1, Model={Model}, Serial={Serial}",
+                source,
+                modelName,
+                serialNumber);
+            return;
+        }
+
+        _logger.LogWarning(
+            "[输入完成通知][失败] Source={Source}, Model={Model}, Serial={Serial}, Message={Message}",
+            source,
+            modelName,
+            serialNumber,
+            result.Message);
+    }
+
+    /// <summary>取消尚未执行的机种和序列号输入完成通知。</summary>
+    private void CancelProductIdentityNotification()
+    {
+        var cts = _productIdentityNotifyCts;
+        _productIdentityNotifyCts = null;
+        if (cts == null)
+            return;
+
+        cts.Cancel();
+        cts.Dispose();
     }
 
     private async Task HandleModelNameChangedAsync(string newMachineType, int loadVersion)
@@ -4832,9 +4994,26 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 // 只有产品条码通过完整性校验后，才允许写入运行页属性和触发后续联动。
                 string modelName = e.ModelName.Trim();
                 string serialNumber = e.SerialPart?.Trim() ?? string.Empty;
+                CancelProductIdentityNotification();
+                _lastNotifiedProductIdentityKey = null;
                 _pendingBarcodePlanAutoSelectMachine = modelName;
-                ModelName = modelName;
-                SerialNumber = serialNumber;
+                _isApplyingScannerBarcode = true;
+                try
+                {
+                    ModelName = modelName;
+                    SerialNumber = serialNumber;
+                }
+                finally
+                {
+                    _isApplyingScannerBarcode = false;
+                }
+
+                _ = NotifyProductIdentityAsync(
+                    "Scanner",
+                    modelName,
+                    serialNumber,
+                    allowRepeat: true,
+                    CancellationToken.None);
 
                 _logger.LogInformation(
                     "[扫码UI] 运行页已应用条码, Model={Model}, Serial={Serial}",
@@ -5188,6 +5367,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     public async Task OnNavigatedFromAsync()
     {
         _logger.LogInformation("离开运行界面");
+        CancelProductIdentityNotification();
+        _lastNotifiedProductIdentityKey = null;
         InvalidateCurrentSerialVerification();
         _lastReferenceMismatchPromptKey = null;
         _lastInvalidBarcodePromptKey = null;
@@ -5382,6 +5563,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         }
         _displayInspectionStopwatch.Stop();
         _referenceSelectionStateService.SelectionChanged -= OnReferenceSelectionChanged;
+        CancelProductIdentityNotification();
+        _lastNotifiedProductIdentityKey = null;
         InvalidateCurrentSerialVerification();
         try
         {
