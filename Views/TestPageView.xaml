@@ -322,7 +322,7 @@
                                Visibility="{Binding IsReferenceMachineMismatch, Converter={StaticResource BoolToVisibilityConverter}}"
                                Margin="2,0,2,6"/>
 
-                    <!-- 方案名称：原绑定和校验逻辑保持不变 -->
+                    <!-- 方案名称：全量和机种过滤两种模式都只显示方案名称，内部绑定完整方案对象 -->
                     <DockPanel Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="方案名称："
                                    FontSize="14"
@@ -331,7 +331,8 @@
                         <ComboBox IsEditable="True"
                                   Text="{Binding SchemeName, UpdateSourceTrigger=PropertyChanged}"
                                   ItemsSource="{Binding PlanNameOptions}"
-                                  SelectedItem="{Binding SelectedPlanName}"
+                                  SelectedItem="{Binding SelectedPlanOption}"
+                                  DisplayMemberPath="PlanName"
                                   FontSize="14"
                                   FontWeight="Bold"
                                   Height="32"

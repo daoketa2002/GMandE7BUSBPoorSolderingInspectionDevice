@@ -167,7 +167,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         Failed
     }
 
-    /// <summary>当前序列号确认状态，只有 Confirmed 才允许进入正式启动复核。</summary>
+    /// <summary>当前机种和序列号组合的确认状态，只有 Confirmed 才允许进入正式启动复核。</summary>
     private CurrentSerialVerificationState _currentSerialVerificationState;
 
     /// <summary>已完成确认的机种和序列号组合键，防止确认结果被其他输入复用。</summary>
@@ -247,8 +247,19 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// <summary>方案加载版本号。机种或方案变更后递增，用于丢弃晚到的异步加载结果。</summary>
     private int _planLoadVersion;
 
-    /// <summary>仅由扫码设置的待自动选方案机种，手动输入不触发唯一方案自动选择。</summary>
-    private string? _pendingBarcodePlanAutoSelectMachine;
+    /// <summary>运行页当前缓存的全部方案。页面生命周期内只加载一次，机种变化只在内存中过滤。</summary>
+    private readonly List<PlanModel> _allRunPlans = new();
+
+    /// <summary>运行页方案缓存是否已经加载。</summary>
+    private bool _runPlansLoaded;
+
+    /// <summary>当前选中方案的完整身份键：系列、机种、方案名称。</summary>
+    private string? _selectedPlanIdentityKey;
+
+    /// <summary>
+    /// 方案选项重建或内部同步期间，不让 ComboBox 的 SelectedItem/Text 回写触发重复加载或项目清理。
+    /// </summary>
+    private bool _suppressSchemeNameReload;
 
     /// <summary>最近一次已提示的参照机种不一致组合，避免 Enter 和失焦重复弹窗。</summary>
     private string? _lastReferenceMismatchPromptKey;
@@ -401,10 +412,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     [ObservableProperty]
     private string _schemeName = string.Empty;
 
-    public ObservableCollection<string> PlanNameOptions { get; } = new();
+    /// <summary>方案下拉保存完整方案对象，界面仅通过 DisplayMemberPath 显示方案名称。</summary>
+    public ObservableCollection<PlanModel> PlanNameOptions { get; } = new();
 
     [ObservableProperty]
-    private string? _selectedPlanName;
+    private PlanModel? _selectedPlanOption;
 
     [ObservableProperty]
     private bool _isSchemeNameInvalid;
@@ -426,11 +438,23 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     partial void OnSchemeNameChanged(string value)
     {
+        if (_suppressSchemeNameReload)
+            return;
+
         int loadVersion = Interlocked.Increment(ref _planLoadVersion);
 
         if (string.IsNullOrWhiteSpace(value))
         {
-            SelectedPlanName = null;
+            _suppressSchemeNameReload = true;
+            try
+            {
+                SelectedPlanOption = null;
+            }
+            finally
+            {
+                _suppressSchemeNameReload = false;
+            }
+            _selectedPlanIdentityKey = null;
             IsSchemeNameInvalid = false;
             TestItems.Clear();
             AddLog("方案名称已清空，检测项目列表已清空");
@@ -439,26 +463,46 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        string? matched = PlanNameOptions.FirstOrDefault(
-            planName => string.Equals(planName, value, StringComparison.OrdinalIgnoreCase));
+        var matched = ResolvePlanForSchemeName(value);
 
         if (matched != null)
         {
-            SelectedPlanName = matched;
-            IsSchemeNameInvalid = false;
+            ApplySelectedPlanDisplayWithoutReload(matched);
             _isPlanLoading = true;
             RefreshReadyOrCanStartState();
-            _ = LoadPlanItemsAsync(loadVersion, ModelName, value);
+            _ = LoadPlanItemsAsync(loadVersion, ModelName, matched.PlanName, matched);
         }
         else
         {
-            SelectedPlanName = null;
+            _suppressSchemeNameReload = true;
+            try
+            {
+                SelectedPlanOption = null;
+            }
+            finally
+            {
+                _suppressSchemeNameReload = false;
+            }
+            _selectedPlanIdentityKey = null;
             ValidateCurrentSchemeName();
             TestItems.Clear();
             AddLog($"⚠️ 方案 [{value}] 不在当前机种 [{ModelName}] 的方案列表中，检测列表已清空");
             _isPlanLoading = false;
             RefreshReadyOrCanStartState();
         }
+    }
+
+    /// <summary>用户从下拉列表选择方案时，按完整方案对象加载项目，避免同名方案串选。</summary>
+    partial void OnSelectedPlanOptionChanged(PlanModel? value)
+    {
+        if (_suppressSchemeNameReload || value == null)
+            return;
+
+        int loadVersion = Interlocked.Increment(ref _planLoadVersion);
+        ApplySelectedPlanDisplayWithoutReload(value);
+        _isPlanLoading = true;
+        RefreshReadyOrCanStartState();
+        _ = LoadPlanItemsAsync(loadVersion, ModelName, value.PlanName, value);
     }
 
     [ObservableProperty]
@@ -1037,15 +1081,15 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (string.IsNullOrWhiteSpace(ModelName)) return (StartRejectReason.MissingModel, "请扫码或手动输入机种名称。");
         if (string.IsNullOrWhiteSpace(SerialNumber)
             || !InputValidationHelper.IsValidSerialNumber(SerialNumber))
-            return (StartRejectReason.SerialNotConfirmed, "本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+            return (StartRejectReason.SerialNotConfirmed, "本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。");
         if (_currentSerialVerificationState == CurrentSerialVerificationState.Checking)
-            return (StartRejectReason.DuplicateCheckInProgress, "正在检查该序列号的历史测试记录，请稍后重新启动。");
+            return (StartRejectReason.DuplicateCheckInProgress, "正在检查该机种和序列号的历史测试记录，请稍后重新启动。");
         if (_currentSerialVerificationState == CurrentSerialVerificationState.AwaitingDuplicateDecision)
             return (StartRejectReason.DuplicateDecisionPending, "请先处理当前的重复测试提醒，再重新启动。");
         if (_currentSerialVerificationState == CurrentSerialVerificationState.Failed)
-            return (StartRejectReason.DuplicateCheckFailed, "序列号历史记录检查失败，请重新输入序列号后再试。");
+            return (StartRejectReason.DuplicateCheckFailed, "机种和序列号历史记录检查失败，请重新输入后再试。");
         if (!IsCurrentSerialVerified())
-            return (StartRejectReason.SerialNotConfirmed, "本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+            return (StartRejectReason.SerialNotConfirmed, "本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。");
         if (_isPlanLoading) return (StartRejectReason.PlanLoading, "当前方案仍在加载，请等待加载完成后再启动。");
         if (string.IsNullOrWhiteSpace(SchemeName) || IsSchemeNameInvalid) return (StartRejectReason.InvalidPlan, "请选择当前机种的有效检测方案。");
         if (TestItems.Count == 0) return (StartRejectReason.NoTestItems, "当前方案没有检测项目，请检查方案设置。");
@@ -1208,9 +1252,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
     partial void OnModelNameChanged(string value)
     {
-        if (!string.Equals(_pendingBarcodePlanAutoSelectMachine, value.Trim(), StringComparison.OrdinalIgnoreCase))
-            _pendingBarcodePlanAutoSelectMachine = null;
-
         InvalidateCurrentSerialVerification();
         UpdateReferenceMachineMismatch();
         if (!IsReferenceMachineMismatch)
@@ -1218,7 +1259,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         int loadVersion = Interlocked.Increment(ref _planLoadVersion);
         _isPlanLoading = true;
-        TestItems.Clear();
+        // 机种变化只交给异步方案联动决定是否切换方案。
+        // 不能在这里提前清空项目，否则同一方案输入下一块产品时会丢失上一轮快照。
         RefreshReadyOrCanStartState();
         _ = HandleModelNameChangedAsync(value, loadVersion);
         ScheduleDuplicateRecordCheck();
@@ -1481,49 +1523,83 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (!isCurrent)
             return;
 
-        if (string.Equals(_pendingBarcodePlanAutoSelectMachine, newMachineType.Trim(),
-                StringComparison.OrdinalIgnoreCase))
+        var matchingPlans = GetPlansForMachineType(newMachineType);
+
+        if (string.IsNullOrWhiteSpace(newMachineType))
         {
-            _pendingBarcodePlanAutoSelectMachine = null;
-            if (PlanNameOptions.Count == 1)
+            // 机种为空时保留已选方案和项目，只把方案框切换为全量选项。
+            var selectedPlan = FindCachedPlanByIdentity(_selectedPlanIdentityKey);
+            if (selectedPlan != null)
             {
-                // 复用现有 OnSchemeNameChanged，继续由统一逻辑加载检测项目和更新引擎配置。
-                // 即使新旧机种的唯一方案同名，也先清空一次以确保重新加载检测项目。
-                SchemeName = string.Empty;
-                SchemeName = PlanNameOptions[0];
-                _logger.LogInformation("[扫码联动][运行页] 已自动选择唯一方案：机种={MachineType}, 方案={PlanName}",
-                    newMachineType, SchemeName);
-                return;
+                ApplySelectedPlanDisplayWithoutReload(selectedPlan);
             }
-
-            if (!string.IsNullOrWhiteSpace(SchemeName))
+            else if (!string.IsNullOrWhiteSpace(SchemeName))
             {
-                // 扫码切换到零方案或多方案机种时，清除上一机种遗留方案，避免误用。
                 SchemeName = string.Empty;
             }
 
-            if (PlanNameOptions.Count > 1)
-            {
-                AddLog($"⚠️ 机种 [{newMachineType}] 存在多个检测方案，请手动选择方案");
-                _logger.LogWarning("[扫码联动][运行页] 机种存在多个方案，未自动选择：机种={MachineType}, 数量={Count}",
-                    newMachineType, PlanNameOptions.Count);
-            }
-            else
-            {
-                AddLog($"⚠️ 机种 [{newMachineType}] 没有可用检测方案");
-                _logger.LogWarning("[扫码联动][运行页] 机种没有方案：机种={MachineType}", newMachineType);
-            }
+            ValidateCurrentSchemeName();
+            RefreshReadyOrCanStartState();
+            return;
         }
 
-        ValidateCurrentSchemeName();
-
-        if (IsSchemeNameInvalid)
+        if (matchingPlans.Count == 0)
         {
+            _selectedPlanIdentityKey = null;
+            _suppressSchemeNameReload = true;
+            try
+            {
+                SchemeName = string.Empty;
+                SelectedPlanOption = null;
+            }
+            finally
+            {
+                _suppressSchemeNameReload = false;
+            }
             TestItems.Clear();
-            AddLog($"⚠️ 机种已切换为 [{newMachineType}]，方案 [{SchemeName}] 不属于该机种，检测列表已清空，请重新选择方案");
+            CompletePlanLoading(loadVersion);
+            AddLog($"⚠️ 机种 [{newMachineType}] 没有可用检测方案");
+            _logger.LogWarning("[机种方案联动][运行页] 机种没有方案：机种={MachineType}", newMachineType);
+            RefreshReadyOrCanStartState();
+            return;
         }
 
-        RefreshReadyOrCanStartState();
+        var selected = matchingPlans.FirstOrDefault(plan =>
+                            string.Equals(BuildPlanIdentityKey(plan), _selectedPlanIdentityKey,
+                                StringComparison.OrdinalIgnoreCase))
+                       ?? matchingPlans[0];
+
+        if (matchingPlans.Count > 1)
+        {
+            AddLog($"⚠️ 机种 [{newMachineType}] 存在多个检测方案，已自动选择 [{selected.PlanName}]，请删除多余方案");
+            _logger.LogWarning("[机种方案联动][运行页] 机种存在多个方案，已自动选择：机种={MachineType}, 方案={PlanName}, 数量={Count}",
+                newMachineType, selected.PlanName, matchingPlans.Count);
+        }
+
+        string selectedIdentityKey = BuildPlanIdentityKey(selected);
+        bool isSamePlan = string.Equals(
+            selectedIdentityKey,
+            _selectedPlanIdentityKey,
+            StringComparison.OrdinalIgnoreCase);
+        _selectedPlanIdentityKey = selectedIdentityKey;
+
+        if (isSamePlan && TestItems.Count > 0)
+        {
+            // 同一方案只同步下拉选中对象和方案名称，保留上一轮项目结果。
+            ApplySelectedPlanDisplayWithoutReload(selected);
+            CompletePlanLoading(loadVersion);
+        }
+        else
+        {
+            // 跨方案时显式按完整 PlanModel 加载，避免不同机种存在同名方案时
+            // SchemeName 文本未变化而无法触发 OnSchemeNameChanged。
+            ApplySelectedPlanDisplayWithoutReload(selected);
+            _isPlanLoading = true;
+            RefreshReadyOrCanStartState();
+            _ = LoadPlanItemsAsync(loadVersion, newMachineType, selected.PlanName, selected);
+        }
+        _logger.LogInformation("[机种方案联动][运行页] 已自动选择方案：机种={MachineType}, 方案={PlanName}",
+            newMachineType, selected.PlanName);
     }
 
     private void ScheduleDuplicateRecordCheck()
@@ -1728,40 +1804,32 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private async Task LoadPlanItemsAsync(
         int? expectedLoadVersion = null,
         string? expectedMachineType = null,
-        string? expectedSchemeName = null)
+        string? expectedSchemeName = null,
+        PlanModel? expectedPlan = null)
     {
-        TestItems.Clear();
+        if (!IsCurrentPlanLoad(expectedLoadVersion, expectedMachineType, expectedSchemeName))
+            return;
 
-        if (string.IsNullOrWhiteSpace(ModelName) || string.IsNullOrWhiteSpace(SchemeName))
+        if (string.IsNullOrWhiteSpace(SchemeName))
         {
-            AddLog("⚠️ 未指定机种或方案，检测列表为空");
+            TestItems.Clear();
+            AddLog("⚠️ 未指定方案，检测列表为空");
             CompletePlanLoading(expectedLoadVersion);
             return;
         }
 
-        List<PlanModel> allPlans;
-        try
-        {
-            allPlans = await _planStorageService.LoadAllPlansAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "加载检测方案失败");
-            if (IsCurrentPlanLoad(expectedLoadVersion, expectedMachineType, expectedSchemeName))
-            {
-                AddLog("⚠️ 检测方案加载失败，请检查方案设置后重试");
-                CompletePlanLoading(expectedLoadVersion);
-            }
-            return;
-        }
+        // 只有确认仍是当前方案后才清空项目，避免晚到的旧加载任务先清掉新方案结果。
+        TestItems.Clear();
 
-        if (!IsCurrentPlanLoad(expectedLoadVersion, expectedMachineType, expectedSchemeName))
-            return;
+        // 方案缓存已经在运行页初始化或机种变化时加载，选择项目时只按完整方案身份读取内存对象。
+        var currentPlan = expectedPlan ?? ResolvePlanForSchemeName(SchemeName);
 
-        // 精确匹配机种和方案名（替换旧 allPlans.FirstOrDefault() 错误用法）
-        var currentPlan = allPlans.FirstOrDefault(p =>
-            string.Equals(p.MachineType, ModelName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(p.PlanName, SchemeName, StringComparison.OrdinalIgnoreCase));
+        if (currentPlan != null
+            && !string.IsNullOrWhiteSpace(ModelName)
+            && !string.Equals(currentPlan.MachineType.Trim(), ModelName.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            currentPlan = null;
+        }
 
         if (currentPlan == null)
         {
@@ -2018,6 +2086,23 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
+    /// 复位最终成功后的运行页清理提交点。
+    /// 只清本轮产品身份和检测快照，保留当前方案、项目列表及其静态定义。
+    /// </summary>
+    private void ClearRunDisplayAfterSuccessfulReset()
+    {
+        ClearCurrentProductIdentity("复位完成");
+        ClearTestItemsForRestart();
+        FinalJudgment = null;
+        ResetElapsedTime();
+
+        _logger.LogInformation(
+            "[复位流程][界面提交] 已清理机种、序列号、项目运行结果、最终判定和测试时间；保留方案={PlanName}, 项目数={ItemCount}",
+            SchemeName,
+            TestItems.Count);
+    }
+
+    /// <summary>
     /// 正常完成态启动下一轮前清理上一轮结果。
     /// 该方法只在完整启动校验、万用表检查和 DT234 写入成功后调用，失败时保留上一轮界面结果。
     /// </summary>
@@ -2055,27 +2140,73 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     }
 
     /// <summary>
-    /// 正常完成收口后只清除本轮序列号及其确认状态，保留机种、方案和上一轮结果显示。
+    /// 清除一轮检测结束后的产品身份。方案、项目列表和上一轮结果不在此处清除。
     /// </summary>
-    private void ClearSerialForNextBoardAfterCompletion()
+    private void ClearCurrentProductIdentity(string reason)
     {
-        if (UiState is not (TestUIState.CompletedPass or TestUIState.CompletedFail or TestUIState.SingleItemNgStopped))
-            return;
+        string? planIdentityBefore = _selectedPlanIdentityKey;
+        int itemCountBefore = TestItems.Count;
 
+        if (string.IsNullOrWhiteSpace(ModelName) && string.IsNullOrWhiteSpace(SerialNumber))
+        {
+            InvalidateCurrentSerialVerification();
+            CancelProductIdentityNotification();
+            _lastNotifiedProductIdentityKey = null;
+            return;
+        }
+
+        CancelProductIdentityNotification();
+        _lastNotifiedProductIdentityKey = null;
         _suppressDuplicateCheck = true;
         try
         {
             InvalidateCurrentSerialVerification();
             SerialNumber = string.Empty;
+            ModelName = string.Empty;
         }
         finally
         {
             _suppressDuplicateCheck = false;
         }
 
-        AddLog("本轮检测完成，已清空序列号；机种、方案和上一轮结果保持不变");
-        _logger.LogInformation("[检测完成][下一块基板] 已清空序列号，保留机种={MachineType}, 方案={PlanName}, 最终结果={FinalJudgment}",
-            ModelName, SchemeName, FinalJudgment);
+        if (!string.IsNullOrWhiteSpace(planIdentityBefore)
+            && !string.Equals(planIdentityBefore, _selectedPlanIdentityKey, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "[产品身份清理][审计] 清理身份时方案身份意外变化：Reason={Reason}, BeforePlanIdentity={BeforePlanIdentity}, AfterPlanIdentity={AfterPlanIdentity}",
+                reason,
+                planIdentityBefore,
+                _selectedPlanIdentityKey);
+        }
+
+        if (itemCountBefore > 0 && TestItems.Count == 0)
+        {
+            _logger.LogWarning(
+                "[产品身份清理][审计] 清理身份时项目列表意外丢失：Reason={Reason}, BeforeItemCount={BeforeItemCount}",
+                reason,
+                itemCountBefore);
+        }
+
+        AddLog($"[{reason}] 已清空机种和序列号，保留当前方案");
+        _logger.LogInformation(
+            "[产品身份清理] 原因={Reason}, 已清空机种和序列号，保留方案={PlanName}",
+            reason,
+            SchemeName);
+    }
+
+    /// <summary>
+    /// 正常完成收口后清除本轮产品身份，保留方案和上一轮结果显示。
+    /// </summary>
+    private void ClearSerialForNextBoardAfterCompletion()
+    {
+        if (UiState is not (TestUIState.CompletedPass or TestUIState.CompletedFail or TestUIState.SingleItemNgStopped))
+            return;
+
+        ClearCurrentProductIdentity("检测完成");
+
+        AddLog("本轮检测完成，已清空机种和序列号；方案和上一轮结果保持不变");
+        _logger.LogInformation("[检测完成][下一块基板] 已清空机种和序列号，保留方案={PlanName}, 最终结果={FinalJudgment}",
+            SchemeName, FinalJudgment);
     }
 
     /// <summary>
@@ -2083,8 +2214,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     /// </summary>
     private void ResetToReadyState()
     {
-        InvalidateCurrentSerialVerification();
-        SerialNumber = string.Empty;
+        ClearCurrentProductIdentity("终止收口");
         ClearTestItemsForRestart();
         FinalJudgment = null;
         ResetElapsedTime();
@@ -3540,11 +3670,11 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     ///   6. 清 DT302（继电器动作完成）
     ///   7. 清 DT234（上位机允许开始）
     ///   8. Fake 模式下额外清 DT122/DT123
-    ///   9. 清空界面检测项目结果
-    ///   10. 刷新 Dispatcher 队列（确保晚到的引擎回调全部执行完）
-    ///   11. 重置内部状态标志（含检测引擎断点 _inspectionEngine.ClearResetState）
-    ///   12. 清除 DT121（握手完成信号，最后清）
-    ///   13. 复位后诊断快照
+    ///   9. 刷新 Dispatcher 队列（确保晚到的引擎回调全部执行完）
+    ///   10. 重置内部状态标志（含检测引擎断点 _inspectionEngine.ClearResetState）
+    ///   11. 清除 DT121（握手完成信号，最后清）
+    ///   12. 复位后诊断快照
+    ///   13. DT121 最终确认成功后一次性清理运行页快照
     ///   14. 解除保护，刷新 UI 到可启动/待机
     /// </summary>
     private async Task ExecuteResetFlowAsync(InspectionActionSource source)
@@ -3699,9 +3829,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 _logger.LogInformation("[Fake][控制动作] 复位流程已清除 DT122(停止) 和 DT123(急停)");
             }
 
-            ClearTestItemsForRestart();
-            _logger.LogInformation("[复位流程] 已清空界面检测项目结果");
-
             // 让已排队的低优先级回调先被调度一次；这些回调会被 ShouldIgnoreInspectionCallback 丢弃。
             await Application.Current.Dispatcher.InvokeAsync(
                 () => { },
@@ -3747,9 +3874,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
-            AddLog("复位完成，已清空所有检测结果，可重新开始测试");
+            AddLog("复位设备收口已完成，等待最终信号清除...");
             await _notificationService.ShowInfoAsync(
-                "复位完成，已清空所有检测结果，可重新开始测试。",
+                "设备复位收口已完成，正在完成最终信号确认。",
                 "复位完成");
 
             // 成功弹窗关闭后再次清除，吸收复位主体和弹窗期间积累的重复实体复位请求。
@@ -3764,6 +3891,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 return;
             }
 
+            // DT121 最终清除成功后，才一次性提交运行页清理；方案和项目定义保持不变。
+            await Application.Current.Dispatcher.InvokeAsync(
+                ClearRunDisplayAfterSuccessfulReset);
+
             // 写入 DT121=0 已成功，清除缓存中的旧复位高电平后再开放下一次复位和启动。
             var cachedInputs = _lastPlcInputs;
             _lastPlcInputs = new PlcControlSignals
@@ -3775,7 +3906,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             };
             _resetSignalHandled = false;
             _isResetting = false;
-            ResetElapsedTime();
             _logger.LogInformation("[复位流程][完成] 重复复位请求已吸收，复位门禁已重新开放");
             ForceRefreshReadyOrCanStartState();
         }
@@ -4602,97 +4732,108 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         if (_inspectionEngine == null) return;
 
-        await Application.Current.Dispatcher.InvokeAsync(() =>
-        {
-            SetUiState(TestUIState.Testing);
-        });
-
-        int runVersion = Interlocked.Increment(ref _inspectionRunVersion);
-
-        await Application.Current.Dispatcher.InvokeAsync(StartElapsedTimeTimer);
-
-        var result = await Task.Run(async () =>
-        {
-            return await _inspectionEngine.RunInspectionAsync(
-                barcode, modelName, operatorName, CancellationToken.None);
-        }).ConfigureAwait(false);
-
-        await Application.Current.Dispatcher.InvokeAsync(() => StopElapsedTimeTimer(result.Duration));
-
-        // 复位后返回的旧检测任务直接丢弃，不再处理结果和弹提示
-        if (runVersion != _inspectionRunVersion || _ignoreInspectionCallbacksUntilNextStart)
-        {
-            _logger.LogWarning("[复位流程][审计] 旧检测任务已返回但被丢弃，RunVersion={RunVersion}, CurrentRunVersion={CurrentVersion}",
-                runVersion, _inspectionRunVersion);
-            return;
-        }
-
-        bool isSingleItemNgNormalCompletion =
-            result.StopReason == InspectionStopReason.SingleItemNg
-            && !result.IsAborted
-            && !result.IsAllPassed;
-
-        if (isSingleItemNgNormalCompletion)
+        try
         {
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                AddLog($"❎ {result.ErrorMessage}");
+                SetUiState(TestUIState.Testing);
             });
-            _logger.LogWarning("[运行页][审计] 单项 NG 后按设置结束本轮，进入最终 NG 收口: {ErrorMessage}", result.ErrorMessage);
-            await CompleteInspectionResultOnUiAsync(result, isSingleItemNgStopped: true).ConfigureAwait(false);
-        }
-        else if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
-        {
-            if (IsExpectedControlStopReason(result.StopReason))
+
+            int runVersion = Interlocked.Increment(ref _inspectionRunVersion);
+
+            await Application.Current.Dispatcher.InvokeAsync(StartElapsedTimeTimer);
+
+            var result = await Task.Run(async () =>
             {
-                _logger.LogWarning("[运行页][审计] 检测因 {StopReason} 收口，中止提示交由对应流程处理", result.StopReason);
+                return await _inspectionEngine.RunInspectionAsync(
+                    barcode, modelName, operatorName, CancellationToken.None);
+            }).ConfigureAwait(false);
+
+            await Application.Current.Dispatcher.InvokeAsync(() => StopElapsedTimeTimer(result.Duration));
+
+            // 复位后返回的旧检测任务直接丢弃，不再处理结果和弹提示
+            if (runVersion != _inspectionRunVersion || _ignoreInspectionCallbacksUntilNextStart)
+            {
+                _logger.LogWarning("[复位流程][审计] 旧检测任务已返回但被丢弃，RunVersion={RunVersion}, CurrentRunVersion={CurrentVersion}",
+                    runVersion, _inspectionRunVersion);
                 return;
             }
 
-            // 其他收口流程若已先切到 AwaitingReset，检测任务返回时不得覆盖既有状态。
-            if (UiState == TestUIState.AwaitingReset)
+            bool isSingleItemNgNormalCompletion =
+                result.StopReason == InspectionStopReason.SingleItemNg
+                && !result.IsAborted
+                && !result.IsAllPassed;
+
+            if (isSingleItemNgNormalCompletion)
             {
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    AddLog($"⚠️ {result.ErrorMessage ?? "本轮检测因设备通信中断停止"}，请复位后重新开始。");
+                    AddLog($"❎ {result.ErrorMessage}");
                 });
-                _logger.LogWarning("[运行页][审计] 页面已进入 AwaitingReset，忽略检测任务异常结果，不自动续跑");
-                return;
+                _logger.LogWarning("[运行页][审计] 单项 NG 后按设置结束本轮，进入最终 NG 收口: {ErrorMessage}", result.ErrorMessage);
+                await CompleteInspectionResultOnUiAsync(result, isSingleItemNgStopped: true).ConfigureAwait(false);
             }
-
-            // 非控制类异常（PLC写失败/安全清理失败/RelayTimeout/DMM异常/未分类异常）:
-            // 先切 UI 为 Error 状态，再弹窗告知操作员，避免弹窗时顶部仍显示"测试中"
-            await Application.Current.Dispatcher.InvokeAsync(() =>
+            else if (result.IsAborted || !string.IsNullOrWhiteSpace(result.ErrorMessage))
             {
-                SetUiState(TestUIState.Error);
-                AddLog($"❌ {result.ErrorMessage}");
-            });
+                if (IsExpectedControlStopReason(result.StopReason))
+                {
+                    _logger.LogWarning("[运行页][审计] 检测因 {StopReason} 收口，中止提示交由对应流程处理", result.StopReason);
+                    return;
+                }
 
-            string message = string.IsNullOrWhiteSpace(result.ErrorMessage)
-                ? "检测已中止，请查看运行日志。"
-                : result.ErrorMessage;
+                // 其他收口流程若已先切到 AwaitingReset，检测任务返回时不得覆盖既有状态。
+                if (UiState == TestUIState.AwaitingReset)
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        AddLog($"⚠️ {result.ErrorMessage ?? "本轮检测因设备通信中断停止"}，请复位后重新开始。");
+                    });
+                    _logger.LogWarning("[运行页][审计] 页面已进入 AwaitingReset，忽略检测任务异常结果，不自动续跑");
+                    return;
+                }
 
-            // 文件日志保留“检测中止”分类，弹窗标题已经是“检测中止”，正文不重复添加前缀。
-            _logger.LogWarning("[运行页][审计] 检测中止：{Message}", message);
-            await _notificationService
-                .ShowWarningAsync(message, "检测中止")
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            if (result.IsAllPassed)
-            {
-                // 最终结果写入已在 InspectionEngine 中确认成功，此处立即开始计时，不能等待 CSV 保存。
-                await ScheduleOkFinalResultAutoClearAsync(runVersion).ConfigureAwait(false);
+                // 非控制类异常（PLC写失败/安全清理失败/RelayTimeout/DMM异常/未分类异常）：
+                // 先切 UI 为 Error 状态，再弹窗告知操作员，避免弹窗时顶部仍显示"测试中"
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    SetUiState(TestUIState.Error);
+                    AddLog($"❌ {result.ErrorMessage}");
+                });
+
+                string message = string.IsNullOrWhiteSpace(result.ErrorMessage)
+                    ? "检测已中止，请查看运行日志。"
+                    : result.ErrorMessage;
+
+                // 文件日志保留“检测中止”分类，弹窗标题已经是“检测中止”，正文不重复添加前缀。
+                _logger.LogWarning("[运行页][审计] 检测中止：{Message}", message);
+                await _notificationService
+                    .ShowWarningAsync(message, "检测中止")
+                    .ConfigureAwait(false);
             }
             else
             {
-                _logger.LogWarning("[PLC最终结果][NG保持] 最终 NG 结果保持到完整复位，RunVersion={RunVersion}", runVersion);
-                await Application.Current.Dispatcher.InvokeAsync(() => AddLog("最终结果为 NG，保持至完整复位后清除。"));
-            }
+                if (result.IsAllPassed)
+                {
+                    // 最终结果写入已在 InspectionEngine 中确认成功，此处立即开始计时，不能等待 CSV 保存。
+                    await ScheduleOkFinalResultAutoClearAsync(runVersion).ConfigureAwait(false);
+                }
+                else
+                {
+                    _logger.LogWarning("[PLC最终结果][NG保持] 最终 NG 结果保持到完整复位，RunVersion={RunVersion}", runVersion);
+                    await Application.Current.Dispatcher.InvokeAsync(() => AddLog("最终结果为 NG，保持至完整复位后清除。"));
+                }
 
-            // 正常完成 → 自动保存、PLC 收口，最后再显示 OK/NG
-            await CompleteInspectionResultOnUiAsync(result, isSingleItemNgStopped: false).ConfigureAwait(false);
+                // 正常完成 → 自动保存、PLC 收口，最后再显示 OK/NG
+                await CompleteInspectionResultOnUiAsync(result, isSingleItemNgStopped: false).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            // 无论正常结果还是检测异常，检测任务结束后都清除本轮机种和序列号。
+            if (Application.Current?.Dispatcher is { } dispatcher)
+            {
+                await dispatcher.InvokeAsync(() => ClearCurrentProductIdentity("检测任务结束"));
+            }
         }
     }
 
@@ -5015,7 +5156,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
                 string serialNumber = e.SerialPart?.Trim() ?? string.Empty;
                 CancelProductIdentityNotification();
                 _lastNotifiedProductIdentityKey = null;
-                _pendingBarcodePlanAutoSelectMachine = modelName;
                 _isApplyingScannerBarcode = true;
                 try
                 {
@@ -5135,7 +5275,6 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             failureReason);
 
         // 清理动作必须抑制属性回调重新启动重复记录检查，但保留机种和方案。
-        _pendingBarcodePlanAutoSelectMachine = null;
         _suppressDuplicateCheck = true;
         try
         {
@@ -5354,6 +5493,14 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
 
         // 加载方案信息
         await RefreshPlanNameOptionsAsync(ModelName);
+        if (string.IsNullOrWhiteSpace(ModelName))
+        {
+            var selectedPlan = FindCachedPlanByIdentity(_selectedPlanIdentityKey);
+            if (selectedPlan != null)
+            {
+                ApplySelectedPlanDisplayWithoutReload(selectedPlan);
+            }
+        }
         ValidateCurrentSchemeName();
         await LoadPlanItemsAsync();
 
@@ -5389,6 +5536,9 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         CancelProductIdentityNotification();
         _lastNotifiedProductIdentityKey = null;
         InvalidateCurrentSerialVerification();
+        _runPlansLoaded = false;
+        _allRunPlans.Clear();
+        Interlocked.Increment(ref _planLoadVersion);
         _lastReferenceMismatchPromptKey = null;
         _lastInvalidBarcodePromptKey = null;
         await CancelFinalResultAutoClearAsync("离开运行页").ConfigureAwait(false);
@@ -5471,41 +5621,84 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     private void CompletePlanLoading(int? expectedLoadVersion)
     {
         if (expectedLoadVersion.HasValue && expectedLoadVersion.Value != _planLoadVersion)
+        {
+            _logger.LogDebug(
+                "[运行页方案加载] 忽略旧加载任务收口：任务版本={ExpectedVersion}, 当前版本={CurrentVersion}",
+                expectedLoadVersion.Value,
+                _planLoadVersion);
             return;
+        }
 
         _isPlanLoading = false;
         RefreshReadyOrCanStartState();
+        _logger.LogDebug(
+            "[运行页方案加载] 加载状态已收口：版本={Version}, 项目数={ItemCount}",
+            expectedLoadVersion ?? _planLoadVersion,
+            TestItems.Count);
     }
 
     private async Task<bool> RefreshPlanNameOptionsAsync(string machineType, int? expectedLoadVersion = null)
     {
-        if (string.IsNullOrWhiteSpace(machineType))
-        {
-            if (!IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
-                return false;
-
-            PlanNameOptions.Clear();
-            _logger.LogDebug("机种为空，方案下拉选项已清空");
-            CompletePlanLoading(expectedLoadVersion);
-            return true;
-        }
+        string? preservedPlanIdentityKey = _selectedPlanIdentityKey;
+        PlanModel? preservedPlan = FindCachedPlanByIdentity(preservedPlanIdentityKey);
 
         try
         {
-            var planNames = await _planStorageService.GetPlanNamesByMachineTypeAsync(machineType);
+            if (!_runPlansLoaded)
+            {
+                var allPlans = await _planStorageService.LoadAllPlansAsync();
+
+                if (!IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
+                    return false;
+
+                _allRunPlans.Clear();
+                _allRunPlans.AddRange(allPlans
+                    .Where(plan => !string.IsNullOrWhiteSpace(plan.MachineType)
+                                   && !string.IsNullOrWhiteSpace(plan.PlanName))
+                    .OrderBy(plan => plan.Series, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(plan => plan.MachineType, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(plan => plan.PlanName, StringComparer.OrdinalIgnoreCase));
+                _runPlansLoaded = true;
+                _logger.LogInformation("[运行页方案缓存] 已加载全部方案：数量={Count}", _allRunPlans.Count);
+            }
+
+            // 页面缓存重建后按完整身份恢复原方案对象，保证下拉选中项和显示文本一致。
+            preservedPlan ??= FindCachedPlanByIdentity(preservedPlanIdentityKey);
 
             if (!IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
                 return false;
 
-            PlanNameOptions.Clear();
-
-            foreach (var name in planNames)
+            var plans = GetPlansForMachineType(machineType);
+            bool showAllPlans = string.IsNullOrWhiteSpace(machineType);
+            _suppressSchemeNameReload = true;
+            try
             {
-                PlanNameOptions.Add(name);
+                PlanNameOptions.Clear();
+
+                foreach (var plan in plans)
+                {
+                    PlanNameOptions.Add(plan);
+                }
+
+                // ComboBox 重建期间可能临时回写空文本；在抑制范围内恢复原方案的可见选中项。
+                if (preservedPlan != null
+                    && plans.Any(plan => string.Equals(
+                        BuildPlanIdentityKey(plan),
+                        preservedPlanIdentityKey,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    _selectedPlanIdentityKey = preservedPlanIdentityKey;
+                    SelectedPlanOption = preservedPlan;
+                    SchemeName = preservedPlan.PlanName;
+                }
+            }
+            finally
+            {
+                _suppressSchemeNameReload = false;
             }
 
-            _logger.LogDebug("方案下拉选项已刷新，机种={MachineType}，共 {Count} 个方案",
-                machineType, PlanNameOptions.Count);
+            _logger.LogDebug("[运行页方案缓存] 方案下拉选项已刷新：机种={MachineType}, 全量模式={ShowAll}, 数量={Count}",
+                machineType, showAllPlans, PlanNameOptions.Count);
             CompletePlanLoading(expectedLoadVersion);
             return true;
         }
@@ -5514,11 +5707,99 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             _logger.LogError(ex, "加载机种 {MachineType} 的方案列表失败", machineType);
             if (IsCurrentPlanLoad(expectedLoadVersion, machineType, null))
             {
-                PlanNameOptions.Clear();
+                _suppressSchemeNameReload = true;
+                try
+                {
+                    PlanNameOptions.Clear();
+                }
+                finally
+                {
+                    _suppressSchemeNameReload = false;
+                }
                 CompletePlanLoading(expectedLoadVersion);
             }
             return false;
         }
+    }
+
+    /// <summary>按机种过滤运行页缓存；机种为空时返回全部方案。</summary>
+    private List<PlanModel> GetPlansForMachineType(string machineType)
+    {
+        IEnumerable<PlanModel> plans = _allRunPlans;
+        if (!string.IsNullOrWhiteSpace(machineType))
+        {
+            plans = plans.Where(plan => string.Equals(
+                plan.MachineType.Trim(),
+                machineType.Trim(),
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        return plans
+            .OrderBy(plan => plan.Series, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(plan => plan.PlanName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>生成方案唯一身份键，避免全量下拉时同名方案被错误匹配。</summary>
+    private static string BuildPlanIdentityKey(PlanModel plan)
+        => $"{plan.Series.Trim()}|{plan.MachineType.Trim()}|{plan.PlanName.Trim()}";
+
+    /// <summary>从当前运行页缓存按身份查找方案。</summary>
+    private PlanModel? FindCachedPlanByIdentity(string? identityKey)
+    {
+        if (string.IsNullOrWhiteSpace(identityKey))
+            return null;
+
+        return _allRunPlans.FirstOrDefault(plan =>
+            string.Equals(BuildPlanIdentityKey(plan), identityKey, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>根据方案框文本解析完整方案对象。</summary>
+    private PlanModel? ResolvePlanForSchemeName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalizedPlanName = value.Trim();
+        if (SelectedPlanOption != null
+            && string.Equals(SelectedPlanOption.PlanName.Trim(), normalizedPlanName, StringComparison.OrdinalIgnoreCase)
+            && GetPlansForMachineType(ModelName).Any(plan => string.Equals(
+                BuildPlanIdentityKey(plan),
+                BuildPlanIdentityKey(SelectedPlanOption),
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return SelectedPlanOption;
+        }
+
+        var matchingPlans = GetPlansForMachineType(ModelName)
+            .Where(plan => string.Equals(plan.PlanName.Trim(), normalizedPlanName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return matchingPlans.FirstOrDefault(plan =>
+                   string.Equals(BuildPlanIdentityKey(plan), _selectedPlanIdentityKey,
+                       StringComparison.OrdinalIgnoreCase))
+               ?? matchingPlans.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// 仅同步方案下拉的完整选中对象和显示名称，不触发项目重新加载。
+    /// 同一方案或机种清空时可借此保留上一轮项目结果。
+    /// </summary>
+    private void ApplySelectedPlanDisplayWithoutReload(PlanModel plan)
+    {
+        _selectedPlanIdentityKey = BuildPlanIdentityKey(plan);
+        _suppressSchemeNameReload = true;
+        try
+        {
+            SelectedPlanOption = plan;
+            SchemeName = plan.PlanName;
+        }
+        finally
+        {
+            _suppressSchemeNameReload = false;
+        }
+
+        IsSchemeNameInvalid = false;
     }
 
     private void ValidateCurrentSchemeName()
@@ -5535,8 +5816,10 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             return;
         }
 
-        bool isValid = PlanNameOptions.Any(
-            planName => string.Equals(planName, SchemeName, StringComparison.OrdinalIgnoreCase));
+        var selectedPlan = ResolvePlanForSchemeName(SchemeName);
+        bool isValid = selectedPlan != null
+                       && string.Equals(selectedPlan.MachineType.Trim(), ModelName.Trim(), StringComparison.OrdinalIgnoreCase)
+                       && string.Equals(selectedPlan.PlanName.Trim(), SchemeName.Trim(), StringComparison.OrdinalIgnoreCase);
 
         IsSchemeNameInvalid = !isValid;
 

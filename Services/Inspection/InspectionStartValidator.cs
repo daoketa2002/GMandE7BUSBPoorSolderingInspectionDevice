@@ -67,15 +67,15 @@ public static class InspectionStartValidator
         if (string.IsNullOrWhiteSpace(request.ModelName))
             return Fail("未输入机种名称，无法启动");
         if (!InputValidationHelper.IsValidSerialNumber(request.SerialNumber))
-            return Fail("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+            return Fail("本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。");
         if (request.IsDuplicateCheckInProgress)
-            return Fail("正在检查该序列号的历史测试记录，请稍后重新启动。");
+            return Fail("正在检查该机种和序列号的历史测试记录，请稍后重新启动。");
         if (request.IsDuplicateDecisionPending)
             return Fail("请先处理当前的重复测试提醒，再重新启动。");
         if (request.IsDuplicateCheckFailed)
-            return Fail("序列号历史记录检查失败，请重新输入序列号后再试。");
+            return Fail("机种和序列号历史记录检查失败，请重新输入后再试。");
         if (!request.IsCurrentSerialConfirmed)
-            return Fail("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。");
+            return Fail("本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。");
         if (request.IsPlanLoading)
             return Fail("当前方案仍在加载，请等待加载完成后再启动");
         if (string.IsNullOrWhiteSpace(request.SchemeName) || request.IsSchemeNameInvalid)

@@ -132,6 +132,8 @@ var tests = new List<(string Name, Action Body)>
     }),
     ("RUN-SN-GATE-01 序列号确认状态纳入启动门禁", TestRunSnGate01StartGateContract),
     ("RUN-SN-GATE-01 序列号清理和 DT234 时序契约", TestRunSnGate01SourceContract),
+    ("RUN-STATE-KEEP-01 运行页方案与检测快照保留契约", TestRunStateKeep01SourceContract),
+    ("RUN-PLAN-SELECT-01 方案名称显示和加载状态收口契约", TestRunPlanSelect01SourceContract),
     ("PLC-DT312-01 地址、接口和单向写入契约", TestPlcDt312Contract),
     ("PLC-DT312-01 Fake 写入及运行页输入通知契约", TestDt312InputNotificationContract),
     ("设备连接失败计数区分健康检查和自动重连", () =>
@@ -1196,13 +1198,13 @@ static void TestRunSnGate01StartGateContract()
 {
     AssertEqual(false, InspectionStartValidator.Validate(
         CreateValidRunSnGateRequest(isCurrentSerialConfirmed: false)).IsValid);
-    AssertEqual("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。",
+    AssertEqual("本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。",
         InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isCurrentSerialConfirmed: false)).ErrorMessage);
-    AssertEqual("正在检查该序列号的历史测试记录，请稍后重新启动。",
+    AssertEqual("正在检查该机种和序列号的历史测试记录，请稍后重新启动。",
         InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isDuplicateCheckInProgress: true)).ErrorMessage);
     AssertEqual("请先处理当前的重复测试提醒，再重新启动。",
         InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isDuplicateDecisionPending: true)).ErrorMessage);
-    AssertEqual("序列号历史记录检查失败，请重新输入序列号后再试。",
+    AssertEqual("机种和序列号历史记录检查失败，请重新输入后再试。",
         InspectionStartValidator.Validate(CreateValidRunSnGateRequest(isDuplicateCheckFailed: true)).ErrorMessage);
     AssertEqual(true, InspectionStartValidator.Validate(CreateValidRunSnGateRequest()).IsValid);
     AssertEqual(true, InspectionStartValidator.Validate(
@@ -1224,16 +1226,145 @@ static void TestRunSnGate01SourceContract()
     AssertEqual(true, viewModelSource.Contains("CurrentSerialVerificationState", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.Contains("CancelDuplicateRecordCheck();", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.Contains("ClearSerialForNextBoardAfterCompletion();", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ClearCurrentProductIdentity(\"检测任务结束\")", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ClearCurrentProductIdentity(\"复位完成\")", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("_allRunPlans", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("ObservableCollection<PlanModel> PlanNameOptions", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("GetPlansForMachineType", StringComparison.Ordinal));
+    var loadPlanItemsStart = viewModelSource.IndexOf(
+        "private async Task LoadPlanItemsAsync", StringComparison.Ordinal);
+    var loadPlanItemsEnd = viewModelSource.IndexOf(
+        "private static string FormatLowerLimit", loadPlanItemsStart, StringComparison.Ordinal);
+    AssertEqual(true, loadPlanItemsStart >= 0 && loadPlanItemsEnd > loadPlanItemsStart);
+    AssertEqual(false, viewModelSource[loadPlanItemsStart..loadPlanItemsEnd]
+        .Contains("_planStorageService.LoadAllPlansAsync", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.Contains("ClearStartRequestWithSingleRetryAsync", StringComparison.Ordinal));
-    AssertEqual(true, viewModelSource.Contains("本次基板序列号尚未确认。请先扫码或手动输入序列号，再重新启动。", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.Contains("请先处理当前的重复测试提醒，再重新启动。", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.IndexOf(
         "var pcReadyResult = await _plcDevice.WritePcReadyAsync(startingToken)", StringComparison.Ordinal)
         < viewModelSource.IndexOf("PrepareCompletedRunForNextStartAsync(startingToken)", StringComparison.Ordinal));
     AssertEqual(true, validatorSource.Contains("IsCurrentSerialConfirmed", StringComparison.Ordinal));
+    AssertEqual(true, validatorSource.Contains("本轮机种名称和序列号尚未确认", StringComparison.Ordinal));
     AssertEqual(true, validatorSource.Contains("IsDuplicateCheckInProgress", StringComparison.Ordinal));
     AssertEqual(true, validatorSource.Contains("IsDuplicateDecisionPending", StringComparison.Ordinal));
     AssertEqual(true, validatorSource.Contains("IsDuplicateCheckFailed", StringComparison.Ordinal));
+}
+
+static void TestRunStateKeep01SourceContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+
+    var identityStart = source.IndexOf(
+        "private void ClearCurrentProductIdentity", StringComparison.Ordinal);
+    var identityEnd = source.IndexOf(
+        "private void ClearSerialForNextBoardAfterCompletion", identityStart, StringComparison.Ordinal);
+    AssertEqual(true, identityStart >= 0 && identityEnd > identityStart);
+    var identityBody = source[identityStart..identityEnd];
+    AssertEqual(false, identityBody.Contains("TestItems.Clear", StringComparison.Ordinal));
+    AssertEqual(false, identityBody.Contains("ClearTestItemsForRestart", StringComparison.Ordinal));
+    AssertEqual(false, identityBody.Contains("FinalJudgment = null", StringComparison.Ordinal));
+    AssertEqual(false, identityBody.Contains("ResetElapsedTime", StringComparison.Ordinal));
+    AssertEqual(false, identityBody.Contains("SchemeName = string.Empty", StringComparison.Ordinal));
+    AssertEqual(false, identityBody.Contains("_selectedPlanIdentityKey = null", StringComparison.Ordinal));
+
+    var resetCommitStart = source.IndexOf(
+        "private void ClearRunDisplayAfterSuccessfulReset", StringComparison.Ordinal);
+    var resetCommitEnd = source.IndexOf(
+        "private async Task<bool> PrepareCompletedRunForNextStartAsync", resetCommitStart, StringComparison.Ordinal);
+    AssertEqual(true, resetCommitStart >= 0 && resetCommitEnd > resetCommitStart);
+    var resetCommitBody = source[resetCommitStart..resetCommitEnd];
+    AssertEqual(true, resetCommitBody.Contains("ClearCurrentProductIdentity(\"复位完成\")", StringComparison.Ordinal));
+    AssertEqual(true, resetCommitBody.Contains("ClearTestItemsForRestart();", StringComparison.Ordinal));
+    AssertEqual(true, resetCommitBody.Contains("FinalJudgment = null;", StringComparison.Ordinal));
+    AssertEqual(true, resetCommitBody.Contains("ResetElapsedTime();", StringComparison.Ordinal));
+    AssertEqual(false, resetCommitBody.Contains("TestItems.Clear", StringComparison.Ordinal));
+    AssertEqual(false, resetCommitBody.Contains("SchemeName = string.Empty", StringComparison.Ordinal));
+
+    var resetFlowStart = source.IndexOf(
+        "private async Task ExecuteResetFlowAsync", StringComparison.Ordinal);
+    var resetFlowEnd = source.IndexOf(
+        "private async Task EnterResetFailedAsync", resetFlowStart, StringComparison.Ordinal);
+    AssertEqual(true, resetFlowStart >= 0 && resetFlowEnd > resetFlowStart);
+    var resetFlowBody = source[resetFlowStart..resetFlowEnd];
+    var finalResetClearIndex = resetFlowBody.IndexOf(
+        "bool finalResetRequestCleared", StringComparison.Ordinal);
+    var resetCommitCallIndex = resetFlowBody.IndexOf(
+        "ClearRunDisplayAfterSuccessfulReset", StringComparison.Ordinal);
+    AssertEqual(true, finalResetClearIndex >= 0 && resetCommitCallIndex > finalResetClearIndex);
+    AssertEqual(false, resetFlowBody[..resetCommitCallIndex]
+        .Contains("ClearTestItemsForRestart", StringComparison.Ordinal));
+
+    var refreshStart = source.IndexOf(
+        "private async Task<bool> RefreshPlanNameOptionsAsync", StringComparison.Ordinal);
+    var refreshEnd = source.IndexOf(
+        "private List<PlanModel> GetPlansForMachineType", refreshStart, StringComparison.Ordinal);
+    AssertEqual(true, refreshStart >= 0 && refreshEnd > refreshStart);
+    var refreshBody = source[refreshStart..refreshEnd];
+    AssertEqual(true, refreshBody.Contains("_suppressSchemeNameReload = true", StringComparison.Ordinal));
+    AssertEqual(true, refreshBody.Contains("PlanNameOptions.Clear();", StringComparison.Ordinal));
+    AssertEqual(true, refreshBody.Contains("preservedPlanIdentityKey", StringComparison.Ordinal));
+    AssertEqual(true, refreshBody.Contains("finally", StringComparison.Ordinal));
+
+    var modelChangedStart = source.IndexOf(
+        "partial void OnModelNameChanged", StringComparison.Ordinal);
+    var modelChangedEnd = source.IndexOf(
+        "private void UpdateReferenceMachineMismatch", modelChangedStart, StringComparison.Ordinal);
+    AssertEqual(true, modelChangedStart >= 0 && modelChangedEnd > modelChangedStart);
+    AssertEqual(false, source[modelChangedStart..modelChangedEnd]
+        .Contains("TestItems.Clear", StringComparison.Ordinal));
+
+    var loadItemsStart = source.IndexOf(
+        "private async Task LoadPlanItemsAsync", StringComparison.Ordinal);
+    var loadItemsEnd = source.IndexOf(
+        "private static string FormatLowerLimit", loadItemsStart, StringComparison.Ordinal);
+    AssertEqual(true, loadItemsStart >= 0 && loadItemsEnd > loadItemsStart);
+    var loadItemsBody = source[loadItemsStart..loadItemsEnd];
+    AssertEqual(true, loadItemsBody.IndexOf("IsCurrentPlanLoad", StringComparison.Ordinal)
+        < loadItemsBody.IndexOf("TestItems.Clear", StringComparison.Ordinal));
+}
+
+static void TestRunPlanSelect01SourceContract()
+{
+    var source = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "TestPageViewModel.cs"));
+    var xaml = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Views",
+        "TestPageView.xaml"));
+
+    // 全量方案和机种方案使用同一种展示规则：界面只显示 PlanName，内部仍保存完整 PlanModel。
+    AssertEqual(true, source.Contains("ObservableCollection<PlanModel> PlanNameOptions", StringComparison.Ordinal));
+    AssertEqual(true, xaml.Contains("SelectedItem=\"{Binding SelectedPlanOption}\"", StringComparison.Ordinal));
+    AssertEqual(true, xaml.Contains("DisplayMemberPath=\"PlanName\"", StringComparison.Ordinal));
+    AssertEqual(false, source.Contains("_runPlanOptionLookup", StringComparison.Ordinal));
+    AssertEqual(false, source.Contains("BuildPlanOptionDisplayName", StringComparison.Ordinal));
+    AssertEqual(false, source.Contains("$\"{plan.Series} / {plan.MachineType} / {plan.PlanName}\"", StringComparison.Ordinal));
+
+    // 同步 SelectedItem 和 Text 必须全部位于抑制区，防止可编辑 ComboBox 回写再次递增加载版本。
+    var applyStart = source.IndexOf(
+        "private void ApplySelectedPlanDisplayWithoutReload", StringComparison.Ordinal);
+    var applyEnd = source.IndexOf(
+        "private void ValidateCurrentSchemeName", applyStart, StringComparison.Ordinal);
+    AssertEqual(true, applyStart >= 0 && applyEnd > applyStart);
+    var applyBody = source[applyStart..applyEnd];
+    var suppressIndex = applyBody.IndexOf("_suppressSchemeNameReload = true", StringComparison.Ordinal);
+    var selectedItemIndex = applyBody.IndexOf("SelectedPlanOption = plan", StringComparison.Ordinal);
+    var schemeTextIndex = applyBody.IndexOf("SchemeName = plan.PlanName", StringComparison.Ordinal);
+    AssertEqual(true, suppressIndex >= 0 && selectedItemIndex > suppressIndex && schemeTextIndex > suppressIndex);
+    AssertEqual(true, applyBody.Contains("finally", StringComparison.Ordinal));
+
+    // 下拉选择和机种自动选择都显式发起项目加载，完成点按同一版本清除加载标志。
+    AssertEqual(true, source.Contains("partial void OnSelectedPlanOptionChanged(PlanModel? value)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains(
+        "LoadPlanItemsAsync(loadVersion, ModelName, value.PlanName, value)", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("CompletePlanLoading(expectedLoadVersion);", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("_isPlanLoading = false;", StringComparison.Ordinal));
 }
 
 static void TestPlcDt312Contract()
@@ -1252,6 +1383,7 @@ static void TestPlcDt312Contract()
         "Devices",
         "Plc",
         "Fp0hPlcDevice.cs"));
+    var normalizedPlcSource = plcSource.Replace("\r\n", "\n", StringComparison.Ordinal);
     var viewModelSource = File.ReadAllText(Path.Combine(
         Environment.CurrentDirectory,
         "ViewModels",
@@ -1275,10 +1407,10 @@ static void TestPlcDt312Contract()
         AssertEqual(false, interfaceSource.Contains(forbiddenName, StringComparison.Ordinal));
     }
 
-    AssertEqual(true, plcSource.Contains(
+    AssertEqual(true, normalizedPlcSource.Contains(
         "PlcAddressMap.ProductIdentityEnteredSignal,\n            1,",
         StringComparison.Ordinal));
-    AssertEqual(false, plcSource.Contains(
+    AssertEqual(false, normalizedPlcSource.Contains(
         "PlcAddressMap.ProductIdentityEnteredSignal,\n            0,",
         StringComparison.Ordinal));
     AssertEqual(false, viewModelSource.Contains(
@@ -1552,13 +1684,15 @@ static void TestScanVerify01RunPageContract()
         handlerStart,
         StringComparison.Ordinal);
     var applyModel = source.IndexOf(
-        "_pendingBarcodePlanAutoSelectMachine = modelName",
+        "ModelName = modelName",
         handlerStart,
         StringComparison.Ordinal);
 
     AssertEqual(true, handlerStart >= 0);
     AssertEqual(true, invalidCheck > handlerStart);
     AssertEqual(true, applyModel > invalidCheck);
+    AssertEqual(true, source.Contains("GetPlansForMachineType", StringComparison.Ordinal));
+    AssertEqual(true, source.Contains("已自动选择方案", StringComparison.Ordinal));
     AssertEqual(true, source.Contains("HandleInvalidProductBarcode(e)", StringComparison.Ordinal));
     AssertEqual(true, source.Contains("InvalidateCurrentSerialVerification()", StringComparison.Ordinal));
     AssertEqual(true, source.Contains("FormatRawBarcodeForDisplay", StringComparison.Ordinal));
