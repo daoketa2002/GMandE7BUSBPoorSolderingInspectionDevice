@@ -2,6 +2,7 @@
 using GMandE7BUSBPoorSolderingInspectionDevice.Models;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
@@ -15,7 +16,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
     /// <summary>
     /// 霍尼韦尔 H1900 条码扫描枪驱动
     /// 通讯方式：USB虚拟串口 (CDC类)
-    /// 工作原理：监听串口，通过超时判定提取完整条码
+    /// 工作原理：监听串口事件，通过独立静默计时器判定完整条码
     /// 
     /// ⚠️ 使用前请用Honeywell配置条码将扫描枪切换为 USB Serial 模式
     /// 
@@ -33,7 +34,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         #region 常量
 
         private const int DEFAULT_BAUD_RATE = 115200;
-        private const int READ_TIMEOUT_MS = 100;
         private const int WRITE_TIMEOUT_MS = 100;
 
         /// <summary>
@@ -82,9 +82,20 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private readonly ILogger<HoneywellH1900Scanner> _logger;
         private SerialPort? _serialPort;
         private readonly SemaphoreSlim _connectionLifecycleLock = new(1, 1);
-        private CancellationTokenSource? _readLoopCts;
-        private Task? _readLoopTask;
         private int _connectionVersion;
+
+        // DataReceived 事件只负责把当前连接的数据读入缓存；所有组包状态统一受此锁保护。
+        private readonly object _serialReceiveSync = new();
+        private readonly object _frameSync = new();
+        private SerialDataReceivedEventHandler? _serialDataReceivedHandler;
+        private readonly System.Threading.Timer _frameEndTimer;
+        private readonly System.Threading.Timer _recoveryDrainTimer;
+        private readonly StringBuilder _frameBuffer = new();
+        private readonly List<byte> _framePreviewBytes = new(REJECTED_FRAME_HEX_PREVIEW_BYTES);
+        private int _frameByteCount;
+        private bool _frameRejected;
+        private int _frameConnectionVersion = -1;
+        private long _lastFrameDataTimestamp;
 
         private string _portName = "COM9";
         private int _baudRate = DEFAULT_BAUD_RATE;
@@ -181,10 +192,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             get
             {
                 var serialPort = Volatile.Read(ref _serialPort);
-                var readLoopTask = Volatile.Read(ref _readLoopTask);
                 return _isConnected
-                    && serialPort?.IsOpen == true
-                    && readLoopTask is { IsCompleted: false };
+                    && serialPort?.IsOpen == true;
             }
         }
 
@@ -244,6 +253,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         public HoneywellH1900Scanner(ILogger<HoneywellH1900Scanner> logger)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _frameEndTimer = new System.Threading.Timer(
+                OnFrameEndTimerElapsed,
+                null,
+                Timeout.Infinite,
+                Timeout.Infinite);
+            _recoveryDrainTimer = new System.Threading.Timer(
+                OnRecoveryDrainTimerElapsed,
+                null,
+                Timeout.Infinite,
+                Timeout.Infinite);
         }
 
         /// <summary>
@@ -262,10 +281,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                     TaskCreationOptions.RunContinuationsAsynchronously);
             }
 
+            StopRecoveryDrainTimer();
             _logger.LogWarning("[扫码恢复][排空] 已进入排空状态，后续串口字节只统计不发布");
         }
 
-        /// <summary>等待读取任务完成 500ms 静默排空，最长不超过 2 秒。</summary>
+        /// <summary>等待独立计时器完成 500ms 静默排空，最长不超过 2 秒。</summary>
         public async Task<ScannerRecoveryDrainResult> WaitForRecoveryDrainAsync(
             CancellationToken cancellationToken = default)
         {
@@ -297,6 +317,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 _recoveryDrainCompletion = null;
             }
 
+            StopRecoveryDrainTimer();
             completion?.TrySetResult(result);
             _logger.LogWarning("[扫码恢复][排空] 已取消，累计字节={Bytes}", result.DrainedBytes);
         }
@@ -334,7 +355,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             if (_isDisposed)
                 throw new ObjectDisposedException(nameof(HoneywellH1900Scanner));
 
-            var currentTask = Volatile.Read(ref _readLoopTask);
             if (IsConnected)
             {
                 _logger.LogDebug("[扫码连接] 已存在健康连接，跳过重复连接: Port={Port}, Version={Version}",
@@ -342,12 +362,11 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 return true;
             }
 
-            if (_serialPort != null || currentTask != null || _isConnected)
+            if (_serialPort != null || _isConnected)
             {
                 _logger.LogWarning(
-                    "[扫码连接][异常] 现有连接不健康，开始清理旧连接: Port={Port}, ReadTaskCompleted={Completed}",
-                    _portName,
-                    currentTask?.IsCompleted);
+                    "[扫码连接][异常] 现有连接不健康，开始清理旧连接: Port={Port}",
+                    _portName);
                 await StopCurrentConnectionAsync(stopWatchdog: true).ConfigureAwait(false);
             }
 
@@ -361,6 +380,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 reconnectSource);
 
             SerialPort? serialPort = null;
+            SerialDataReceivedEventHandler? dataReceivedHandler = null;
             try
             {
                 var availablePorts = SerialPort.GetPortNames();
@@ -381,7 +401,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 var rtsEnabled = handshake is Handshake.None or Handshake.RequestToSend;
                 serialPort = new SerialPort(portName, baudRate, parity, _dataBits, stopBits)
                 {
-                    ReadTimeout = READ_TIMEOUT_MS,
                     WriteTimeout = WRITE_TIMEOUT_MS,
                     Encoding = Encoding.ASCII,
                     DtrEnable = dtrEnabled,
@@ -389,26 +408,24 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                     Handshake = handshake
                 };
 
-                // 读取统一由 RunReadLoop 负责，串口事件只保留错误通知。
+                // 先绑定当前连接专属的事件处理器，再打开串口，避免旧连接回调写入新连接缓存。
+                dataReceivedHandler = (_, _) => OnSerialDataReceived(serialPort, version);
+                serialPort.DataReceived += dataReceivedHandler;
                 serialPort.ErrorReceived += OnErrorReceived;
                 serialPort.Open();
 
-                var readLoopCts = new CancellationTokenSource();
                 Volatile.Write(ref _serialPort, serialPort);
-                Volatile.Write(ref _readLoopCts, readLoopCts);
-                // 先标记当前连接有效，再启动任务，避免任务刚启动就因状态快照为 false 退出。
+                Volatile.Write(ref _serialDataReceivedHandler, dataReceivedHandler);
+                ResetFrameState();
+                EnsureRecoveryDrainClockStarted(version);
                 _isConnected = true;
-                var readLoopTask = Task.Run(
-                    () => RunReadLoopAsync(serialPort, version, readLoopCts.Token),
-                    CancellationToken.None);
-                Volatile.Write(ref _readLoopTask, readLoopTask);
 
                 _connectionStableTime = DateTime.Now;
                 _disconnectDetectedCount = 0;
                 StartMonitoring();
 
                 _logger.LogInformation(
-                    "[扫码连接] 连接成功并启动读取任务, Port={Port}, Version={Version}, ReadTaskStarted=true, Source={Source}, Handshake={Handshake}, DTR={Dtr}, RTS={Rts}",
+                    "[扫码连接] 连接成功并启用事件驱动接收, Port={Port}, Version={Version}, DataReceivedAttached=true, Source={Source}, Handshake={Handshake}, DTR={Dtr}, RTS={Rts}",
                     portName,
                     version,
                     reconnectSource,
@@ -436,7 +453,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             }
 
             if (ReferenceEquals(Volatile.Read(ref _serialPort), serialPort)
-                || Volatile.Read(ref _readLoopTask) != null)
+                || _isConnected)
             {
                 await StopCurrentConnectionAsync(stopWatchdog: true).ConfigureAwait(false);
             }
@@ -444,7 +461,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             {
                 Interlocked.Increment(ref _connectionVersion);
                 _isConnected = false;
-                CloseSerialPort(serialPort);
+                CloseSerialPort(serialPort, dataReceivedHandler);
                 Volatile.Write(ref _serialPort, null);
             }
             return false;
@@ -511,13 +528,17 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             };
         }
 
-        private void CloseSerialPort(SerialPort? serialPort)
+        private void CloseSerialPort(
+            SerialPort? serialPort,
+            SerialDataReceivedEventHandler? dataReceivedHandler = null)
         {
             if (serialPort == null)
                 return;
 
             try
             {
+                if (dataReceivedHandler != null)
+                    serialPort.DataReceived -= dataReceivedHandler;
                 serialPort.ErrorReceived -= OnErrorReceived;
 
                 if (serialPort.IsOpen)
@@ -534,43 +555,30 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         }
 
         /// <summary>
-        /// 停止当前读取任务和串口。调用方必须已经持有生命周期门禁。
-        /// 先使版本失效并关闭串口，再等待读取任务退出，避免旧任务污染新连接。
+        /// 停止当前串口和事件接收。调用方必须已经持有生命周期门禁。
+        /// 先使版本失效并停止计时器，再解绑并关闭串口，避免旧回调污染新连接。
         /// </summary>
-        private async Task StopCurrentConnectionAsync(bool stopWatchdog)
+        private Task StopCurrentConnectionAsync(bool stopWatchdog)
         {
             var oldVersion = Interlocked.Increment(ref _connectionVersion);
-            var oldCts = Interlocked.Exchange(ref _readLoopCts, null);
-            var oldTask = Interlocked.Exchange(ref _readLoopTask, null);
             var oldPort = Interlocked.Exchange(ref _serialPort, null);
+            var oldDataReceivedHandler = Interlocked.Exchange(ref _serialDataReceivedHandler, null);
 
             _isConnected = false;
-            oldCts?.Cancel();
-            CloseSerialPort(oldPort);
-
-            if (oldTask != null && !oldTask.IsCompleted && Task.CurrentId != oldTask.Id)
+            StopFrameTimerAndClear();
+            StopRecoveryDrainTimer();
+            lock (_serialReceiveSync)
             {
-                try
-                {
-                    await oldTask.ConfigureAwait(false);
-                    _logger.LogDebug("[扫码连接] 旧读取任务已退出, OldVersion={Version}", oldVersion);
-                }
-                catch (OperationCanceledException)
-                {
-                    _logger.LogDebug("[扫码连接] 旧读取任务已取消, OldVersion={Version}", oldVersion);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "[扫码连接] 等待旧读取任务退出时出现异常, OldVersion={Version}", oldVersion);
-                }
+                CloseSerialPort(oldPort, oldDataReceivedHandler);
             }
-
-            oldCts?.Dispose();
             _connectionStableTime = DateTime.MinValue;
             _disconnectDetectedCount = 0;
 
             if (stopWatchdog)
                 StopMonitoring();
+
+            _logger.LogDebug("[扫码连接] 当前事件驱动接收已停止, OldVersion={Version}", oldVersion);
+            return Task.CompletedTask;
         }
 
         #endregion
@@ -736,13 +744,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
             // 方法1：检查串口IsOpen标志
             try
             {
-                var readLoopTask = Volatile.Read(ref _readLoopTask);
-                if (readLoopTask == null || readLoopTask.IsCompleted)
-                {
-                    _logger.LogWarning("[扫码连接][异常] 串口读取任务已退出，交由重连流程恢复");
-                    return true;
-                }
-
                 var serialPort = Volatile.Read(ref _serialPort);
                 if (serialPort == null || !serialPort.IsOpen)
                 {
@@ -814,7 +815,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
                 await StopCurrentConnectionAsync(stopWatchdog: false).ConfigureAwait(false);
                 PublishConnectionStateSafely(false);
-                _logger.LogInformation("[扫码连接] 热插拔确认断开，读取任务已停止，继续等待端口恢复");
+                _logger.LogInformation("[扫码连接] 热插拔确认断开，事件驱动接收已停止，继续等待端口恢复");
             }
             catch (ObjectDisposedException) when (_isDisposed)
             {
@@ -852,137 +853,108 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         }
 
         /// <summary>
-        /// 单一串口读取任务。
-        /// 每次连接只创建一个任务和一组局部缓冲区，读取超时 100ms 即完成当前条码组包。
+        /// 当前连接唯一的串口数据读取入口。
+        /// DataReceived 只读取当前串口并把数据放入帧缓存，条码结束由独立静默计时器判定。
         /// </summary>
-        private async Task RunReadLoopAsync(
-            SerialPort serialPort,
-            int connectionVersion,
-            CancellationToken cancellationToken)
+        private void OnSerialDataReceived(SerialPort serialPort, int connectionVersion)
         {
-            var readBuffer = new byte[256];
-            var barcodeBuffer = new StringBuilder();
-            var rejectedFramePreview = new List<byte>(REJECTED_FRAME_HEX_PREVIEW_BYTES);
-            var currentFrameBytes = 0;
-            var currentFrameRejected = false;
-            var normalExit = false;
+            if (_isDisposed || !IsCurrentConnection(serialPort, connectionVersion))
+            {
+                _logger.LogDebug("[扫码接收][忽略] DataReceived 来自失效连接, Version={Version}", connectionVersion);
+                return;
+            }
 
-            EnsureRecoveryDrainClockStarted(connectionVersion);
-
+            string data;
+            byte[] dataBytes;
             try
             {
-                while (!cancellationToken.IsCancellationRequested
-                    && IsCurrentConnection(serialPort, connectionVersion))
+                // 串口事件可能在关闭竞态中晚到，读取与关闭使用同一把锁，避免多个回调竞争输入缓冲区。
+                lock (_serialReceiveSync)
                 {
-                    try
-                    {
-                        var bytesRead = serialPort.Read(readBuffer, 0, readBuffer.Length);
-                        if (bytesRead <= 0)
-                            continue;
+                    if (!IsCurrentConnection(serialPort, connectionVersion))
+                        return;
 
-                        if (!IsCurrentConnection(serialPort, connectionVersion))
-                        {
-                            _logger.LogDebug("[扫码接收][忽略] 读取到旧连接数据, Version={Version}", connectionVersion);
-                            break;
-                        }
+                    data = serialPort.ReadExisting();
+                    if (string.IsNullOrEmpty(data))
+                        return;
 
-                        if (HandleRecoveryDrainBytes(bytesRead))
-                        {
-                            barcodeBuffer.Clear();
-                            currentFrameBytes = 0;
-                            currentFrameRejected = false;
-                            rejectedFramePreview.Clear();
-                            continue;
-                        }
-
-                        var data = serialPort.Encoding.GetString(readBuffer, 0, bytesRead);
-                        currentFrameBytes += bytesRead;
-                        if (!currentFrameRejected)
-                        {
-                            barcodeBuffer.Append(data);
-                            if (currentFrameBytes > MaxBarcodeFrameBytes)
-                            {
-                                currentFrameRejected = true;
-                                _logger.LogWarning(
-                                    "[扫码组包][拒绝] 当前帧超过最大长度，继续读取至 100ms 静默: Version={Version}, TotalBytes={TotalBytes}, MaxBytes={MaxBytes}",
-                                    connectionVersion,
-                                    currentFrameBytes,
-                                    MaxBarcodeFrameBytes);
-                            }
-                        }
-
-                        var previewBytes = Math.Min(bytesRead, REJECTED_FRAME_HEX_PREVIEW_BYTES - rejectedFramePreview.Count);
-                        if (previewBytes > 0)
-                            rejectedFramePreview.AddRange(readBuffer.AsSpan(0, previewBytes).ToArray());
-
-                        _logger.LogInformation(
-                            "[扫码接收] Port={Port}, Version={Version}, BytesRead={BytesRead}, BufferLength={BufferLength}",
-                            serialPort.PortName,
-                            connectionVersion,
-                            bytesRead,
-                            currentFrameBytes);
-                        PublishRawDataSafely(data);
-                    }
-                    catch (TimeoutException)
-                    {
-                        if (currentFrameBytes > 0)
-                        {
-                            if (currentFrameRejected)
-                            {
-                                RejectBarcodeFrame(
-                                    currentFrameBytes,
-                                    "扫码帧超过允许的最大字节数",
-                                    rejectedFramePreview);
-                            }
-                            else
-                            {
-                                CompleteBarcode(serialPort, connectionVersion, barcodeBuffer);
-                            }
-
-                            barcodeBuffer.Clear();
-                            rejectedFramePreview.Clear();
-                            currentFrameBytes = 0;
-                            currentFrameRejected = false;
-                        }
-
-                        TryCompleteRecoveryDrain();
-                    }
-                    catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested
-                        || !IsCurrentConnection(serialPort, connectionVersion))
-                    {
-                        normalExit = true;
-                        break;
-                    }
-                    catch (IOException ex) when (cancellationToken.IsCancellationRequested
-                        || !IsCurrentConnection(serialPort, connectionVersion))
-                    {
-                        normalExit = true;
-                        _logger.LogDebug(ex, "[扫码接收] 读取任务因连接停止而退出, Version={Version}", connectionVersion);
-                        break;
-                    }
-                    catch (InvalidOperationException ex) when (cancellationToken.IsCancellationRequested
-                        || !IsCurrentConnection(serialPort, connectionVersion))
-                    {
-                        normalExit = true;
-                        _logger.LogDebug(ex, "[扫码接收] 读取任务因串口关闭而退出, Version={Version}", connectionVersion);
-                        break;
-                    }
+                    dataBytes = serialPort.Encoding.GetBytes(data);
                 }
+            }
+            catch (ObjectDisposedException) when (!IsCurrentConnection(serialPort, connectionVersion))
+            {
+                _logger.LogDebug("[扫码接收] 失效连接的串口已释放, Version={Version}", connectionVersion);
+                return;
+            }
+            catch (InvalidOperationException) when (!IsCurrentConnection(serialPort, connectionVersion))
+            {
+                _logger.LogDebug("[扫码接收] 失效连接的串口已关闭, Version={Version}", connectionVersion);
+                return;
+            }
+            catch (IOException ex) when (!IsCurrentConnection(serialPort, connectionVersion))
+            {
+                _logger.LogDebug(ex, "[扫码接收] 失效连接读取已停止, Version={Version}", connectionVersion);
+                return;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[扫码接收] 读取任务未预期异常, Version={Version}", connectionVersion);
+                _logger.LogWarning(ex, "[扫码接收][异常] DataReceived 读取失败, Port={Port}, Version={Version}",
+                    serialPort.PortName,
+                    connectionVersion);
+                return;
             }
 
-            if (!normalExit
-                && !cancellationToken.IsCancellationRequested
-                && IsCurrentConnection(serialPort, connectionVersion))
+            if (dataBytes.Length == 0 || !IsCurrentConnection(serialPort, connectionVersion))
+                return;
+
+            if (HandleRecoveryDrainBytes(dataBytes.Length))
             {
-                HandleReadLoopUnexpectedExit(serialPort, connectionVersion);
+                ScheduleRecoveryDrainTimer();
+                return;
             }
 
-            _logger.LogDebug("[扫码接收] 读取任务已正常退出, Version={Version}", connectionVersion);
-            await Task.CompletedTask;
+            int bufferLength;
+            lock (_frameSync)
+            {
+                if (!IsCurrentConnection(serialPort, connectionVersion))
+                    return;
+
+                if (_frameConnectionVersion != connectionVersion)
+                    ResetFrameStateLocked(connectionVersion);
+
+                _frameByteCount += dataBytes.Length;
+                if (!_frameRejected)
+                {
+                    _frameBuffer.Append(data);
+                    if (_frameByteCount > MaxBarcodeFrameBytes)
+                    {
+                        _frameRejected = true;
+                        _logger.LogWarning(
+                            "[扫码组包][拒绝] 当前帧超过最大长度，继续读取至 100ms 静默: Version={Version}, TotalBytes={TotalBytes}, MaxBytes={MaxBytes}",
+                            connectionVersion,
+                            _frameByteCount,
+                            MaxBarcodeFrameBytes);
+                    }
+                }
+
+                var previewBytes = Math.Min(
+                    dataBytes.Length,
+                    REJECTED_FRAME_HEX_PREVIEW_BYTES - _framePreviewBytes.Count);
+                if (previewBytes > 0)
+                    _framePreviewBytes.AddRange(dataBytes.AsSpan(0, previewBytes).ToArray());
+
+                _lastFrameDataTimestamp = Stopwatch.GetTimestamp();
+                bufferLength = _frameByteCount;
+            }
+
+            ScheduleFrameEndTimer(BARCODE_COMPLETE_TIMEOUT_MS);
+            _logger.LogInformation(
+                "[扫码接收] Port={Port}, Version={Version}, BytesRead={BytesRead}, BufferLength={BufferLength}",
+                serialPort.PortName,
+                connectionVersion,
+                dataBytes.Length,
+                bufferLength);
+            PublishRawDataSafely(data);
         }
 
         private bool IsCurrentConnection(SerialPort serialPort, int connectionVersion)
@@ -1007,7 +979,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
         private void CompleteBarcode(
             SerialPort serialPort,
             int connectionVersion,
-            StringBuilder barcodeBuffer)
+            string barcodeText)
         {
             if (!IsCurrentConnection(serialPort, connectionVersion))
             {
@@ -1015,7 +987,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 return;
             }
 
-            var barcode = barcodeBuffer.ToString().Trim().TrimEnd('\r', '\n', '\t', ' ');
+            var barcode = barcodeText.Trim().TrimEnd('\r', '\n', '\t', ' ');
             if (string.IsNullOrWhiteSpace(barcode))
                 return;
 
@@ -1025,6 +997,102 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 barcode.Length,
                 barcode);
             PublishBarcodeReceivedSafely(new BarcodeReceivedEventArgs(barcode, barcode));
+        }
+
+        /// <summary>创建或重新安排100ms一次性静默计时器。</summary>
+        private void ScheduleFrameEndTimer(int dueTimeMs)
+        {
+            try
+            {
+                _frameEndTimer.Change(Math.Max(1, dueTimeMs), Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                _logger.LogDebug("[扫码组包] 帧结束计时器已释放");
+            }
+        }
+
+        /// <summary>静默计时器到期后，在锁内取出完整帧，锁外发布条码或拒绝事件。</summary>
+        private void OnFrameEndTimerElapsed(object? state)
+        {
+            SerialPort? serialPort;
+            string? barcodeText = null;
+            byte[] previewBytes = Array.Empty<byte>();
+            var connectionVersion = -1;
+            var totalBytes = 0;
+            var frameRejected = false;
+
+            lock (_frameSync)
+            {
+                if (_frameByteCount <= 0)
+                    return;
+
+                connectionVersion = _frameConnectionVersion;
+                serialPort = Volatile.Read(ref _serialPort);
+                if (serialPort == null || !IsCurrentConnection(serialPort, connectionVersion))
+                {
+                    ResetFrameStateLocked();
+                    return;
+                }
+
+                var quietMs = Stopwatch.GetElapsedTime(_lastFrameDataTimestamp).TotalMilliseconds;
+                if (quietMs < BARCODE_COMPLETE_TIMEOUT_MS)
+                {
+                    ScheduleFrameEndTimer((int)Math.Ceiling(BARCODE_COMPLETE_TIMEOUT_MS - quietMs));
+                    return;
+                }
+
+                totalBytes = _frameByteCount;
+                frameRejected = _frameRejected;
+                barcodeText = _frameBuffer.ToString();
+                previewBytes = _framePreviewBytes.ToArray();
+                ResetFrameStateLocked();
+            }
+
+            if (frameRejected && serialPort != null && IsCurrentConnection(serialPort, connectionVersion))
+            {
+                RejectBarcodeFrame(
+                    totalBytes,
+                    "扫码帧超过允许的最大字节数",
+                    previewBytes);
+            }
+            else if (serialPort != null && barcodeText != null)
+            {
+                CompleteBarcode(serialPort, connectionVersion, barcodeText);
+            }
+        }
+
+        /// <summary>停止帧结束计时器并清空当前连接的帧状态。</summary>
+        private void StopFrameTimerAndClear()
+        {
+            try
+            {
+                _frameEndTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                // 释放阶段计时器可能已经停止，继续清理帧状态即可。
+            }
+
+            lock (_frameSync)
+            {
+                ResetFrameStateLocked();
+            }
+        }
+
+        private void ResetFrameState()
+        {
+            StopFrameTimerAndClear();
+        }
+
+        private void ResetFrameStateLocked(int connectionVersion = -1)
+        {
+            _frameBuffer.Clear();
+            _framePreviewBytes.Clear();
+            _frameByteCount = 0;
+            _frameRejected = false;
+            _frameConnectionVersion = connectionVersion;
+            _lastFrameDataTimestamp = 0;
         }
 
         private bool HandleRecoveryDrainBytes(int bytesRead)
@@ -1046,6 +1114,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
         private void EnsureRecoveryDrainClockStarted(int connectionVersion)
         {
+            var shouldSchedule = false;
             lock (_recoveryDrainSync)
             {
                 if (!_recoveryDrainActive || _recoveryDrainConnectionVersion == connectionVersion)
@@ -1054,17 +1123,31 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 _recoveryDrainConnectionVersion = connectionVersion;
                 _recoveryDrainStartedTimestamp = Stopwatch.GetTimestamp();
                 _recoveryDrainLastDataTimestamp = _recoveryDrainStartedTimestamp;
+                shouldSchedule = true;
                 _logger.LogInformation(
-                    "[扫码恢复][排空] 已从新串口连接开始计时: Version={Version}",
-                    connectionVersion);
+                    "[扫码恢复][排空] 已从新串口连接开始计时: Version={Version}, MinQuietMs={MinQuietMs}, MaxMs={MaxMs}",
+                    connectionVersion,
+                    RECOVERY_DRAIN_QUIET_MS,
+                    RECOVERY_DRAIN_MAX_MS);
             }
+
+            if (shouldSchedule)
+                ScheduleRecoveryDrainTimer();
         }
 
-        private void TryCompleteRecoveryDrain()
+        private void OnRecoveryDrainTimerElapsed(object? state)
         {
-            TaskCompletionSource<ScannerRecoveryDrainResult>? completion = null;
-            ScannerRecoveryDrainResult? result = null;
+            if (_isDisposed)
+                return;
 
+            if (!TryCompleteRecoveryDrain())
+                ScheduleRecoveryDrainTimer();
+        }
+
+        /// <summary>按排空最早可能完成的时刻安排下一次一次性检查。</summary>
+        private void ScheduleRecoveryDrainTimer()
+        {
+            int dueTimeMs;
             lock (_recoveryDrainSync)
             {
                 if (!_recoveryDrainActive)
@@ -1073,11 +1156,54 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 var now = Stopwatch.GetTimestamp();
                 var elapsedMs = Stopwatch.GetElapsedTime(_recoveryDrainStartedTimestamp, now).TotalMilliseconds;
                 var quietMs = Stopwatch.GetElapsedTime(_recoveryDrainLastDataTimestamp, now).TotalMilliseconds;
+                var untilMin = Math.Max(0, RECOVERY_DRAIN_MIN_MS - elapsedMs);
+                var untilQuiet = Math.Max(0, RECOVERY_DRAIN_QUIET_MS - quietMs);
+                var untilMax = Math.Max(0, RECOVERY_DRAIN_MAX_MS - elapsedMs);
+                dueTimeMs = (int)Math.Max(
+                    1,
+                    Math.Min(untilMax <= 0 ? 1 : untilMax, Math.Max(untilMin, untilQuiet)));
+            }
+
+            try
+            {
+                _recoveryDrainTimer.Change(dueTimeMs, Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                _logger.LogDebug("[扫码恢复][排空] 排空计时器已释放");
+            }
+        }
+
+        private void StopRecoveryDrainTimer()
+        {
+            try
+            {
+                _recoveryDrainTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                // 释放阶段计时器可能已经停止。
+            }
+        }
+
+        private bool TryCompleteRecoveryDrain()
+        {
+            TaskCompletionSource<ScannerRecoveryDrainResult>? completion = null;
+            ScannerRecoveryDrainResult? result = null;
+
+            lock (_recoveryDrainSync)
+            {
+                if (!_recoveryDrainActive)
+                    return true;
+
+                var now = Stopwatch.GetTimestamp();
+                var elapsedMs = Stopwatch.GetElapsedTime(_recoveryDrainStartedTimestamp, now).TotalMilliseconds;
+                var quietMs = Stopwatch.GetElapsedTime(_recoveryDrainLastDataTimestamp, now).TotalMilliseconds;
                 var timedOut = elapsedMs >= RECOVERY_DRAIN_MAX_MS;
                 if (!timedOut
                     && (elapsedMs < RECOVERY_DRAIN_MIN_MS || quietMs < RECOVERY_DRAIN_QUIET_MS))
                 {
-                    return;
+                    return false;
                 }
 
                 result = CreateRecoveryDrainResult(timedOut);
@@ -1086,12 +1212,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 _recoveryDrainCompletion = null;
             }
 
+            StopRecoveryDrainTimer();
             completion?.TrySetResult(result!);
             _logger.LogInformation(
                 "[扫码恢复][排空] 排空完成: Bytes={Bytes}, ElapsedMs={ElapsedMs}, TimedOut={TimedOut}",
                 result!.DrainedBytes,
                 result.ElapsedMs,
                 result.TimedOut);
+            return true;
         }
 
         private ScannerRecoveryDrainResult CreateRecoveryDrainResult(bool timedOut)
@@ -1122,34 +1250,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
                 reason,
                 hexPreview);
             PublishBarcodeFrameRejectedSafely(args);
-        }
-
-        private void HandleReadLoopUnexpectedExit(
-            SerialPort serialPort,
-            int connectionVersion)
-        {
-            if (Interlocked.CompareExchange(
-                    ref _connectionVersion,
-                    connectionVersion + 1,
-                    connectionVersion) != connectionVersion)
-            {
-                return;
-            }
-
-            _isConnected = false;
-            _logger.LogWarning(
-                "[扫码接收][异常] 读取任务意外退出，连接已失效: Port={Port}, Version={Version}",
-                serialPort.PortName,
-                connectionVersion);
-
-            if (ReferenceEquals(
-                    Interlocked.CompareExchange(ref _serialPort, null, serialPort),
-                    serialPort))
-            {
-                CloseSerialPort(serialPort);
-            }
-
-            PublishConnectionStateSafely(false);
         }
 
         private void OnErrorReceived(object sender, System.IO.Ports.SerialErrorReceivedEventArgs e)
@@ -1355,6 +1455,9 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Devices.Scanner
 
                 _isDisposed = true;
                 StopCurrentConnectionAsync(stopWatchdog: true).GetAwaiter().GetResult();
+                CancelRecoveryDrain();
+                _frameEndTimer.Dispose();
+                _recoveryDrainTimer.Dispose();
                 PublishConnectionStateSafely(false);
             }
             finally
