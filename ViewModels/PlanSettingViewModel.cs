@@ -37,7 +37,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
-        private readonly ISeriesMachineStorageService _seriesMachineStorageService;
         private readonly ILogger<PlanSettingViewModel> _logger;
 
 
@@ -82,14 +81,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
-            ISeriesMachineStorageService seriesMachineStorageService,
             IDeviceConnectionManager deviceManager,
             ILogger<PlanSettingViewModel> logger)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-            _seriesMachineStorageService = seriesMachineStorageService ?? throw new ArgumentNullException(nameof(seriesMachineStorageService));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -517,10 +514,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
             _logger.LogDebug("机种下拉选项已刷新，共 {Count} 个", MachineTypeOptions.Count);
 
-            var catalog = await _seriesMachineStorageService.LoadAsync();
             SeriesOptions.Clear();
-            foreach (var series in catalog.Series.OrderBy(item => item.Name))
-                SeriesOptions.Add(series.Name);
+            foreach (var series in _allPlans
+                .Select(plan => plan.Series.Trim())
+                .Where(series => !string.IsNullOrWhiteSpace(series))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(series => series, StringComparer.OrdinalIgnoreCase))
+            {
+                SeriesOptions.Add(series);
+            }
         }
 
         /// <summary>

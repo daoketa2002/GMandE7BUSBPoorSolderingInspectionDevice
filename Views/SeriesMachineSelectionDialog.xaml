@@ -32,36 +32,27 @@
             <Border Grid.Column="0" Background="White" BorderBrush="#CED4DA" BorderThickness="1" Padding="10">
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Text="系列维护" FontSize="16" FontWeight="Bold" Foreground="#2C3E50"/>
-                    <ListBox Grid.Row="1" ItemsSource="{Binding SeriesItems}" SelectedItem="{Binding SelectedSeries}" DisplayMemberPath="Name" Margin="0,8"/>
-                    <StackPanel Grid.Row="2">
-                        <TextBox Text="{Binding SeriesNameInput, UpdateSourceTrigger=PropertyChanged}"
-                                 Height="32"
-                                 FontSize="14"
-                                 Padding="6,0"
-                                 VerticalContentAlignment="Center"/>
-                        <UniformGrid Rows="1" Columns="3" Margin="0,8,0,0">
-                            <Button Content="新增" Command="{Binding AddSeriesCommand}" Background="#3498DB" Foreground="White" Margin="2"/>
-                            <Button Content="改名" Command="{Binding RenameSeriesCommand}" Background="#F39C12" Foreground="White" Margin="2"/>
-                            <Button Content="删除" Command="{Binding DeleteSeriesCommand}" Background="#E74C3C" Foreground="White" Margin="2"/>
-                        </UniformGrid>
-                    </StackPanel>
+                    <TextBlock Text="系列" FontSize="16" FontWeight="Bold" Foreground="#2C3E50"/>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding SeriesItems}" SelectedItem="{Binding SelectedSeries}" Margin="0,8"/>
+                    <TextBlock Grid.Row="2"
+                               Text="系列候选来自现有检测方案。"
+                               TextWrapping="Wrap"
+                               Foreground="#6C757D"
+                               FontSize="12"
+                               Margin="0,4,0,0"/>
                 </Grid>
             </Border>
             <Border Grid.Column="2" Background="White" BorderBrush="#CED4DA" BorderThickness="1" Padding="10">
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Text="机种维护" FontSize="16" FontWeight="Bold" Foreground="#2C3E50"/>
-                    <ListBox Grid.Row="1" ItemsSource="{Binding MachineItems}" SelectedItem="{Binding SelectedMachine}" DisplayMemberPath="Name" Margin="0,8"/>
-                    <StackPanel Grid.Row="2">
-                        <TextBox Text="{Binding MachineNameInput, UpdateSourceTrigger=PropertyChanged}" Height="32"/>
-                        <TextBlock Text="{Binding HintText}" TextWrapping="Wrap" Foreground="#6C757D" FontSize="12" Margin="0,4,0,0"/>
-                        <UniformGrid Rows="1" Columns="3" Margin="0,8,0,0">
-                            <Button Content="新增" Command="{Binding AddMachineCommand}" Background="#3498DB" Foreground="White" Margin="2"/>
-                            <Button Content="改名" Command="{Binding RenameMachineCommand}" Background="#F39C12" Foreground="White" Margin="2"/>
-                            <Button Content="删除" Command="{Binding DeleteMachineCommand}" Background="#E74C3C" Foreground="White" Margin="2"/>
-                        </UniformGrid>
-                    </StackPanel>
+                    <TextBlock Text="机种" FontSize="16" FontWeight="Bold" Foreground="#2C3E50"/>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding MachineItems}" SelectedItem="{Binding SelectedMachine}" Margin="0,8"/>
+                    <TextBlock Grid.Row="2"
+                               Text="{Binding HintText}"
+                               TextWrapping="Wrap"
+                               Foreground="#6C757D"
+                               FontSize="12"
+                               Margin="0,4,0,0"/>
                 </Grid>
             </Border>
         </Grid>

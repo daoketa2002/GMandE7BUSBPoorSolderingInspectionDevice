@@ -24,7 +24,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
         /// <param name="originalSeries">编辑模式下的原系列名。</param>
         /// <param name="originalMachineType">编辑模式下的原机种名。</param>
         /// <param name="originalPlanName">编辑模式下的原方案名。</param>
-        Task SavePlanAsync(PlanModel plan, string? originalSeries = null, string? originalMachineType = null, string? originalPlanName = null);
+        /// <param name="allowDuplicatePlanName">仅在上层已获得用户确认时允许方案名称重复或覆盖目标文件。</param>
+        Task SavePlanAsync(
+            PlanModel plan,
+            string? originalSeries = null,
+            string? originalMachineType = null,
+            string? originalPlanName = null,
+            bool allowDuplicatePlanName = false);
 
         /// <summary>
         /// 删除方案

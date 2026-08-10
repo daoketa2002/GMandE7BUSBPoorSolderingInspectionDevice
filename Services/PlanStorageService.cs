@@ -346,7 +346,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             PlanModel plan,
             string? originalSeries = null,
             string? originalMachineType = null,
-            string? originalPlanName = null)
+            string? originalPlanName = null,
+            bool allowDuplicatePlanName = false)
         {
             ArgumentNullException.ThrowIfNull(plan);
 
@@ -404,17 +405,29 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
 
                     plan.Version = Math.Max(1, plan.Version);
 
-                    // 运行页按 MachineType + PlanName 匹配，因此该身份必须跨系列唯一。
+                    // 默认仍拦截同机种同名方案；只有上层完成用户确认后才允许重复或覆盖。
                     var duplicate = LoadAllPlansUnsafe().FirstOrDefault(existing =>
                         string.Equals(existing.MachineType, plan.MachineType, StringComparison.OrdinalIgnoreCase)
                         && string.Equals(existing.PlanName, plan.PlanName, StringComparison.OrdinalIgnoreCase)
                         && !(string.Equals(existing.Series, originalSeries, StringComparison.OrdinalIgnoreCase)
                             && string.Equals(existing.MachineType, originalMachineType, StringComparison.OrdinalIgnoreCase)
                             && string.Equals(existing.PlanName, originalPlanName, StringComparison.OrdinalIgnoreCase)));
-                    if (duplicate != null)
+                    if (duplicate != null && !allowDuplicatePlanName)
                     {
                         throw new InvalidOperationException(
                             $"方案身份重复：机种“{plan.MachineType}”下已存在方案“{plan.PlanName}”（系列：{duplicate.Series}）。");
+                    }
+
+                    if (duplicate != null && allowDuplicatePlanName)
+                    {
+                        _logger.LogWarning(
+                            "[安全审计][方案名称重复] 已按用户确认允许保存：目标={Series}/{MachineType}/{PlanName}, 已存在={ExistingSeries}/{ExistingMachineType}/{ExistingPlanName}",
+                            plan.Series,
+                            plan.MachineType,
+                            plan.PlanName,
+                            duplicate.Series,
+                            duplicate.MachineType,
+                            duplicate.PlanName);
                     }
 
                     // ================================================================

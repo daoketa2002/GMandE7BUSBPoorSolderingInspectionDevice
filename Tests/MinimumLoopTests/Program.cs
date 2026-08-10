@@ -134,6 +134,7 @@ var tests = new List<(string Name, Action Body)>
     ("RUN-SN-GATE-01 序列号清理和 DT234 时序契约", TestRunSnGate01SourceContract),
     ("RUN-STATE-KEEP-01 运行页方案与检测快照保留契约", TestRunStateKeep01SourceContract),
     ("RUN-PLAN-SELECT-01 方案名称显示和加载状态收口契约", TestRunPlanSelect01SourceContract),
+    ("方案同名保存必须经过用户确认", TestPlanDuplicateNameConfirmationContract),
     ("PLC-DT312-01 地址、接口和单向写入契约", TestPlcDt312Contract),
     ("PLC-DT312-01 Fake 写入及运行页输入通知契约", TestDt312InputNotificationContract),
     ("设备连接失败计数区分健康检查和自动重连", () =>
@@ -1209,6 +1210,11 @@ static void TestRunSnGate01StartGateContract()
     AssertEqual(true, InspectionStartValidator.Validate(CreateValidRunSnGateRequest()).IsValid);
     AssertEqual(true, InspectionStartValidator.Validate(
         CreateValidRunSnGateRequest(uiState: TestUIState.CompletedPass)).IsValid);
+    AssertEqual(false, InspectionStartValidator.Validate(
+        CreateValidRunSnGateRequest(isReferenceMachineMismatch: true)).IsValid);
+    AssertEqual("当前机种与参照机种不一致，无法启动检测",
+        InspectionStartValidator.Validate(
+            CreateValidRunSnGateRequest(isReferenceMachineMismatch: true)).ErrorMessage);
 }
 
 static void TestRunSnGate01SourceContract()
@@ -1231,6 +1237,8 @@ static void TestRunSnGate01SourceContract()
     AssertEqual(true, viewModelSource.Contains("_allRunPlans", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.Contains("ObservableCollection<PlanModel> PlanNameOptions", StringComparison.Ordinal));
     AssertEqual(true, viewModelSource.Contains("GetPlansForMachineType", StringComparison.Ordinal));
+    AssertEqual(true, viewModelSource.Contains("IsReferenceMachineMismatch = IsReferenceMachineMismatch", StringComparison.Ordinal));
+    AssertEqual(true, validatorSource.Contains("IsReferenceMachineMismatch", StringComparison.Ordinal));
     var loadPlanItemsStart = viewModelSource.IndexOf(
         "private async Task LoadPlanItemsAsync", StringComparison.Ordinal);
     var loadPlanItemsEnd = viewModelSource.IndexOf(
@@ -1365,6 +1373,81 @@ static void TestRunPlanSelect01SourceContract()
         "LoadPlanItemsAsync(loadVersion, ModelName, value.PlanName, value)", StringComparison.Ordinal));
     AssertEqual(true, source.Contains("CompletePlanLoading(expectedLoadVersion);", StringComparison.Ordinal));
     AssertEqual(true, source.Contains("_isPlanLoading = false;", StringComparison.Ordinal));
+}
+
+static void TestPlanDuplicateNameConfirmationContract()
+{
+    var editSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "ViewModels",
+        "PlanEditViewModel.cs"));
+    var interfaceSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Interfaces",
+        "IPlanStorageService.cs"));
+    var storageSource = File.ReadAllText(Path.Combine(
+        Environment.CurrentDirectory,
+        "Services",
+        "PlanStorageService.cs"));
+
+    AssertEqual(true, editSource.Contains("FindSamePlanNameConflictsAsync", StringComparison.Ordinal));
+    AssertEqual(true, editSource.Contains("方案名称重复确认", StringComparison.Ordinal));
+    AssertEqual(true, editSource.Contains("allowDuplicatePlanName", StringComparison.Ordinal));
+    AssertEqual(true, interfaceSource.Contains("allowDuplicatePlanName = false", StringComparison.Ordinal));
+    AssertEqual(true, storageSource.Contains("duplicate != null && !allowDuplicatePlanName", StringComparison.Ordinal));
+
+    var root = Path.Combine(Path.GetTempPath(), "gm-e78-plan-duplicate-name-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["PlanStorage:RootPath"] = root
+            })
+            .Build();
+        var storage = new PlanStorageService(
+            NullLogger<PlanStorageService>.Instance,
+            configuration);
+
+        var firstPlan = new PlanModel
+        {
+            Series = "GM",
+            MachineType = "ZZTEST-同名机种",
+            PlanName = "ZZTEST-同名方案",
+            Workstation = WorkstationConstants.Left
+        };
+        storage.SavePlanAsync(firstPlan).GetAwaiter().GetResult();
+
+        var secondPlan = new PlanModel
+        {
+            Series = "E78",
+            MachineType = "ZZTEST-同名机种",
+            PlanName = "ZZTEST-同名方案",
+            Workstation = WorkstationConstants.Right
+        };
+        bool rejectedWithoutConfirmation = false;
+        try
+        {
+            storage.SavePlanAsync(secondPlan).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException)
+        {
+            rejectedWithoutConfirmation = true;
+        }
+
+        AssertEqual(true, rejectedWithoutConfirmation);
+
+        storage.SavePlanAsync(secondPlan, allowDuplicatePlanName: true)
+            .GetAwaiter()
+            .GetResult();
+        var plans = storage.LoadAllPlansAsync().GetAwaiter().GetResult();
+        AssertEqual(2, plans.Count(plan => plan.PlanName == "ZZTEST-同名方案"));
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
+    }
 }
 
 static void TestPlcDt312Contract()
@@ -1514,6 +1597,7 @@ static InspectionStartValidationRequest CreateValidRunSnGateRequest(
     bool isDuplicateCheckInProgress = false,
     bool isDuplicateDecisionPending = false,
     bool isDuplicateCheckFailed = false,
+    bool isReferenceMachineMismatch = false,
     TestUIState uiState = TestUIState.Ready)
 {
     var config = new InspectionConfig
@@ -1525,6 +1609,7 @@ static InspectionStartValidationRequest CreateValidRunSnGateRequest(
     {
         UiState = uiState,
         ModelName = "GM",
+        IsReferenceMachineMismatch = isReferenceMachineMismatch,
         SerialNumber = "SN-TEST",
         SchemeName = "序列号门禁方案",
         OperatorName = "测试员",
@@ -1718,7 +1803,7 @@ static void TestScanVerify01RunPageContract()
         "Services",
         "Inspection",
         "InspectionStartValidator.cs"));
-    AssertEqual(false, startValidator.Contains("IsReferenceMachineMismatch", StringComparison.Ordinal));
+    AssertEqual(true, startValidator.Contains("IsReferenceMachineMismatch", StringComparison.Ordinal));
 }
 
 static BarcodeParsedEventArgs ParseScannerBarcode(string rawBarcode)

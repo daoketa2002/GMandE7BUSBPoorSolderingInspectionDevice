@@ -14,6 +14,8 @@ public sealed class InspectionStartValidationRequest
 {
     public TestUIState UiState { get; init; }
     public string ModelName { get; init; } = string.Empty;
+    /// <summary>实际机种与已确认参照机种不一致时，禁止任何来源启动。</summary>
+    public bool IsReferenceMachineMismatch { get; init; }
     public string SerialNumber { get; init; } = string.Empty;
     public string SchemeName { get; init; } = string.Empty;
     public string OperatorName { get; init; } = string.Empty;
@@ -66,6 +68,8 @@ public static class InspectionStartValidator
         // 基本信息检查
         if (string.IsNullOrWhiteSpace(request.ModelName))
             return Fail("未输入机种名称，无法启动");
+        if (request.IsReferenceMachineMismatch)
+            return Fail("当前机种与参照机种不一致，无法启动检测");
         if (!InputValidationHelper.IsValidSerialNumber(request.SerialNumber))
             return Fail("本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。");
         if (request.IsDuplicateCheckInProgress)

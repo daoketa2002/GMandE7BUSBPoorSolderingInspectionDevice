@@ -326,6 +326,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
     {
         None,
         MissingModel,
+        ReferenceMachineMismatch,
         MissingSerialNumber,
         InvalidPlan,
         NoTestItems,
@@ -763,6 +764,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         {
             UiState = UiState,
             ModelName = ModelName,
+            IsReferenceMachineMismatch = IsReferenceMachineMismatch,
             SerialNumber = SerialNumber,
             SchemeName = SchemeName,
             OperatorName = OperatorName,
@@ -1048,6 +1050,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         var (reason, operatorMessage) = GetStartRejectMessage(allowCurrentStartingAction);
         string diagnosticMessage =
             $"Reason={reason}, ValidatorMessage={validation.ErrorMessage}, UiState={UiState}, " +
+            $"ModelName={ModelName}, ReferenceMachineType={ReferenceMachineType}, " +
+            $"IsReferenceMachineMismatch={IsReferenceMachineMismatch}, " +
             $"SerialVerificationState={_currentSerialVerificationState}, " +
             $"ConfirmedSerialKey={_confirmedSerialKey}, CurrentSerialKey={BuildCurrentSerialKey()}, " +
             $"DuplicateCheckFailureMessage={_duplicateCheckFailureMessage}, " +
@@ -1079,6 +1083,8 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         if (_inspectionEngine?.IsRunning == true || UiState == TestUIState.Testing)
             return (StartRejectReason.DuplicateStart, "检测已在运行中，无需重复启动。");
         if (string.IsNullOrWhiteSpace(ModelName)) return (StartRejectReason.MissingModel, "请扫码或手动输入机种名称。");
+        if (IsReferenceMachineMismatch)
+            return (StartRejectReason.ReferenceMachineMismatch, "当前机种与参照机种不一致，无法启动检测。\n请确认条码或重新选择参照机种。");
         if (string.IsNullOrWhiteSpace(SerialNumber)
             || !InputValidationHelper.IsValidSerialNumber(SerialNumber))
             return (StartRejectReason.SerialNotConfirmed, "本轮机种名称和序列号尚未确认。请先扫码或手动输入机种名称和序列号，再重新启动。");
@@ -1268,7 +1274,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
             ScheduleProductIdentityNotification();
     }
 
-    /// <summary>参照机种与实际输入机种只做可见提示，不参与启动校验。</summary>
+    /// <summary>计算参照机种与实际输入机种是否不一致，结果同时用于提示和统一启动校验。</summary>
     private void UpdateReferenceMachineMismatch()
     {
         IsReferenceMachineMismatch = !string.IsNullOrWhiteSpace(ReferenceMachineType)
@@ -1294,6 +1300,7 @@ public partial class TestPageViewModel : ObservableObject, INavigationAware, IDi
         _lastReferenceMismatchPromptKey = null;
         UpdateReferenceMachineMismatch();
         ChangeReferenceSelectionCommand.NotifyCanExecuteChanged();
+        RefreshReadyOrCanStartState();
     }
 
     /// <summary>

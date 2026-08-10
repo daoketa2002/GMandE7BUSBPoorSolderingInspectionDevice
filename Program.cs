@@ -238,7 +238,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice
 
             // === 方案设定相关服务 === 
             services.AddSingleton<IPlanStorageService, PlanStorageService>();
-            services.AddSingleton<ISeriesMachineStorageService, SeriesMachineStorageService>();
             services.AddSingleton<IReferenceSelectionStateService, ReferenceSelectionStateService>();
 
             // === 内存监控服务 === 

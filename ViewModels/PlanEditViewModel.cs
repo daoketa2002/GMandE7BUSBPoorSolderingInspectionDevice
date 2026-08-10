@@ -38,7 +38,6 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private readonly INavigationService _navigationService;
         private readonly INotificationService _notificationService;
         private readonly IPlanStorageService _planStorageService;
-        private readonly ISeriesMachineStorageService _seriesMachineStorageService;
         private readonly IDeviceConnectionManager _deviceManager;
         private readonly ILogger<PlanEditViewModel> _logger;
 
@@ -81,14 +80,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             INavigationService navigationService,
             INotificationService notificationService,
             IPlanStorageService planStorageService,
-            ISeriesMachineStorageService seriesMachineStorageService,
             IDeviceConnectionManager deviceManager,
             ILogger<PlanEditViewModel> logger)
         {
             _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
             _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
             _planStorageService = planStorageService ?? throw new ArgumentNullException(nameof(planStorageService));
-            _seriesMachineStorageService = seriesMachineStorageService ?? throw new ArgumentNullException(nameof(seriesMachineStorageService));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -608,6 +605,49 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     }).ToList()
                 };
 
+                bool allowDuplicatePlanName = false;
+                var sameNamePlans = await FindSamePlanNameConflictsAsync(plan);
+                if (sameNamePlans.Count > 0)
+                {
+                    string conflictDetails = string.Join(
+                        "\n",
+                        sameNamePlans.Select((existingPlan, index) =>
+                            $"{index + 1}. 系列“{existingPlan.Series}” / 机种“{existingPlan.MachineType}” / 方案“{existingPlan.PlanName}”"));
+                    var targetConflict = sameNamePlans.FirstOrDefault(existingPlan =>
+                        IsSamePlanIdentity(existingPlan, plan));
+
+                    string conflictMessage = targetConflict != null
+                        ? $"方案名称“{plan.PlanName}”已存在以下方案：\n\n{conflictDetails}\n\n"
+                          + "当前保存目标与已有方案路径相同，继续保存将覆盖该方案。\n是否继续？"
+                        : $"方案名称“{plan.PlanName}”已存在以下方案：\n\n{conflictDetails}\n\n"
+                          + "确认后允许使用同名方案名称，是否继续？";
+
+                    _logger.LogWarning(
+                        "[方案保存][同名提示] 目标={Series}/{MachineType}/{PlanName}, 冲突数量={Count}, 目标路径冲突={TargetConflict}",
+                        plan.Series,
+                        plan.MachineType,
+                        plan.PlanName,
+                        sameNamePlans.Count,
+                        targetConflict != null);
+
+                    if (!await _notificationService.ConfirmAsync(conflictMessage, "方案名称重复确认"))
+                    {
+                        _logger.LogWarning(
+                            "[方案保存][同名提示] 用户取消：目标={Series}/{MachineType}/{PlanName}",
+                            plan.Series,
+                            plan.MachineType,
+                            plan.PlanName);
+                        return;
+                    }
+
+                    allowDuplicatePlanName = true;
+                    _logger.LogWarning(
+                        "[方案保存][同名提示] 用户确认继续：目标={Series}/{MachineType}/{PlanName}",
+                        plan.Series,
+                        plan.MachineType,
+                        plan.PlanName);
+                }
+
                 if (_isEditMode && _originalPlan != null)
                 {
                     var contentChanged = HasPlanBusinessContentChanged(_originalPlan, plan);
@@ -643,7 +683,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     plan,
                     _originalPlan?.Series,
                     _originalPlan?.MachineType,
-                    _originalPlan?.PlanName);
+                    _originalPlan?.PlanName,
+                    allowDuplicatePlanName);
 
                 _logger.LogInformation("方案保存成功: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
                 await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 保存成功！", "保存成功");
@@ -732,6 +773,39 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             return false;
         }
 
+        /// <summary>查找同名方案，编辑当前方案自身时不视为冲突。</summary>
+        private async Task<List<PlanModel>> FindSamePlanNameConflictsAsync(PlanModel plan)
+        {
+            var allPlans = await _planStorageService.LoadAllPlansAsync();
+            return allPlans
+                .Where(existingPlan =>
+                    string.Equals(
+                        existingPlan.PlanName.Trim(),
+                        plan.PlanName.Trim(),
+                        StringComparison.OrdinalIgnoreCase)
+                    && !IsCurrentEditedPlan(existingPlan))
+                .OrderBy(existingPlan => existingPlan.Series, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(existingPlan => existingPlan.MachineType, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(existingPlan => existingPlan.PlanName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        /// <summary>编辑时排除原方案自身，避免保存未改名方案时重复提示自己。</summary>
+        private bool IsCurrentEditedPlan(PlanModel candidate)
+        {
+            return _isEditMode
+                && _originalPlan != null
+                && IsSamePlanIdentity(candidate, _originalPlan);
+        }
+
+        /// <summary>方案文件的完整业务身份，不包含工位，因为工位不参与文件路径。</summary>
+        private static bool IsSamePlanIdentity(PlanModel left, PlanModel right)
+        {
+            return string.Equals(left.Series.Trim(), right.Series.Trim(), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.MachineType.Trim(), right.MachineType.Trim(), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.PlanName.Trim(), right.PlanName.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool IsSameBusinessItem(PlanItem left, PlanItem right)
         {
             return left.Index == right.Index
@@ -756,10 +830,16 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         {
             _logger.LogDebug("进入方案编辑页面");
 
-            var catalog = await _seriesMachineStorageService.LoadAsync();
+            var allPlans = await _planStorageService.LoadAllPlansAsync();
             SeriesOptions.Clear();
-            foreach (var series in catalog.Series.OrderBy(item => item.Name))
-                SeriesOptions.Add(series.Name);
+            foreach (var series in allPlans
+                .Select(plan => plan.Series.Trim())
+                .Where(series => !string.IsNullOrWhiteSpace(series))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(series => series, StringComparer.OrdinalIgnoreCase))
+            {
+                SeriesOptions.Add(series);
+            }
 
             var machineTypes = await _planStorageService.GetAllMachineTypesAsync();
             MachineTypeOptions.Clear();
