@@ -6,207 +6,316 @@
              xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
              xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
              xmlns:behaviors="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Behaviors"
-             mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:PlanEditViewModel}"
-             d:DesignWidth="1100" d:DesignHeight="700"
+             d:DesignWidth="1100"
+             d:DesignHeight="700"
              FontFamily="Microsoft YaHei"
-             Background="White">
+             Background="White"
+             mc:Ignorable="d">
 
     <UserControl.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
-        <converters:ResistanceInputHintConverter x:Key="ResistanceInputHintConverter"/>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+        <converters:ResistanceInputHintConverter x:Key="ResistanceInputHintConverter" />
 
         <Style x:Key="ActionButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="100"/>
-            <Setter Property="Height" Value="34"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width" Value="100" />
+            <Setter Property="Height" Value="34" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="5"
-                                BorderThickness="0">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                            VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="5" BorderThickness="0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Opacity" Value="0.85"/>
+                    <Setter Property="Opacity" Value="0.85" />
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Opacity" Value="0.5"/>
+                    <Setter Property="Opacity" Value="0.5" />
                 </Trigger>
             </Style.Triggers>
         </Style>
 
         <Style x:Key="ItemDataGridStyle" TargetType="DataGrid">
-            <Setter Property="FontSize" Value="15"/>
-            <Setter Property="RowHeight" Value="38"/>
-            <Setter Property="ColumnHeaderHeight" Value="40"/>
-            <Setter Property="GridLinesVisibility" Value="All"/>
-            <Setter Property="HorizontalGridLinesBrush" Value="#DEE2E6"/>
-            <Setter Property="VerticalGridLinesBrush" Value="#DEE2E6"/>
-            <Setter Property="BorderBrush" Value="#CED4DA"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CanUserAddRows" Value="False"/>
-            <Setter Property="CanUserDeleteRows" Value="False"/>
-            <Setter Property="CanUserReorderColumns" Value="False"/>
-            <Setter Property="IsReadOnly" Value="True"/>
-            <Setter Property="AutoGenerateColumns" Value="False"/>
-            <Setter Property="SelectionMode" Value="Single"/>
-            <Setter Property="RowBackground" Value="White"/>
-            <Setter Property="AlternatingRowBackground" Value="#F8F9FA"/>
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="RowHeight" Value="38" />
+            <Setter Property="ColumnHeaderHeight" Value="40" />
+            <Setter Property="GridLinesVisibility" Value="All" />
+            <Setter Property="HorizontalGridLinesBrush" Value="#DEE2E6" />
+            <Setter Property="VerticalGridLinesBrush" Value="#DEE2E6" />
+            <Setter Property="BorderBrush" Value="#CED4DA" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="CanUserReorderColumns" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="SelectionMode" Value="Single" />
+            <Setter Property="RowBackground" Value="White" />
+            <Setter Property="AlternatingRowBackground" Value="#F8F9FA" />
         </Style>
 
         <Style x:Key="ItemColumnHeaderStyle" TargetType="DataGridColumnHeader">
-            <Setter Property="Background" Value="#2C3E50"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-            <Setter Property="Padding" Value="6,4"/>
-            <Setter Property="BorderBrush" Value="#1A252F"/>
-            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+            <Setter Property="Background" Value="#2C3E50" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="BorderBrush" Value="#1A252F" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
         </Style>
     </UserControl.Resources>
 
     <Grid Margin="20">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto" />
             <!-- 0: 顶部标题栏 -->
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto" />
             <!-- 1: 基本信息区 -->
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto" />
             <!-- 2: 扫描枪状态栏 -->
-            <RowDefinition Height="*"/>
+            <RowDefinition Height="*" />
             <!-- 3: 项目列表区 -->
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto" />
             <!-- 4: 底部按钮区 -->
         </Grid.RowDefinitions>
 
         <!-- ===== 顶部标题栏 ===== -->
-        <Border Grid.Row="0" Background="#2C3E50" CornerRadius="8" Padding="16,12" Margin="0,0,0,12">
+        <Border Grid.Row="0"
+                Margin="0,0,0,12"
+                Padding="16,12"
+                Background="#2C3E50"
+                CornerRadius="8">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="📝 " FontSize="24" Foreground="White" VerticalAlignment="Center"/>
-                    <TextBlock Text="编辑方案" FontSize="24" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
-                    <TextBlock Text=" — 配置检测项目" FontSize="14" Foreground="#BDC3C7" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Orientation="Horizontal">
+                    <TextBlock VerticalAlignment="Center"
+                               Text="📝 "
+                               FontSize="24"
+                               Foreground="White" />
+                    <TextBlock VerticalAlignment="Center"
+                               Text="编辑程序"
+                               FontSize="24"
+                               FontWeight="Bold"
+                               Foreground="White" />
+                    <TextBlock Margin="12,0,0,0"
+                               VerticalAlignment="Center"
+                               Text=" — 配置检测项目"
+                               FontSize="14"
+                               Foreground="#BDC3C7" />
                 </StackPanel>
-                <Button Grid.Column="1" Style="{StaticResource ActionButtonStyle}"
-                        Width="130" Background="#95A5A6"
+                <Button Grid.Column="1"
+                        Width="130"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource ActionButtonStyle}"
+                        Background="#95A5A6"
                         Content="↩ 返回"
-                        Command="{Binding GoBackCommand}"
-                        VerticalAlignment="Center"/>
+                        Command="{Binding GoBackCommand}" />
             </Grid>
         </Border>
 
         <!-- ===== 基本信息区 ===== -->
-        <Border Grid.Row="1" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12" Margin="0,0,0,12">
+        <Border Grid.Row="1"
+                Margin="0,0,0,12"
+                Padding="14,12"
+                Background="#F8F9FA"
+                CornerRadius="8"
+                BorderBrush="#DEE2E6"
+                BorderThickness="1">
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <!-- 改：200 → Auto，让工位两个RadioButton不被截 -->
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="240"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="240" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <!-- 改：100 → Auto，让创建时间按文本撑开 -->
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="240"/>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="240" />
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="★ 系列：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBlock Grid.Row="0"
+                           Grid.Column="0"
+                           Margin="0,0,6,0"
+                           VerticalAlignment="Center"
+                           Text="★ 系列："
+                           FontSize="15"
+                           FontWeight="Bold"
+                           Foreground="#E74C3C" />
                 <!-- 改：补 Width="200"，防止 Col1 改 Auto 后 ComboBox 塌缩 -->
-                <ComboBox Grid.Row="0" Grid.Column="1" Width="200" IsEditable="True" Text="{Binding Series, UpdateSourceTrigger=PropertyChanged}"
-                      ItemsSource="{Binding SeriesOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <ComboBox Grid.Row="0"
+                          Grid.Column="1"
+                          Width="200"
+                          Height="34"
+                          VerticalContentAlignment="Center"
+                          IsEditable="True"
+                          Text="{Binding Series, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding SeriesOptions}"
+                          FontSize="15" />
 
-                <TextBlock Grid.Row="0" Grid.Column="2" Text="★ 机种：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,0,6,0"/>
-                <ComboBox Grid.Row="0" Grid.Column="3" IsEditable="True" Text="{Binding MachineType, UpdateSourceTrigger=PropertyChanged}"
-                      ItemsSource="{Binding MachineTypeOptions}" FontSize="15" Height="34" VerticalContentAlignment="Center"/>
+                <TextBlock Grid.Row="0"
+                           Grid.Column="2"
+                           Margin="12,0,6,0"
+                           VerticalAlignment="Center"
+                           Text="★ 机种："
+                           FontSize="15"
+                           FontWeight="Bold"
+                           Foreground="#E74C3C" />
+                <ComboBox Grid.Row="0"
+                          Grid.Column="3"
+                          Height="34"
+                          VerticalContentAlignment="Center"
+                          IsEditable="True"
+                          Text="{Binding MachineType, UpdateSourceTrigger=PropertyChanged}"
+                          ItemsSource="{Binding MachineTypeOptions}"
+                          FontSize="15" />
 
-                <TextBlock Grid.Row="0" Grid.Column="4" Text="创建：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="12,0,4,0"/>
+                <TextBlock Grid.Row="0"
+                           Grid.Column="4"
+                           Margin="12,0,4,0"
+                           VerticalAlignment="Center"
+                           Text="创建："
+                           FontSize="13"
+                           Foreground="#6C757D" />
                 <!-- 改：删 Width="100"，加 MinWidth="134" 占位防空值抖动 -->
-                <TextBlock Grid.Row="0" Grid.Column="5" Text="{Binding CreatedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" MinWidth="134"/>
+                <TextBlock Grid.Row="0"
+                           Grid.Column="5"
+                           MinWidth="134"
+                           VerticalAlignment="Center"
+                           Text="{Binding CreatedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}"
+                           FontSize="13"
+                           Foreground="#6C757D" />
 
-                <TextBlock Grid.Row="0" Grid.Column="6" Text="修改：" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                <TextBlock Grid.Row="0" Grid.Column="7" Text="{Binding LastModifiedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}" FontSize="13" Foreground="#6C757D" VerticalAlignment="Center"/>
+                <TextBlock Grid.Row="0"
+                           Grid.Column="6"
+                           Margin="8,0,4,0"
+                           VerticalAlignment="Center"
+                           Text="修改："
+                           FontSize="13"
+                           Foreground="#6C757D" />
+                <TextBlock Grid.Row="0"
+                           Grid.Column="7"
+                           VerticalAlignment="Center"
+                           Text="{Binding LastModifiedTime, StringFormat='yyyy-MM-dd HH:mm:ss'}"
+                           FontSize="13"
+                           Foreground="#6C757D" />
 
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="★ 工位：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="0,10,6,0"/>
-                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
-                    <RadioButton Content="左工位" IsChecked="{Binding IsLeftWorkstation, Mode=OneWay}" Command="{Binding SelectLeftWorkstationCommand}" FontSize="15" Margin="0,0,16,0"/>
-                    <RadioButton Content="右工位" IsChecked="{Binding IsRightWorkstation, Mode=OneWay}" Command="{Binding SelectRightWorkstationCommand}" FontSize="15"/>
+                <TextBlock Grid.Row="1"
+                           Grid.Column="0"
+                           Margin="0,10,6,0"
+                           VerticalAlignment="Center"
+                           Text="★ 工位："
+                           FontSize="15"
+                           FontWeight="Bold"
+                           Foreground="#E74C3C" />
+                <StackPanel Grid.Row="1"
+                            Grid.Column="1"
+                            Margin="0,10,0,0"
+                            Orientation="Horizontal">
+                    <RadioButton Margin="0,0,16,0"
+                                 Content="左工位"
+                                 IsChecked="{Binding IsLeftWorkstation, Mode=OneWay}"
+                                 Command="{Binding SelectLeftWorkstationCommand}"
+                                 FontSize="15" />
+                    <RadioButton Content="右工位"
+                                 IsChecked="{Binding IsRightWorkstation, Mode=OneWay}"
+                                 Command="{Binding SelectRightWorkstationCommand}"
+                                 FontSize="15" />
                 </StackPanel>
 
-                <TextBlock Grid.Row="1" Grid.Column="2" Text="★ 方案名称：" FontSize="15" FontWeight="Bold" Foreground="#E74C3C" VerticalAlignment="Center" Margin="12,10,6,0"/>
-                <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
-                     FontSize="15" Height="34" VerticalContentAlignment="Center" BorderBrush="#CED4DA" Margin="0,10,0,0" MaxLength="50"/>
+                <TextBlock Grid.Row="1"
+                           Grid.Column="2"
+                           Margin="12,10,6,0"
+                           VerticalAlignment="Center"
+                           Text="★ 程序名称："
+                           FontSize="15"
+                           FontWeight="Bold"
+                           Foreground="#E74C3C" />
+                <TextBox Grid.Row="1"
+                         Grid.Column="3"
+                         Height="34"
+                         Margin="0,10,0,0"
+                         VerticalContentAlignment="Center"
+                         Text="{Binding PlanName, UpdateSourceTrigger=PropertyChanged}"
+                         FontSize="15"
+                         BorderBrush="#CED4DA"
+                         MaxLength="50" />
             </Grid>
         </Border>
 
         <!-- ===== 扫描枪状态栏 ===== -->
-        <Border Grid.Row="2" CornerRadius="6" BorderThickness="1" Padding="10,6" Margin="0,0,0,8">
+        <Border Grid.Row="2"
+                Margin="0,0,0,8"
+                Padding="10,6"
+                CornerRadius="6"
+                BorderThickness="1">
             <Border.Style>
                 <Style TargetType="Border">
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
-                            <Setter Property="Background" Value="#FFF3CD"/>
-                            <Setter Property="BorderBrush" Value="#FFEAA7"/>
+                            <Setter Property="Background" Value="#FFF3CD" />
+                            <Setter Property="BorderBrush" Value="#FFEAA7" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
-                            <Setter Property="Background" Value="#E9ECEF"/>
-                            <Setter Property="BorderBrush" Value="#CED4DA"/>
+                            <Setter Property="Background" Value="#E9ECEF" />
+                            <Setter Property="BorderBrush" Value="#CED4DA" />
                         </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Border.Style>
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock FontSize="16" VerticalAlignment="Center">
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Orientation="Horizontal">
+                    <TextBlock VerticalAlignment="Center" FontSize="16">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
-                                        <Setter Property="Text" Value="📷"/>
+                                        <Setter Property="Text" Value="📷" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
-                                        <Setter Property="Text" Value="📴"/>
+                                        <Setter Property="Text" Value="📴" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
-                    <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="Bold" Margin="4,0,0,0">
+                    <TextBlock Margin="4,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="14"
+                               FontWeight="Bold">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsScannerConnected}" Value="True">
-                                        <Setter Property="Text" Value="扫描枪已连接 — 扫码自动填充机种名称"/>
-                                        <Setter Property="Foreground" Value="#856404"/>
+                                        <Setter Property="Text" Value="扫描枪已连接 — 扫码自动填充机种名称" />
+                                        <Setter Property="Foreground" Value="#856404" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding IsScannerConnected}" Value="False">
-                                        <Setter Property="Text" Value="扫描枪未连接"/>
-                                        <Setter Property="Foreground" Value="#6C757D"/>
+                                        <Setter Property="Text" Value="扫描枪未连接" />
+                                        <Setter Property="Foreground" Value="#6C757D" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -214,11 +323,20 @@
                     </TextBlock>
                 </StackPanel>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0"
-                    Visibility="{Binding IsScannerConnected, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <TextBlock Text="最近扫描: " FontSize="13" Foreground="#856404" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding ScannedBarcode}" FontSize="13" FontWeight="Bold"
-                       Foreground="#856404" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1"
+                            Margin="20,0,0,0"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Visibility="{Binding IsScannerConnected, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock VerticalAlignment="Center"
+                               Text="最近扫描: "
+                               FontSize="13"
+                               Foreground="#856404" />
+                    <TextBlock VerticalAlignment="Center"
+                               Text="{Binding ScannedBarcode}"
+                               FontSize="13"
+                               FontWeight="Bold"
+                               Foreground="#856404" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -226,176 +344,205 @@
         <!-- ===== 项目列表区 ===== -->
         <Grid Grid.Row="3" Margin="0,0,0,12">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <!-- 项目表头 -->
-            <Border Grid.Row="0" Background="#34495E" CornerRadius="6,6,0,0" Padding="10,8">
+            <Border Grid.Row="0"
+                    Padding="10,8"
+                    Background="#34495E"
+                    CornerRadius="6,6,0,0">
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="📋 检测项目列表" FontSize="16" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="📋 检测项目列表"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="White" />
                     <UniformGrid Grid.Column="1" Rows="1" Columns="4">
-                        <Button Style="{StaticResource ActionButtonStyle}" Width="90" Background="#27AE60"
-                                Content="⬆ 上移" Command="{Binding MoveItemUpCommand}" Margin="2,0"/>
-                        <Button Style="{StaticResource ActionButtonStyle}" Width="90" Background="#F39C12"
-                                Content="⬇ 下移" Command="{Binding MoveItemDownCommand}" Margin="2,0"/>
-                        <Button Style="{StaticResource ActionButtonStyle}" Width="90" Background="#3498DB"
-                                Content="➕ 新增项目" Command="{Binding AddItemCommand}" Margin="2,0"/>
-                        <Button Style="{StaticResource ActionButtonStyle}" Width="90" Background="#E74C3C"
-                                Content="🗑 删除项目" Command="{Binding DeleteItemCommand}" Margin="2,0"/>
+                        <Button Width="90"
+                                Margin="2,0"
+                                Style="{StaticResource ActionButtonStyle}"
+                                Background="#27AE60"
+                                Content="⬆ 上移"
+                                Command="{Binding MoveItemUpCommand}" />
+                        <Button Width="90"
+                                Margin="2,0"
+                                Style="{StaticResource ActionButtonStyle}"
+                                Background="#F39C12"
+                                Content="⬇ 下移"
+                                Command="{Binding MoveItemDownCommand}" />
+                        <Button Width="90"
+                                Margin="2,0"
+                                Style="{StaticResource ActionButtonStyle}"
+                                Background="#3498DB"
+                                Content="➕ 新增项目"
+                                Command="{Binding AddItemCommand}" />
+                        <Button Width="90"
+                                Margin="2,0"
+                                Style="{StaticResource ActionButtonStyle}"
+                                Background="#E74C3C"
+                                Content="🗑 删除项目"
+                                Command="{Binding DeleteItemCommand}" />
                     </UniformGrid>
                 </Grid>
             </Border>
 
             <!-- 项目DataGrid -->
-            <DataGrid Grid.Row="1" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}"
-                      Style="{StaticResource ItemDataGridStyle}" ColumnHeaderStyle="{StaticResource ItemColumnHeaderStyle}">
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding Items}"
+                      SelectedItem="{Binding SelectedItem}"
+                      Style="{StaticResource ItemDataGridStyle}"
+                      ColumnHeaderStyle="{StaticResource ItemColumnHeaderStyle}">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="序号" Binding="{Binding Index}" Width="70">
+                    <DataGridTextColumn Width="70" Header="序号" Binding="{Binding Index}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="15"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="15" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTemplateColumn Header="引脚(左)" Width="120">
+                    <DataGridTemplateColumn Width="120" Header="引脚(左)">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox IsEditable="True"
+                                <ComboBox Height="30"
+                                          VerticalContentAlignment="Center"
+                                          IsEditable="True"
                                           Text="{Binding PinLeft, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding DataContext.PinOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
-                                          Height="30"
-                                          VerticalContentAlignment="Center"
                                           BorderThickness="1"
-                                          BorderBrush="#CED4DA"/>
+                                          BorderBrush="#CED4DA" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTemplateColumn Header="左极性" Width="90">
+                    <DataGridTemplateColumn Width="90" Header="左极性">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox IsEditable="False"
+                                <ComboBox Height="30"
+                                          VerticalContentAlignment="Center"
+                                          IsEditable="False"
                                           SelectedItem="{Binding PinLeftPolarity, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding DataContext.PinPolarityOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
-                                          Height="30"
-                                          VerticalContentAlignment="Center"
                                           BorderThickness="1"
-                                          BorderBrush="#CED4DA"/>
+                                          BorderBrush="#CED4DA" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTextColumn Header="" Width="30" IsReadOnly="True">
+                    <DataGridTextColumn Width="30" Header="" IsReadOnly="True">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="18"/>
-                                <Setter Property="FontWeight" Value="ExtraBold"/>
-                                <Setter Property="Foreground" Value="#2C3E50"/>
-                                <Setter Property="Text" Value="-"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="18" />
+                                <Setter Property="FontWeight" Value="ExtraBold" />
+                                <Setter Property="Foreground" Value="#2C3E50" />
+                                <Setter Property="Text" Value="-" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTemplateColumn Header="引脚(右)" Width="120">
+                    <DataGridTemplateColumn Width="120" Header="引脚(右)">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox IsEditable="True"
+                                <ComboBox Height="30"
+                                          VerticalContentAlignment="Center"
+                                          IsEditable="True"
                                           Text="{Binding PinRight, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding DataContext.PinOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
-                                          Height="30"
-                                          VerticalContentAlignment="Center"
                                           BorderThickness="1"
-                                          BorderBrush="#CED4DA"/>
+                                          BorderBrush="#CED4DA" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTemplateColumn Header="右极性" Width="90">
+                    <DataGridTemplateColumn Width="90" Header="右极性">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox IsEditable="False"
+                                <ComboBox Height="30"
+                                          VerticalContentAlignment="Center"
+                                          IsEditable="False"
                                           SelectedItem="{Binding PinRightPolarity, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding DataContext.PinPolarityOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                           FontSize="15"
-                                          Height="30"
-                                          VerticalContentAlignment="Center"
                                           BorderThickness="1"
-                                          BorderBrush="#CED4DA"/>
+                                          BorderBrush="#CED4DA" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTextColumn Header="项目名称" Width="150">
+                    <DataGridTextColumn Width="150" Header="项目名称">
                         <DataGridTextColumn.Binding>
                             <MultiBinding StringFormat="{}{0}-{1}">
-                                <Binding Path="PinLeft"/>
-                                <Binding Path="PinRight"/>
+                                <Binding Path="PinLeft" />
+                                <Binding Path="PinRight" />
                             </MultiBinding>
                         </DataGridTextColumn.Binding>
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="15"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
-                                <Setter Property="Foreground" Value="#2C3E50"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="15" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter Property="Foreground" Value="#2C3E50" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTemplateColumn Header="检查方式" Width="150">
+                    <DataGridTemplateColumn Width="150" Header="检查方式">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox IsEditable="True"
+                                <ComboBox Height="30"
+                                          VerticalContentAlignment="Center"
+                                          IsEditable="True"
                                           IsReadOnly="True"
                                           Text="{Binding CheckMode, UpdateSourceTrigger=PropertyChanged}"
                                           ItemsSource="{Binding CheckModeOptions}"
                                           FontSize="15"
-                                          Height="30"
-                                          VerticalContentAlignment="Center"
                                           BorderThickness="1"
-                                          BorderBrush="#CED4DA"/>
+                                          BorderBrush="#CED4DA" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <!-- ★ "下限"列：根据 CheckMode 条件渲染
-                         导通模式 → ComboBox 绑定 ModeValue（OPEN/SHORT）
-                         电阻值模式 → TextBox 绑定 LowerLimit（配置阈值） -->
-                    <DataGridTemplateColumn Header="下限 (Ω)" Width="210">
+                    <!--
+                        ★ "下限"列：根据 CheckMode 条件渲染
+                        导通模式 → ComboBox 绑定 ModeValue（OPEN/SHORT）
+                        电阻值模式 → TextBox 绑定 LowerLimit（配置阈值）
+                    -->
+                    <DataGridTemplateColumn Width="210" Header="下限 (Ω)">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Grid>
                                     <!-- 导通模式：ComboBox（OPEN / SHORT） -->
-                                    <ComboBox IsEditable="True"
+                                    <ComboBox Height="30"
+                                              VerticalContentAlignment="Center"
+                                              IsEditable="True"
                                               IsReadOnly="True"
                                               Text="{Binding ModeValue, UpdateSourceTrigger=PropertyChanged}"
                                               ItemsSource="{Binding DataContext.ContinuityUnitOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               FontSize="15"
-                                              Height="30"
-                                              VerticalContentAlignment="Center"
                                               BorderThickness="1"
                                               BorderBrush="#CED4DA">
                                         <ComboBox.Style>
                                             <Style TargetType="ComboBox">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Setter Property="Visibility" Value="Collapsed" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding CheckMode}" Value="导通">
-                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Setter Property="Visibility" Value="Visible" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -406,44 +553,44 @@
                                     <StackPanel>
                                         <StackPanel.Style>
                                             <Style TargetType="StackPanel">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Setter Property="Visibility" Value="Collapsed" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding CheckMode}" Value="电阻值">
-                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Setter Property="Visibility" Value="Visible" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </StackPanel.Style>
                                         <TextBox x:Name="LowerLimitInput"
-                                                 Text="{Binding LowerLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
-                                                 FontSize="15"
                                                  Height="28"
-                                                 MaxLength="12"
+                                                 HorizontalContentAlignment="Center"
+                                                 VerticalContentAlignment="Center"
                                                  behaviors:NumericTextBoxBehavior.IsEnabled="True"
                                                  behaviors:NumericTextBoxBehavior.AllowDecimal="True"
                                                  behaviors:NumericTextBoxBehavior.AllowNegative="False"
                                                  behaviors:NumericTextBoxBehavior.MinValue="0"
                                                  behaviors:NumericTextBoxBehavior.MaxValue="119999900"
                                                  behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
-                                                 VerticalContentAlignment="Center"
+                                                 Text="{Binding LowerLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
+                                                 FontSize="15"
+                                                 MaxLength="12"
                                                  BorderThickness="1"
-                                                 BorderBrush="#CED4DA"
-                                                 HorizontalContentAlignment="Center"/>
+                                                 BorderBrush="#CED4DA" />
                                         <Popup PlacementTarget="{Binding ElementName=LowerLimitInput}"
                                                Placement="Bottom"
                                                IsOpen="{Binding IsKeyboardFocusWithin, ElementName=LowerLimitInput, Mode=OneWay}"
                                                AllowsTransparency="True"
                                                Focusable="False">
-                                            <Border Background="#FFF3CD"
+                                            <Border MaxWidth="280"
+                                                    Padding="8,5"
+                                                    Background="#FFF3CD"
                                                     BorderBrush="#F1C40F"
                                                     BorderThickness="1"
-                                                    CornerRadius="4"
-                                                    Padding="8,5"
-                                                    MaxWidth="280">
+                                                    CornerRadius="4">
                                                 <TextBlock Text="{Binding Text, ElementName=LowerLimitInput, Converter={StaticResource ResistanceInputHintConverter}}"
                                                            FontSize="12"
                                                            Foreground="#856404"
-                                                           TextWrapping="Wrap"/>
+                                                           TextWrapping="Wrap" />
                                             </Border>
                                         </Popup>
                                     </StackPanel>
@@ -452,34 +599,34 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTemplateColumn Header="上限 (Ω)" Width="210">
+                    <DataGridTemplateColumn Width="210" Header="上限 (Ω)">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel>
                                     <TextBox x:Name="UpperLimitInput"
-                                             Text="{Binding UpperLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
-                                             IsEnabled="{Binding IsResistanceMode}"
-                                             FontSize="15"
                                              Height="28"
-                                             MaxLength="12"
+                                             HorizontalContentAlignment="Center"
+                                             VerticalContentAlignment="Center"
                                              behaviors:NumericTextBoxBehavior.IsEnabled="True"
                                              behaviors:NumericTextBoxBehavior.AllowDecimal="True"
                                              behaviors:NumericTextBoxBehavior.AllowNegative="False"
                                              behaviors:NumericTextBoxBehavior.MinValue="0"
                                              behaviors:NumericTextBoxBehavior.MaxValue="119999900"
                                              behaviors:NumericTextBoxBehavior.MaxDecimalPlaces="4"
-                                             VerticalContentAlignment="Center"
+                                             Text="{Binding UpperLimit, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"
+                                             IsEnabled="{Binding IsResistanceMode}"
+                                             FontSize="15"
+                                             MaxLength="12"
                                              BorderThickness="1"
-                                             BorderBrush="#CED4DA"
-                                             HorizontalContentAlignment="Center">
+                                             BorderBrush="#CED4DA">
                                         <TextBox.Style>
                                             <Style TargetType="TextBox">
-                                                <Setter Property="Background" Value="White"/>
+                                                <Setter Property="Background" Value="White" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsResistanceMode}" Value="False">
-                                                        <Setter Property="Background" Value="#E9ECEF"/>
-                                                        <Setter Property="Foreground" Value="#ADB5BD"/>
-                                                        <Setter Property="Text" Value=""/>
+                                                        <Setter Property="Background" Value="#E9ECEF" />
+                                                        <Setter Property="Foreground" Value="#ADB5BD" />
+                                                        <Setter Property="Text" Value="" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -490,16 +637,16 @@
                                            IsOpen="{Binding IsKeyboardFocusWithin, ElementName=UpperLimitInput, Mode=OneWay}"
                                            AllowsTransparency="True"
                                            Focusable="False">
-                                        <Border Background="#FFF3CD"
+                                        <Border MaxWidth="280"
+                                                Padding="8,5"
+                                                Background="#FFF3CD"
                                                 BorderBrush="#F1C40F"
                                                 BorderThickness="1"
-                                                CornerRadius="4"
-                                                Padding="8,5"
-                                                MaxWidth="280">
+                                                CornerRadius="4">
                                             <TextBlock Text="{Binding Text, ElementName=UpperLimitInput, Converter={StaticResource ResistanceInputHintConverter}}"
                                                        FontSize="12"
                                                        Foreground="#856404"
-                                                       TextWrapping="Wrap"/>
+                                                       TextWrapping="Wrap" />
                                         </Border>
                                     </Popup>
                                 </StackPanel>
@@ -512,12 +659,29 @@
         </Grid>
 
         <!-- ===== 底部按钮区 ===== -->
-        <Border Grid.Row="4" Background="#F8F9FA" CornerRadius="8" BorderBrush="#DEE2E6" BorderThickness="1" Padding="14,12">
-            <UniformGrid Rows="1" Columns="2" HorizontalAlignment="Center">
-                <Button Style="{StaticResource ActionButtonStyle}" Width="160" Height="44" Background="#27AE60"
-                        Content="💾 保存方案" FontSize="17" Command="{Binding SavePlanCommand}" Margin="8,0"/>
-                <Button Style="{StaticResource ActionButtonStyle}" Width="160" Height="44" Background="#95A5A6"
-                        Content="↩ 返回" FontSize="17" Command="{Binding GoBackCommand}" Margin="8,0"/>
+        <Border Grid.Row="4"
+                Padding="14,12"
+                Background="#F8F9FA"
+                CornerRadius="8"
+                BorderBrush="#DEE2E6"
+                BorderThickness="1">
+            <UniformGrid HorizontalAlignment="Center" Rows="1" Columns="2">
+                <Button Width="160"
+                        Height="44"
+                        Margin="8,0"
+                        Style="{StaticResource ActionButtonStyle}"
+                        Background="#27AE60"
+                        Content="💾 保存方案"
+                        FontSize="17"
+                        Command="{Binding SavePlanCommand}" />
+                <Button Width="160"
+                        Height="44"
+                        Margin="8,0"
+                        Style="{StaticResource ActionButtonStyle}"
+                        Background="#95A5A6"
+                        Content="↩ 返回"
+                        FontSize="17"
+                        Command="{Binding GoBackCommand}" />
             </UniformGrid>
         </Border>
     </Grid>

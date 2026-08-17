@@ -184,7 +184,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// 统计文本（如 "共 5 个方案"）
         /// </summary>
         [ObservableProperty]
-        private string _totalCountText = "共 0 个方案";
+        private string _totalCountText = "共 0 个程序";
 
         /// <summary>
         /// 是否有选中的方案行（用于控制编辑/删除按钮的可用状态）

@@ -1,14 +1,14 @@
 ﻿<!--
-  ============================================================
-  文件: Views/TestPageView.xaml
-  修改: 
+    ============================================================
+    文件: Views/TestPageView.xaml
+    修改:
     1. 移除"开始测试"按钮（改为PLC信号触发）
     2. 输入控件绑定 IsEnabled/IsReadOnly（由UiState控制）
     3. 右上角状态显示区绑定物检传感器状态
     4. 方案名称从只读TextBox改为可编辑ComboBox（与机种联动）
     5. 底部操作区重构：终了独立突出 + 调试工具可折叠面板
     6. 日志区与按钮区滚动分离，日志区固定不随按钮区滚动
-  ============================================================
+    ============================================================
 -->
 <UserControl x:Class="GMandE7BUSBPoorSolderingInspectionDevice.Views.TestPageView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -18,99 +18,100 @@
              xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
              xmlns:converters="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Common.Converters"
              xmlns:vm="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.ViewModels"
-              mc:Ignorable="d"
-              d:DataContext="{d:DesignInstance Type=vm:TestPageViewModel}"
-              d:DesignWidth="1200" d:DesignHeight="800"
-              FontFamily="Microsoft YaHei"
-              PreviewMouseDown="TestPageView_PreviewMouseDown">
+             d:DataContext="{d:DesignInstance Type=vm:TestPageViewModel}"
+             d:DesignWidth="1200"
+             d:DesignHeight="800"
+             FontFamily="Microsoft YaHei"
+             PreviewMouseDown="TestPageView_PreviewMouseDown"
+             mc:Ignorable="d">
 
     <UserControl.Resources>
-        <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter"/>
-        <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter"/>
-        <converters:DeviceConnectionStatusToColorConverter x:Key="DeviceConnectionStatusToColorConverter"/>
-        <converters:DeviceConnectionStatusToShadowColorConverter x:Key="DeviceConnectionStatusToShadowColorConverter"/>
-        <converters:BoolInverterConverter x:Key="BoolInverterConverter"/>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <converters:JudgmentToBackgroundConverter x:Key="JudgmentToBackgroundConverter" />
+        <converters:JudgmentToForegroundConverter x:Key="JudgmentToForegroundConverter" />
+        <converters:DeviceConnectionStatusToColorConverter x:Key="DeviceConnectionStatusToColorConverter" />
+        <converters:DeviceConnectionStatusToShadowColorConverter x:Key="DeviceConnectionStatusToShadowColorConverter" />
+        <converters:BoolInverterConverter x:Key="BoolInverterConverter" />
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
 
         <Style x:Key="TopPanelBorder" TargetType="Border">
-            <Setter Property="Background" Value="#F8F9FA"/>
-            <Setter Property="BorderBrush" Value="#DEE2E6"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="6"/>
-            <Setter Property="Padding" Value="12"/>
-            <Setter Property="Margin" Value="4"/>
+            <Setter Property="Background" Value="#F8F9FA" />
+            <Setter Property="BorderBrush" Value="#DEE2E6" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Margin" Value="4" />
         </Style>
 
         <!-- 计数数值框：只读显示框外观 -->
         <Style x:Key="StatBoxStyle" TargetType="Border">
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#CED4DA"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="3"/>
-            <Setter Property="Padding" Value="8,3"/>
-            <Setter Property="MinWidth" Value="130"/>
-            <Setter Property="HorizontalAlignment" Value="Stretch"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="#FFFFFF" />
+            <Setter Property="BorderBrush" Value="#CED4DA" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="MinWidth" Value="130" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
         <!-- 计数值：等宽、加粗、右对齐 -->
         <Style x:Key="StatValueStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="20"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="FontFamily" Value="Consolas"/>
-            <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextAlignment" Value="Right" />
         </Style>
 
-        <!-- ============================================================
-     设备状态指示灯按钮样式（优化版）
-     改动说明：
-       1. 按钮尺寸调整为 150×60，适配顶部区域高度
-       2. 主标签 18px，状态标签 13px，保持清晰可读
-       3. 移除状态标签 Opacity="0.9"，消除光晕效应
-       4. 增加底部阴影 BorderThickness="0,0,0,4"，参照"终了"按钮立体感
-       5. 圆角 6px → 8px，保持层次感
-       6. 内部布局由 StackPanel 改为 Grid + RowDefinitions，行距更舒展
-     ============================================================ -->
+        <!--
+            ============================================================
+            设备状态指示灯按钮样式（优化版）
+            改动说明：
+            1. 按钮尺寸调整为 150×60，适配顶部区域高度
+            2. 主标签 18px，状态标签 13px，保持清晰可读
+            3. 移除状态标签 Opacity="0.9"，消除光晕效应
+            4. 增加底部阴影 BorderThickness="0,0,0,4"，参照"终了"按钮立体感
+            5. 圆角 6px → 8px，保持层次感
+            6. 内部布局由 StackPanel 改为 Grid + RowDefinitions，行距更舒展
+            ============================================================
+        -->
         <Style x:Key="DeviceStatusButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="150"/>
-            <Setter Property="Height" Value="60"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Padding" Value="8,2"/>
+            <Setter Property="Width" Value="150" />
+            <Setter Property="Height" Value="60" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="8,2" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <!-- 外层：表面背景色 -->
-                        <Border x:Name="buttonSurface"
-                        Background="{TemplateBinding Background}"
-                        CornerRadius="8">
+                        <Border x:Name="buttonSurface" Background="{TemplateBinding Background}" CornerRadius="8">
                             <!-- 内层：底部厚阴影（立体感来源） -->
                             <Border x:Name="buttonBase"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="0,0,0,4"
-                            CornerRadius="8">
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,0,0,4"
+                                    CornerRadius="8">
                                 <ContentPresenter x:Name="buttonContent"
-                                          HorizontalAlignment="Center"
-                                          VerticalAlignment="Center"
-                                          Margin="{TemplateBinding Padding}"/>
+                                                  Margin="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
                             </Border>
                         </Border>
                         <ControlTemplate.Triggers>
                             <!-- 悬停：轻微变亮 -->
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88"/>
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88" />
                             </Trigger>
                             <!-- 按下：底部阴影变薄 + 内容下移 → 按下反馈 -->
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2"/>
-                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0"/>
+                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2" />
+                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0" />
                             </Trigger>
                             <!-- 禁用：半透明 -->
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45"/>
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -120,41 +121,37 @@
 
 
         <Style x:Key="ClearCountButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="50"/>
-            <Setter Property="Height" Value="50"/>
-            <Setter Property="Background" Value="#E74C3C"/>
-            <Setter Property="BorderBrush" Value="#C0392B"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Width" Value="50" />
+            <Setter Property="Height" Value="50" />
+            <Setter Property="Background" Value="#E74C3C" />
+            <Setter Property="BorderBrush" Value="#C0392B" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="0" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="clearButtonSurface"
-                                    Background="{TemplateBinding Background}"
-                                    CornerRadius="25">
+                        <Border x:Name="clearButtonSurface" Background="{TemplateBinding Background}" CornerRadius="25">
                             <Border x:Name="clearButtonBase"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="0,0,0,4"
                                     CornerRadius="25">
-                                <ContentPresenter x:Name="clearButtonContent"
-                                                  HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"/>
+                                <ContentPresenter x:Name="clearButtonContent" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="clearButtonSurface" Property="Opacity" Value="0.88"/>
+                                <Setter TargetName="clearButtonSurface" Property="Opacity" Value="0.88" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="clearButtonBase" Property="BorderThickness" Value="0,0,0,2"/>
-                                <Setter TargetName="clearButtonContent" Property="Margin" Value="0,2,0,0"/>
+                                <Setter TargetName="clearButtonBase" Property="BorderThickness" Value="0,0,0,2" />
+                                <Setter TargetName="clearButtonContent" Property="Margin" Value="0,2,0,0" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="clearButtonSurface" Property="Opacity" Value="0.45"/>
+                                <Setter TargetName="clearButtonSurface" Property="Opacity" Value="0.45" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -163,39 +160,37 @@
         </Style>
 
         <Style x:Key="TestDataGridStyle" TargetType="DataGrid">
-            <Setter Property="FontSize" Value="18"/>
-            <Setter Property="RowHeight" Value="40"/>
-            <Setter Property="ColumnHeaderHeight" Value="40"/>
-            <Setter Property="GridLinesVisibility" Value="All"/>
-            <Setter Property="HorizontalGridLinesBrush" Value="#DEE2E6"/>
-            <Setter Property="VerticalGridLinesBrush" Value="#DEE2E6"/>
-            <Setter Property="BorderBrush" Value="#CED4DA"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CanUserAddRows" Value="False"/>
-            <Setter Property="CanUserDeleteRows" Value="False"/>
-            <Setter Property="CanUserReorderColumns" Value="False"/>
-            <Setter Property="IsReadOnly" Value="True"/>
-            <Setter Property="AutoGenerateColumns" Value="False"/>
-            <Setter Property="SelectionMode" Value="Single"/>
-            <Setter Property="RowBackground" Value="White"/>
-            <Setter Property="AlternatingRowBackground" Value="#F8F9FA"/>
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="RowHeight" Value="40" />
+            <Setter Property="ColumnHeaderHeight" Value="40" />
+            <Setter Property="GridLinesVisibility" Value="All" />
+            <Setter Property="HorizontalGridLinesBrush" Value="#DEE2E6" />
+            <Setter Property="VerticalGridLinesBrush" Value="#DEE2E6" />
+            <Setter Property="BorderBrush" Value="#CED4DA" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="CanUserReorderColumns" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="SelectionMode" Value="Single" />
+            <Setter Property="RowBackground" Value="White" />
+            <Setter Property="AlternatingRowBackground" Value="#F8F9FA" />
         </Style>
 
         <!-- 调试工具按钮统一样式，减少重复模板 -->
         <Style x:Key="DebugButtonStyle" TargetType="Button">
-            <Setter Property="Height" Value="38"/>
-            <Setter Property="MinWidth" Value="110"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Height" Value="38" />
+            <Setter Property="MinWidth" Value="110" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="6" BorderThickness="0">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6" BorderThickness="0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
@@ -204,39 +199,35 @@
 
         <!-- 真实模式的终了和复位共用主操作样式，避免与调试按钮混用。 -->
         <Style x:Key="MainOperationButtonStyle" TargetType="Button">
-            <Setter Property="Height" Value="72"/>
-            <Setter Property="FontSize" Value="22"/>
-            <Setter Property="FontWeight" Value="ExtraBold"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Margin" Value="0,0,0,10"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Height" Value="72" />
+            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontWeight" Value="ExtraBold" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="buttonSurface"
-                                Background="{TemplateBinding Background}"
-                                CornerRadius="12">
+                        <Border x:Name="buttonSurface" Background="{TemplateBinding Background}" CornerRadius="12">
                             <Border x:Name="buttonBase"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="0,0,0,4"
                                     CornerRadius="12">
-                                <ContentPresenter x:Name="buttonContent"
-                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                <ContentPresenter x:Name="buttonContent" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
                             </Border>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88"/>
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.88" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2"/>
-                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0"/>
+                                <Setter TargetName="buttonBase" Property="BorderThickness" Value="0,0,0,2" />
+                                <Setter TargetName="buttonContent" Property="Margin" Value="0,2,0,0" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45"/>
+                                <Setter TargetName="buttonSurface" Property="Opacity" Value="0.45" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -247,111 +238,127 @@
 
     <Grid Background="#FFFFFF">
         <Grid.RowDefinitions>
-            <RowDefinition Height="260"/>
-            <RowDefinition Height="70"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="145"/>
+            <RowDefinition Height="260" />
+            <RowDefinition Height="70" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="145" />
         </Grid.RowDefinitions>
 
         <!-- 1. 顶部状态与统计区 -->
         <Grid Grid.Row="0" Margin="8">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="400"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="260"/>
+                <ColumnDefinition Width="400" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="260" />
             </Grid.ColumnDefinitions>
 
             <!-- 1-1 左侧：生产统计面板（纵向计数布局） -->
             <Border Grid.Column="0" Style="{StaticResource TopPanelBorder}">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
                     <!-- 参照信息只来自当前参照选择，不与实际扫码机种混用。 -->
-                    <Border Grid.Row="0" Padding="8,5" Margin="0,0,0,6" CornerRadius="5"
+                    <Border Grid.Row="0"
+                            Margin="0,0,0,6"
+                            Padding="8,5"
+                            CornerRadius="5"
                             BorderThickness="2">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Background" Value="#E8F8F5"/>
-                                <Setter Property="BorderBrush" Value="#27AE60"/>
+                                <Setter Property="Background" Value="#E8F8F5" />
+                                <Setter Property="BorderBrush" Value="#27AE60" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsReferenceMachineMismatch}" Value="True">
-                                        <Setter Property="Background" Value="#FDEDEC"/>
-                                        <Setter Property="BorderBrush" Value="#E74C3C"/>
+                                        <Setter Property="Background" Value="#FDEDEC" />
+                                        <Setter Property="BorderBrush" Value="#E74C3C" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="参照：" FontSize="14" FontWeight="Bold"
-                                       Foreground="#1E8449" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Text="{Binding ReferenceDisplayText}"
-                                       FontSize="14" FontWeight="Bold"
-                                       TextWrapping="Wrap" ToolTip="{Binding ReferenceDisplayText}"
-                                       VerticalAlignment="Center" Margin="4,0,8,0">
+                            <TextBlock Grid.Column="0"
+                                       VerticalAlignment="Center"
+                                       Text="参照："
+                                       FontSize="14"
+                                       FontWeight="Bold"
+                                       Foreground="#1E8449" />
+                            <TextBlock Grid.Column="1"
+                                       Margin="4,0,8,0"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding ReferenceDisplayText}"
+                                       FontSize="14"
+                                       FontWeight="Bold"
+                                       TextWrapping="Wrap"
+                                       ToolTip="{Binding ReferenceDisplayText}">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="#1E8449"/>
+                                        <Setter Property="Foreground" Value="#1E8449" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsReferenceMachineMismatch}" Value="True">
-                                                <Setter Property="Foreground" Value="#C0392B"/>
+                                                <Setter Property="Foreground" Value="#C0392B" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </TextBlock.Style>
                             </TextBlock>
-                            <Button Grid.Column="2" Content="重新选择" Width="82" Height="28"
-                                    Command="{Binding ChangeReferenceSelectionCommand}"/>
+                            <Button Grid.Column="2"
+                                    Width="82"
+                                    Height="28"
+                                    Content="重新选择"
+                                    Command="{Binding ChangeReferenceSelectionCommand}" />
                         </Grid>
                     </Border>
 
                     <TextBlock Grid.Row="1"
+                               Margin="2,0,2,6"
                                Text="实际机种与参照机种不一致，请确认扫码是否正确"
-                               Foreground="#C0392B" FontSize="13" FontWeight="Bold"
+                               Foreground="#C0392B"
+                               FontSize="13"
+                               FontWeight="Bold"
                                TextTrimming="CharacterEllipsis"
                                ToolTip="实际机种与参照机种不一致，请确认扫码是否正确"
-                               Visibility="{Binding IsReferenceMachineMismatch, Converter={StaticResource BoolToVisibilityConverter}}"
-                               Margin="2,0,2,6"/>
+                               Visibility="{Binding IsReferenceMachineMismatch, Converter={StaticResource BoolToVisibilityConverter}}" />
 
                     <!-- 方案名称：全量和机种过滤两种模式都只显示方案名称，内部绑定完整方案对象 -->
                     <DockPanel Grid.Row="2" Margin="0,0,0,8">
-                        <TextBlock Text="方案名称："
+                        <TextBlock VerticalAlignment="Center"
+                                   Text="程序名称："
                                    FontSize="14"
-                                   Foreground="#495057"
-                                   VerticalAlignment="Center"/>
-                        <ComboBox IsEditable="True"
+                                   Foreground="#495057" />
+                        <ComboBox x:Name="SchemeNameComboBox"
+                                  Height="32"
+                                  VerticalContentAlignment="Center"
+                                  IsEditable="True"
                                   Text="{Binding SchemeName, UpdateSourceTrigger=PropertyChanged}"
                                   ItemsSource="{Binding PlanNameOptions}"
                                   SelectedItem="{Binding SelectedPlanOption}"
                                   DisplayMemberPath="PlanName"
                                   FontSize="14"
                                   FontWeight="Bold"
-                                  Height="32"
-                                  VerticalContentAlignment="Center"
                                   IsTextSearchEnabled="True"
                                   StaysOpenOnEdit="True"
                                   MaxDropDownHeight="300"
-                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                  x:Name="SchemeNameComboBox">
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ComboBox.Style>
                                 <Style TargetType="ComboBox">
-                                    <Setter Property="BorderBrush" Value="#CED4DA"/>
-                                    <Setter Property="BorderThickness" Value="1"/>
-                                    <Setter Property="ToolTip" Value=""/>
+                                    <Setter Property="BorderBrush" Value="#CED4DA" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Setter Property="ToolTip" Value="" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsSchemeNameInvalid}" Value="True">
-                                            <Setter Property="BorderBrush" Value="#E74C3C"/>
-                                            <Setter Property="BorderThickness" Value="2"/>
-                                            <Setter Property="ToolTip" Value="当前方案无效，请重新选择"/>
+                                            <Setter Property="BorderBrush" Value="#E74C3C" />
+                                            <Setter Property="BorderThickness" Value="2" />
+                                            <Setter Property="ToolTip" Value="当前方案无效，请重新选择" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -362,103 +369,100 @@
                     <!-- 三行计数：标签、数值框、单位按列对齐，清零按钮跨三行 -->
                     <Grid Grid.Row="3" VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="60" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36" />
+                            <RowDefinition Height="36" />
+                            <RowDefinition Height="36" />
                         </Grid.RowDefinitions>
 
                         <!-- 检查数量 -->
-                        <TextBlock Grid.Row="0" Grid.Column="0"
+                        <TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Margin="0,0,6,0"
+                                   VerticalAlignment="Center"
                                    Text="检查数量："
                                    FontSize="14"
-                                   Foreground="#495057"
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,6,0"/>
-                        <Border Grid.Row="0" Grid.Column="1"
+                                   Foreground="#495057" />
+                        <Border Grid.Row="0"
+                                Grid.Column="1"
                                 Style="{StaticResource StatBoxStyle}"
                                 ToolTip="{Binding TotalCount}">
-                            <Viewbox Stretch="Uniform"
-                                     StretchDirection="DownOnly"
-                                     HorizontalAlignment="Right">
-                                <TextBlock Text="{Binding TotalCount}"
-                                           Style="{StaticResource StatValueStyle}"
-                                           Foreground="#3498DB"/>
+                            <Viewbox HorizontalAlignment="Right" Stretch="Uniform" StretchDirection="DownOnly">
+                                <TextBlock Text="{Binding TotalCount}" Style="{StaticResource StatValueStyle}" Foreground="#3498DB" />
                             </Viewbox>
                         </Border>
-                        <TextBlock Grid.Row="0" Grid.Column="2"
+                        <TextBlock Grid.Row="0"
+                                   Grid.Column="2"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
                                    Text="台"
                                    FontSize="13"
-                                   Foreground="#6C757D"
-                                   VerticalAlignment="Center"
-                                   Margin="6,0,0,0"/>
+                                   Foreground="#6C757D" />
 
                         <!-- 良品数量 -->
-                        <TextBlock Grid.Row="1" Grid.Column="0"
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Margin="0,0,6,0"
+                                   VerticalAlignment="Center"
                                    Text="良品数量："
                                    FontSize="14"
-                                   Foreground="#495057"
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,6,0"/>
-                        <Border Grid.Row="1" Grid.Column="1"
+                                   Foreground="#495057" />
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
                                 Style="{StaticResource StatBoxStyle}"
                                 ToolTip="{Binding PassCount}">
-                            <Viewbox Stretch="Uniform"
-                                     StretchDirection="DownOnly"
-                                     HorizontalAlignment="Right">
-                                <TextBlock Text="{Binding PassCount}"
-                                           Style="{StaticResource StatValueStyle}"
-                                           Foreground="#27AE60"/>
+                            <Viewbox HorizontalAlignment="Right" Stretch="Uniform" StretchDirection="DownOnly">
+                                <TextBlock Text="{Binding PassCount}" Style="{StaticResource StatValueStyle}" Foreground="#27AE60" />
                             </Viewbox>
                         </Border>
-                        <TextBlock Grid.Row="1" Grid.Column="2"
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="2"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
                                    Text="台"
                                    FontSize="13"
-                                   Foreground="#6C757D"
-                                   VerticalAlignment="Center"
-                                   Margin="6,0,0,0"/>
+                                   Foreground="#6C757D" />
 
                         <!-- 不良数量 -->
-                        <TextBlock Grid.Row="2" Grid.Column="0"
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Margin="0,0,6,0"
+                                   VerticalAlignment="Center"
                                    Text="不良数量："
                                    FontSize="14"
-                                   Foreground="#495057"
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,6,0"/>
-                        <Border Grid.Row="2" Grid.Column="1"
+                                   Foreground="#495057" />
+                        <Border Grid.Row="2"
+                                Grid.Column="1"
                                 Style="{StaticResource StatBoxStyle}"
                                 ToolTip="{Binding FailCount}">
-                            <Viewbox Stretch="Uniform"
-                                     StretchDirection="DownOnly"
-                                     HorizontalAlignment="Right">
-                                <TextBlock Text="{Binding FailCount}"
-                                           Style="{StaticResource StatValueStyle}"
-                                           Foreground="#E74C3C"/>
+                            <Viewbox HorizontalAlignment="Right" Stretch="Uniform" StretchDirection="DownOnly">
+                                <TextBlock Text="{Binding FailCount}" Style="{StaticResource StatValueStyle}" Foreground="#E74C3C" />
                             </Viewbox>
                         </Border>
-                        <TextBlock Grid.Row="2" Grid.Column="2"
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="2"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
                                    Text="台"
                                    FontSize="13"
-                                   Foreground="#6C757D"
-                                   VerticalAlignment="Center"
-                                   Margin="6,0,0,0"/>
+                                   Foreground="#6C757D" />
 
                         <!-- 清零按钮：命令和样式保持不变 -->
                         <Button Grid.Row="0"
-                                Grid.Column="3"
                                 Grid.RowSpan="3"
+                                Grid.Column="3"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
                                 Content="清零"
                                 Command="{Binding ClearCountersCommand}"
                                 Style="{StaticResource ClearCountButtonStyle}"
-                                VerticalAlignment="Center"
-                                HorizontalAlignment="Center"
                                 ToolTip="清零计数器"
-                                Cursor="Hand"/>
+                                Cursor="Hand" />
                     </Grid>
                 </Grid>
             </Border>
@@ -467,118 +471,134 @@
             <Border Grid.Column="1" Style="{StaticResource TopPanelBorder}">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Border Grid.Row="0" Background="#2C3E50" CornerRadius="4" Padding="10,6" Margin="0,0,0,8">
-                        <TextBlock Text="{Binding CurrentTime}" FontSize="22" FontWeight="Bold"
-                                   Foreground="#ECF0F1" HorizontalAlignment="Center" FontFamily="Consolas"/>
+                    <Border Grid.Row="0"
+                            Margin="0,0,0,8"
+                            Padding="10,6"
+                            Background="#2C3E50"
+                            CornerRadius="4">
+                        <TextBlock HorizontalAlignment="Center"
+                                   Text="{Binding CurrentTime}"
+                                   FontSize="22"
+                                   FontWeight="Bold"
+                                   Foreground="#ECF0F1"
+                                   FontFamily="Consolas" />
                     </Border>
 
                     <UniformGrid Grid.Row="1"
-                                 Rows="2"
-                                 Columns="2"
                                  HorizontalAlignment="Center"
-                                 VerticalAlignment="Center">
+                                 VerticalAlignment="Center"
+                                 Rows="2"
+                                 Columns="2">
                         <!-- ═══════════ PLC 按钮 ═══════════ -->
-                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Command="{Binding ReconnectPlcCommand}" Margin="4">
+                        <Button Margin="4" Style="{StaticResource DeviceStatusButtonStyle}" Command="{Binding ReconnectPlcCommand}">
                             <Button.Background>
-                                <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}" />
                             </Button.Background>
                             <Button.BorderBrush>
-                                <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding PlcConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}" />
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="30"/>
-                                    <RowDefinition Height="20"/>
+                                    <RowDefinition Height="30" />
+                                    <RowDefinition Height="20" />
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="PLC"
-                                           FontSize="18" FontWeight="Bold"
+                                <TextBlock Grid.Row="0"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Bottom"/>
-                                <TextBlock Grid.Row="1" Text="{Binding PlcStatusText}"
-                                           FontSize="13"
+                                           VerticalAlignment="Bottom"
+                                           Text="PLC"
+                                           FontSize="18"
+                                           FontWeight="Bold" />
+                                <TextBlock Grid.Row="1"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Top"/>
+                                           VerticalAlignment="Top"
+                                           Text="{Binding PlcStatusText}"
+                                           FontSize="13" />
                             </Grid>
                         </Button>
 
                         <!-- ═══════════ 扫描仪按钮 ═══════════ -->
-                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Command="{Binding ReconnectScannerCommand}" Margin="4">
+                        <Button Margin="4" Style="{StaticResource DeviceStatusButtonStyle}" Command="{Binding ReconnectScannerCommand}">
                             <Button.Background>
-                                <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}" />
                             </Button.Background>
                             <Button.BorderBrush>
-                                <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding ScannerConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}" />
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="30"/>
-                                    <RowDefinition Height="20"/>
+                                    <RowDefinition Height="30" />
+                                    <RowDefinition Height="20" />
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="扫描仪"
-                                           FontSize="18" FontWeight="Bold"
+                                <TextBlock Grid.Row="0"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Bottom"/>
-                                <TextBlock Grid.Row="1" Text="{Binding ScannerStatusText}"
-                                           FontSize="13"
+                                           VerticalAlignment="Bottom"
+                                           Text="扫描仪"
+                                           FontSize="18"
+                                           FontWeight="Bold" />
+                                <TextBlock Grid.Row="1"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Top"/>
+                                           VerticalAlignment="Top"
+                                           Text="{Binding ScannerStatusText}"
+                                           FontSize="13" />
                             </Grid>
                         </Button>
 
                         <!-- ═══════════ 万用表按钮 ═══════════ -->
-                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Command="{Binding ReconnectDmmCommand}" Margin="4">
+                        <Button Margin="4" Style="{StaticResource DeviceStatusButtonStyle}" Command="{Binding ReconnectDmmCommand}">
                             <Button.Background>
-                                <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToColorConverter}}" />
                             </Button.Background>
                             <Button.BorderBrush>
-                                <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}"/>
+                                <SolidColorBrush Color="{Binding DmmConnectionStatus, Converter={StaticResource DeviceConnectionStatusToShadowColorConverter}}" />
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="30"/>
-                                    <RowDefinition Height="20"/>
+                                    <RowDefinition Height="30" />
+                                    <RowDefinition Height="20" />
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="万用表"
-                                           FontSize="18" FontWeight="Bold"
+                                <TextBlock Grid.Row="0"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Bottom"/>
-                                <TextBlock Grid.Row="1" Text="{Binding DmmStatusText}"
-                                           FontSize="13"
+                                           VerticalAlignment="Bottom"
+                                           Text="万用表"
+                                           FontSize="18"
+                                           FontWeight="Bold" />
+                                <TextBlock Grid.Row="1"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Top"/>
+                                           VerticalAlignment="Top"
+                                           Text="{Binding DmmStatusText}"
+                                           FontSize="13" />
                             </Grid>
                         </Button>
 
                         <!-- ═══════════ PC 按钮 ═══════════ -->
-                        <Button Style="{StaticResource DeviceStatusButtonStyle}"
-                                Margin="4" IsHitTestVisible="False">
+                        <Button Margin="4" Style="{StaticResource DeviceStatusButtonStyle}" IsHitTestVisible="False">
                             <Button.Background>
-                                <SolidColorBrush Color="#27AE60"/>
+                                <SolidColorBrush Color="#27AE60" />
                             </Button.Background>
                             <Button.BorderBrush>
                                 <!-- PC 按钮颜色固定为绿色，阴影色手动计算：#27AE60 × 0.6 = #186A40 -->
-                                <SolidColorBrush Color="#186A40"/>
+                                <SolidColorBrush Color="#186A40" />
                             </Button.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="30"/>
-                                    <RowDefinition Height="20"/>
+                                    <RowDefinition Height="30" />
+                                    <RowDefinition Height="20" />
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="PC"
-                                           FontSize="18" FontWeight="Bold"
+                                <TextBlock Grid.Row="0"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Bottom"/>
-                                <TextBlock Grid.Row="1" Text="就绪"
-                                           FontSize="13"
+                                           VerticalAlignment="Bottom"
+                                           Text="PC"
+                                           FontSize="18"
+                                           FontWeight="Bold" />
+                                <TextBlock Grid.Row="1"
                                            HorizontalAlignment="Center"
-                                           VerticalAlignment="Top"/>
+                                           VerticalAlignment="Top"
+                                           Text="就绪"
+                                           FontSize="13" />
                             </Grid>
                         </Button>
                     </UniformGrid>
@@ -589,102 +609,112 @@
             <Border Grid.Column="2" Style="{StaticResource TopPanelBorder}">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="测试状态" FontSize="16" FontWeight="Bold"
-                               Foreground="#495057" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Grid.Row="0"
+                               Margin="0,0,0,8"
+                               HorizontalAlignment="Center"
+                               Text="测试状态"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#495057" />
 
-                    <Border Grid.Row="1" CornerRadius="8" Margin="4">
+                    <Border Grid.Row="1" Margin="4" CornerRadius="8">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Background" Value="#95A5A6"/>
+                                <Setter Property="Background" Value="#95A5A6" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding UiState}" Value="CanStart">
-                                        <Setter Property="Background" Value="#27AE60"/>
+                                        <Setter Property="Background" Value="#27AE60" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Testing">
-                                        <Setter Property="Background" Value="#F39C12"/>
+                                        <Setter Property="Background" Value="#F39C12" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="CompletedPass">
-                                        <Setter Property="Background" Value="#27AE60"/>
+                                        <Setter Property="Background" Value="#27AE60" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="CompletedFail">
-                                        <Setter Property="Background" Value="#E74C3C"/>
+                                        <Setter Property="Background" Value="#E74C3C" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Paused">
-                                        <Setter Property="Background" Value="#E74C3C"/>
+                                        <Setter Property="Background" Value="#E74C3C" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="AwaitingReset">
-                                        <Setter Property="Background" Value="#F1C40F"/>
+                                        <Setter Property="Background" Value="#F1C40F" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
-                                        <Setter Property="Background" Value="#E74C3C"/>
+                                        <Setter Property="Background" Value="#E74C3C" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="SingleItemNgStopped">
-                                        <Setter Property="Background" Value="#E74C3C"/>
+                                        <Setter Property="Background" Value="#E74C3C" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Resetting">
-                                        <Setter Property="Background" Value="#8E44AD"/>
+                                        <Setter Property="Background" Value="#8E44AD" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="ResetFailed">
-                                        <Setter Property="Background" Value="#D35400"/>
+                                        <Setter Property="Background" Value="#D35400" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Error">
-                                        <Setter Property="Background" Value="#C0392B"/>
+                                        <Setter Property="Background" Value="#C0392B" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding UiState}" Value="Ready">
-                                        <Setter Property="Background" Value="#95A5A6"/>
+                                        <Setter Property="Background" Value="#95A5A6" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
-                        <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
-                                 HorizontalAlignment="Stretch" VerticalAlignment="Center">
-                            <TextBlock FontSize="28" FontWeight="Bold" Foreground="White"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Viewbox HorizontalAlignment="Stretch"
+                                 VerticalAlignment="Center"
+                                 Stretch="Uniform"
+                                 StretchDirection="DownOnly">
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       FontSize="28"
+                                       FontWeight="Bold"
+                                       Foreground="White">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="待机中"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding UiState}" Value="CanStart">
-                                            <Setter Property="Text" Value="可启动"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="Testing">
-                                            <Setter Property="Text" Value="测试中"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="CompletedPass">
-                                            <Setter Property="Text" Value="OK"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="CompletedFail">
-                                            <Setter Property="Text" Value="NG"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="Paused">
-                                            <Setter Property="Text" Value="已停止，请复位"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="AwaitingReset">
-                                            <Setter Property="Text" Value="请复位"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
-                                            <Setter Property="Text" Value="急停中"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="SingleItemNgStopped">
-                                            <Setter Property="Text" Value="NG"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="Resetting">
-                                            <Setter Property="Text" Value="复位中"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="ResetFailed">
-                                            <Setter Property="Text" Value="复位失败"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="Error">
-                                            <Setter Property="Text" Value="异常"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding UiState}" Value="Ready">
-                                            <Setter Property="Text" Value="待机中"/>
-                                        </DataTrigger>
+                                        <Setter Property="Text" Value="待机中" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding UiState}" Value="CanStart">
+                                                <Setter Property="Text" Value="可启动" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="Testing">
+                                                <Setter Property="Text" Value="测试中" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="CompletedPass">
+                                                <Setter Property="Text" Value="OK" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="CompletedFail">
+                                                <Setter Property="Text" Value="NG" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="Paused">
+                                                <Setter Property="Text" Value="已停止，请复位" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="AwaitingReset">
+                                                <Setter Property="Text" Value="请复位" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="EmergencyStop">
+                                                <Setter Property="Text" Value="急停中" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="SingleItemNgStopped">
+                                                <Setter Property="Text" Value="NG" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="Resetting">
+                                                <Setter Property="Text" Value="复位中" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="ResetFailed">
+                                                <Setter Property="Text" Value="复位失败" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="Error">
+                                                <Setter Property="Text" Value="异常" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding UiState}" Value="Ready">
+                                                <Setter Property="Text" Value="待机中" />
+                                            </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </TextBlock.Style>
@@ -692,21 +722,36 @@
                         </Viewbox>
                     </Border>
 
-                    <Border Grid.Row="2" Background="#2C3E50" CornerRadius="5" Height="48" Margin="4,6,4,0"
+                    <Border Grid.Row="2"
+                            Height="48"
+                            Margin="4,6,4,0"
+                            Background="#2C3E50"
+                            CornerRadius="5"
                             ToolTip="{Binding ElapsedSecondsText, StringFormat='本轮检测耗时：{0} 秒'}">
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Viewbox Grid.Column="0" Stretch="Uniform" StretchDirection="DownOnly"
-                                     HorizontalAlignment="Stretch" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding ElapsedSecondsText}" FontFamily="Consolas"
-                                           FontSize="23" FontWeight="Bold" Foreground="#F1C40F"
-                                           HorizontalAlignment="Right"/>
+                            <Viewbox Grid.Column="0"
+                                     HorizontalAlignment="Stretch"
+                                     VerticalAlignment="Center"
+                                     Stretch="Uniform"
+                                     StretchDirection="DownOnly">
+                                <TextBlock HorizontalAlignment="Right"
+                                           Text="{Binding ElapsedSecondsText}"
+                                           FontFamily="Consolas"
+                                           FontSize="23"
+                                           FontWeight="Bold"
+                                           Foreground="#F1C40F" />
                             </Viewbox>
-                            <TextBlock Grid.Column="1" Text=" 秒" FontSize="18" FontWeight="Bold"
-                                       Foreground="#ECF0F1" VerticalAlignment="Center" Margin="2,0,8,0"/>
+                            <TextBlock Grid.Column="1"
+                                       Margin="2,0,8,0"
+                                       VerticalAlignment="Center"
+                                       Text=" 秒"
+                                       FontSize="18"
+                                       FontWeight="Bold"
+                                       Foreground="#ECF0F1" />
                         </Grid>
                     </Border>
                 </Grid>
@@ -714,55 +759,74 @@
         </Grid>
 
         <!-- 2. 中部信息录入区 -->
-        <Border Grid.Row="1" Background="#F8F9FA" BorderBrush="#DEE2E6" BorderThickness="1"
-                CornerRadius="6" Margin="8,4" Padding="12,8"
+        <Border Grid.Row="1"
+                Margin="8,4"
+                Padding="12,8"
+                Background="#F8F9FA"
+                BorderBrush="#DEE2E6"
+                BorderThickness="1"
+                CornerRadius="6"
                 IsEnabled="{Binding IsInputEnabled}">
-            <UniformGrid Rows="1" Columns="3" HorizontalAlignment="Stretch">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="机种名称：" FontSize="16" FontWeight="Bold"
-                               Foreground="#495057" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <UniformGrid HorizontalAlignment="Stretch" Rows="1" Columns="3">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Orientation="Horizontal">
+                    <TextBlock Margin="0,0,8,0"
+                               VerticalAlignment="Center"
+                               Text="机种名称："
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#495057" />
                     <Grid x:Name="ModelNameInputContainer" Width="200" Height="36">
-                        <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}"
-                                 FontSize="16" MaxLength="50" Padding="6,0,30,0"
-                                 Height="36" VerticalContentAlignment="Center"
-                                 x:Name="ModelNameTextBox"
+                        <TextBox x:Name="ModelNameTextBox"
+                                 Height="36"
+                                 Padding="6,0,30,0"
+                                 VerticalContentAlignment="Center"
+                                 Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}"
+                                 FontSize="16"
+                                 MaxLength="50"
                                  KeyDown="InputTextBox_KeyDown"
                                  LostKeyboardFocus="ModelNameTextBox_LostKeyboardFocus">
                             <TextBox.Style>
                                 <Style TargetType="TextBox">
-                                    <Setter Property="BorderBrush" Value="#CED4DA"/>
-                                    <Setter Property="BorderThickness" Value="1"/>
+                                    <Setter Property="BorderBrush" Value="#CED4DA" />
+                                    <Setter Property="BorderThickness" Value="1" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsReferenceMachineMismatch}" Value="True">
-                                            <Setter Property="BorderBrush" Value="#E74C3C"/>
-                                            <Setter Property="BorderThickness" Value="2"/>
-                                            <Setter Property="ToolTip" Value="实际机种与参照机种不一致，请确认扫码是否正确"/>
+                                            <Setter Property="BorderBrush" Value="#E74C3C" />
+                                            <Setter Property="BorderThickness" Value="2" />
+                                            <Setter Property="ToolTip" Value="实际机种与参照机种不一致，请确认扫码是否正确" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </TextBox.Style>
                         </TextBox>
 
-                        <Button Content="×"
+                        <Button Width="26"
+                                Height="26"
+                                Margin="0,0,4,0"
+                                Padding="0"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Content="×"
                                 Command="{Binding ClearModelNameCommand}"
-                                Width="26" Height="26" Margin="0,0,4,0"
-                                HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Background="Transparent" BorderThickness="0"
-                                Foreground="#6C757D" FontSize="16" Padding="0"
-                                FocusVisualStyle="{x:Null}" Cursor="Hand"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Foreground="#6C757D"
+                                FontSize="16"
+                                FocusVisualStyle="{x:Null}"
+                                Cursor="Hand"
                                 ToolTip="清除机种名称">
                             <Button.Style>
                                 <Style TargetType="Button">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Setter Property="Visibility" Value="Collapsed" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding ElementName=ModelNameInputContainer, Path=IsMouseOver}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Setter Property="Visibility" Value="Visible" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding ElementName=ModelNameTextBox, Path=IsKeyboardFocusWithin}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Setter Property="Visibility" Value="Visible" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding ModelName}" Value="">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Setter Property="Visibility" Value="Collapsed" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -771,33 +835,51 @@
                     </Grid>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="序列号：" FontSize="16" FontWeight="Bold"
-                               Foreground="#495057" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox Text="{Binding SerialNumber, UpdateSourceTrigger=PropertyChanged}"
-                             FontSize="16" Width="220" Height="36" MaxLength="50"
-                             VerticalContentAlignment="Center" BorderBrush="#CED4DA" BorderThickness="1"
-                             x:Name="SerialNumberTextBox" KeyDown="InputTextBox_KeyDown"/>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Orientation="Horizontal">
+                    <TextBlock Margin="0,0,8,0"
+                               VerticalAlignment="Center"
+                               Text="序列号："
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#495057" />
+                    <TextBox x:Name="SerialNumberTextBox"
+                             Width="220"
+                             Height="36"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding SerialNumber, UpdateSourceTrigger=PropertyChanged}"
+                             FontSize="16"
+                             MaxLength="50"
+                             BorderBrush="#CED4DA"
+                             BorderThickness="1"
+                             KeyDown="InputTextBox_KeyDown" />
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="作业员：" FontSize="16" FontWeight="Bold"
-                               Foreground="#495057" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <Border Width="160" Height="36" Background="#E8F8F5"
-                            BorderBrush="#27AE60" BorderThickness="2" CornerRadius="4"
-                            Margin="0,0,8,0">
-                        <TextBlock Text="{Binding OperatorName}"
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Orientation="Horizontal">
+                    <TextBlock Margin="0,0,8,0"
+                               VerticalAlignment="Center"
+                               Text="作业员："
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#495057" />
+                    <Border Width="160"
+                            Height="36"
+                            Margin="0,0,8,0"
+                            Background="#E8F8F5"
+                            BorderBrush="#27AE60"
+                            BorderThickness="2"
+                            CornerRadius="4">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding OperatorName}"
                                    FontSize="16"
                                    FontWeight="Bold"
                                    Foreground="#1E8449"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"/>
+                                   TextTrimming="CharacterEllipsis" />
                     </Border>
-                    <Button Content="重新选择"
-                            Width="86"
+                    <Button Width="86"
                             Height="36"
-                            Command="{Binding ChangeOperatorCommand}"/>
+                            Content="重新选择"
+                            Command="{Binding ChangeOperatorCommand}" />
                 </StackPanel>
             </UniformGrid>
         </Border>
@@ -805,148 +887,188 @@
         <!-- 3. 下部测试列表区（自定义合并表头 + DataGrid） -->
         <Grid Grid.Row="2" Margin="8,4">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" x:Name="CustomHeaderGrid">
+            <Grid x:Name="CustomHeaderGrid" Grid.Row="0">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="40"/>
-                    <RowDefinition Height="40"/>
+                    <RowDefinition Height="40" />
+                    <RowDefinition Height="40" />
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row="0" Background="#2C3E50" BorderBrush="#1A252F" BorderThickness="0,0,0,1">
+                <Border Grid.Row="0"
+                        Background="#2C3E50"
+                        BorderBrush="#1A252F"
+                        BorderThickness="0,0,0,1">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition x:Name="HeaderCol0" Width="80"/>
-                            <ColumnDefinition x:Name="HeaderCol1" Width="200"/>
-                            <ColumnDefinition x:Name="HeaderCol2" Width="420"/>
-                            <ColumnDefinition x:Name="HeaderCol5" Width="280"/>
-                            <ColumnDefinition x:Name="HeaderCol6" Width="180"/>
+                            <ColumnDefinition x:Name="HeaderCol0" Width="80" />
+                            <ColumnDefinition x:Name="HeaderCol1" Width="200" />
+                            <ColumnDefinition x:Name="HeaderCol2" Width="420" />
+                            <ColumnDefinition x:Name="HeaderCol5" Width="280" />
+                            <ColumnDefinition x:Name="HeaderCol6" Width="180" />
                         </Grid.ColumnDefinitions>
 
                         <Border Grid.Column="0" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="序号" Foreground="White" FontSize="16" FontWeight="Bold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="序号"
+                                       Foreground="White"
+                                       FontSize="16"
+                                       FontWeight="Bold" />
                         </Border>
                         <Border Grid.Column="1" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="项目名称" Foreground="White" FontSize="16" FontWeight="Bold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="项目名称"
+                                       Foreground="White"
+                                       FontSize="16"
+                                       FontWeight="Bold" />
                         </Border>
                         <Border Grid.Column="2" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="检查条件" Foreground="White" FontSize="16" FontWeight="Bold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="检查条件"
+                                       Foreground="White"
+                                       FontSize="16"
+                                       FontWeight="Bold" />
                         </Border>
                         <Border Grid.Column="3" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="检查结果" Foreground="White" FontSize="16" FontWeight="Bold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="检查结果"
+                                       Foreground="White"
+                                       FontSize="16"
+                                       FontWeight="Bold" />
                         </Border>
                         <Border Grid.Column="4">
-                            <TextBlock Text="判  定" Foreground="White" FontSize="16" FontWeight="Bold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="判  定"
+                                       Foreground="White"
+                                       FontSize="16"
+                                       FontWeight="Bold" />
                         </Border>
                     </Grid>
                 </Border>
 
-                <Border Grid.Row="1" Background="#34495E" BorderBrush="#1A252F" BorderThickness="0,0,0,2">
+                <Border Grid.Row="1"
+                        Background="#34495E"
+                        BorderBrush="#1A252F"
+                        BorderThickness="0,0,0,2">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="{Binding ElementName=HeaderCol0, Path=Width}"/>
-                            <ColumnDefinition Width="{Binding ElementName=HeaderCol1, Path=Width}"/>
-                            <ColumnDefinition x:Name="HeaderSubCol2" Width="120"/>
-                            <ColumnDefinition x:Name="HeaderSubCol3" Width="150"/>
-                            <ColumnDefinition x:Name="HeaderSubCol4" Width="150"/>
-                            <ColumnDefinition Width="{Binding ElementName=HeaderCol5, Path=Width}"/>
-                            <ColumnDefinition Width="{Binding ElementName=HeaderCol6, Path=Width}"/>
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol0, Path=Width}" />
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol1, Path=Width}" />
+                            <ColumnDefinition x:Name="HeaderSubCol2" Width="120" />
+                            <ColumnDefinition x:Name="HeaderSubCol3" Width="150" />
+                            <ColumnDefinition x:Name="HeaderSubCol4" Width="150" />
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol5, Path=Width}" />
+                            <ColumnDefinition Width="{Binding ElementName=HeaderCol6, Path=Width}" />
                         </Grid.ColumnDefinitions>
 
-                        <Border Grid.Column="0"/>
-                        <Border Grid.Column="1"/>
+                        <Border Grid.Column="0" />
+                        <Border Grid.Column="1" />
                         <Border Grid.Column="2" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="检查方式" Foreground="#BDC3C7" FontSize="14" FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="检查方式"
+                                       Foreground="#BDC3C7"
+                                       FontSize="14"
+                                       FontWeight="SemiBold" />
                         </Border>
                         <Border Grid.Column="3" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="下限 (Ω)" Foreground="#BDC3C7" FontSize="14" FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="下限 (Ω)"
+                                       Foreground="#BDC3C7"
+                                       FontSize="14"
+                                       FontWeight="SemiBold" />
                         </Border>
                         <Border Grid.Column="4" BorderBrush="#1A252F" BorderThickness="0,0,1,0">
-                            <TextBlock Text="上限 (Ω)" Foreground="#BDC3C7" FontSize="14" FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Text="上限 (Ω)"
+                                       Foreground="#BDC3C7"
+                                       FontSize="14"
+                                       FontWeight="SemiBold" />
                         </Border>
-                        <Border Grid.Column="5"/>
-                        <Border Grid.Column="6"/>
+                        <Border Grid.Column="5" />
+                        <Border Grid.Column="6" />
                     </Grid>
                 </Border>
             </Grid>
 
-            <DataGrid Grid.Row="1" ItemsSource="{Binding TestItems}"
+            <DataGrid x:Name="TestDataGrid"
+                      Grid.Row="1"
+                      ItemsSource="{Binding TestItems}"
                       Style="{StaticResource TestDataGridStyle}"
-                      HeadersVisibility="None" x:Name="TestDataGrid">
+                      HeadersVisibility="None">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Binding="{Binding Index}" Width="80">
+                    <DataGridTextColumn Width="80" Binding="{Binding Index}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="18"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="18" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTextColumn Binding="{Binding ItemName}" Width="200">
+                    <DataGridTextColumn Width="200" Binding="{Binding ItemName}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="18"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="18" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTextColumn Binding="{Binding CheckMode}" Width="120">
+                    <DataGridTextColumn Width="120" Binding="{Binding CheckMode}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="16"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="16" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTextColumn Binding="{Binding LowerLimitText}" Width="150">
+                    <DataGridTextColumn Width="150" Binding="{Binding LowerLimitText}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="16"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="16" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTextColumn Binding="{Binding UpperLimitText}" Width="150">
+                    <DataGridTextColumn Width="150" Binding="{Binding UpperLimitText}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="16"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="16" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <DataGridTextColumn Binding="{Binding CheckResult}" Width="280">
+                    <DataGridTextColumn Width="280" Binding="{Binding CheckResult}">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                <Setter Property="FontSize" Value="18"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
-                                <Setter Property="TextWrapping" Value="NoWrap"/>
-                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
-                                <Setter Property="ToolTip" Value="{Binding CheckResult}"/>
+                                <Setter Property="HorizontalAlignment" Value="Center" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="FontSize" Value="18" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter Property="TextWrapping" Value="NoWrap" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                <Setter Property="ToolTip" Value="{Binding CheckResult}" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
@@ -954,14 +1076,17 @@
                     <DataGridTemplateColumn Width="180">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <Border CornerRadius="4" Padding="12,4" Margin="4">
+                                <Border Margin="4" Padding="12,4" CornerRadius="4">
                                     <Border.Background>
-                                        <SolidColorBrush Color="{Binding Judgment, Converter={StaticResource JudgmentToBackgroundConverter}}"/>
+                                        <SolidColorBrush Color="{Binding Judgment, Converter={StaticResource JudgmentToBackgroundConverter}}" />
                                     </Border.Background>
-                                    <TextBlock Text="{Binding Judgment}" FontSize="22" FontWeight="ExtraBold"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Text="{Binding Judgment}"
+                                               FontSize="22"
+                                               FontWeight="ExtraBold">
                                         <TextBlock.Foreground>
-                                            <SolidColorBrush Color="{Binding Judgment, Converter={StaticResource JudgmentToForegroundConverter}}"/>
+                                            <SolidColorBrush Color="{Binding Judgment, Converter={StaticResource JudgmentToForegroundConverter}}" />
                                         </TextBlock.Foreground>
                                     </TextBlock>
                                 </Border>
@@ -983,27 +1108,33 @@
         <!-- ================================================================ -->
         <Grid Grid.Row="3" Margin="8,4">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="320"/>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="320" />
             </Grid.ColumnDefinitions>
 
             <!-- ═══════════ 左侧：日志显示区（固定不动，ListBox自带内部滚动） ═══════════ -->
             <Border Grid.Column="0"
-                    Background="#1A1A2E" CornerRadius="6"
-                    BorderBrush="#16213E" BorderThickness="1" Padding="8">
-                <ListBox ItemsSource="{Binding LogMessages}"
-                         Background="Transparent" Foreground="#00FF88"
-                         FontFamily="Consolas" FontSize="13" BorderThickness="0"
-                         x:Name="LogListBox"
+                    Padding="8"
+                    Background="#1A1A2E"
+                    CornerRadius="6"
+                    BorderBrush="#16213E"
+                    BorderThickness="1">
+                <ListBox x:Name="LogListBox"
+                         ItemsSource="{Binding LogMessages}"
+                         Background="Transparent"
+                         Foreground="#00FF88"
+                         FontFamily="Consolas"
+                         FontSize="13"
+                         BorderThickness="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          VirtualizingPanel.ScrollUnit="Pixel">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
-                            <Setter Property="Foreground" Value="#00FF88"/>
-                            <Setter Property="Background" Value="Transparent"/>
-                            <Setter Property="Padding" Value="2,1"/>
-                            <Setter Property="FontSize" Value="13"/>
+                            <Setter Property="Foreground" Value="#00FF88" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Padding" Value="2,1" />
+                            <Setter Property="FontSize" Value="13" />
                         </Style>
                     </ListBox.ItemContainerStyle>
                 </ListBox>
@@ -1014,69 +1145,85 @@
                 只有右侧包裹 ScrollViewer，调试面板展开时右侧出现滚动条，
                 左侧日志区完全不受影响。
             -->
-            <ScrollViewer Grid.Column="1" Margin="12,0,0,0"
+            <ScrollViewer Grid.Column="1"
+                          Margin="12,0,0,0"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled">
                 <Grid>
                     <Grid.RowDefinitions>
                         <!-- 主操作区：终了按钮 -->
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto" />
                         <!-- 真实模式操作区：复位 -->
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto" />
                         <!-- 调试工具区（可折叠，仅 Fake 模式） -->
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto" />
                         <!-- 弹性空白，将按钮推到顶部 -->
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
                     <!-- ═══════ 主操作区：终了按钮 ═══════ -->
-                    <Button Grid.Row="0" Content="终了"
+                    <Button Grid.Row="0"
+                            Content="终了"
                             Command="{Binding FinishAndReturnCommand}"
                             Style="{StaticResource MainOperationButtonStyle}"
                             Background="#E74C3C"
-                            BorderBrush="#C0392B"/>
+                            BorderBrush="#C0392B" />
 
                     <!-- ═══════ 调试工具区：可折叠面板（Fake 或半实物模式） ═══════ -->
-                    <Expander Grid.Row="2" IsExpanded="False" Margin="0,0,0,0"
+                    <Expander Grid.Row="2"
+                              Margin="0,0,0,0"
+                              IsExpanded="False"
                               Visibility="{Binding IsDebugControlPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}">
                         <Expander.Header>
-                            <TextBlock Text="调试面板" FontSize="13" FontWeight="SemiBold"
-                                       Foreground="#7F8C8D" Margin="4,2"/>
+                            <TextBlock Margin="4,2"
+                                       Text="调试面板"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="#7F8C8D" />
                         </Expander.Header>
-                        <Border Background="#F5F6FA" CornerRadius="8" Padding="6"
-                                BorderBrush="#E0E0E0" BorderThickness="1">
+                        <Border Padding="6"
+                                Background="#F5F6FA"
+                                CornerRadius="8"
+                                BorderBrush="#E0E0E0"
+                                BorderThickness="1">
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <!-- 第1行：启动(DT120) | 停止(DT122) -->
-                                <UniformGrid Grid.Row="0" Rows="1" Columns="2" Margin="0,0,0,4">
+                                <UniformGrid Grid.Row="0"
+                                             Margin="0,0,0,4"
+                                             Rows="1"
+                                             Columns="2">
                                     <Button Content="启动(DT120)"
                                             Command="{Binding TriggerDebugStartCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#2E86DE"
-                                            ToolTip="写入 DT120=1，走 PLC 轮询启动复核链路"/>
+                                            ToolTip="写入 DT120=1，走 PLC 轮询启动复核链路" />
                                     <Button Content="停止(DT122)"
                                             Command="{Binding TriggerDebugStopCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#F39C12"
-                                            ToolTip="写入 DT122=1，触发停止收口流程"/>
+                                            ToolTip="写入 DT122=1，触发停止收口流程" />
                                 </UniformGrid>
 
                                 <!-- 第2行：复位(DT121) | 急停(DT123) -->
-                                <UniformGrid Grid.Row="1" Rows="1" Columns="2" Margin="0,0,0,4">
+                                <UniformGrid Grid.Row="1"
+                                             Margin="0,0,0,4"
+                                             Rows="1"
+                                             Columns="2">
                                     <Button Content="复位(DT121)"
                                             Command="{Binding TriggerDebugResetCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#8E44AD"
-                                            ToolTip="写入 DT121=1，触发复位收口流程"/>
+                                            ToolTip="写入 DT121=1，触发复位收口流程" />
                                     <Button Content="急停(DT123)"
                                             Command="{Binding TriggerDebugEmergencyStopCommand}"
                                             Style="{StaticResource DebugButtonStyle}"
                                             Background="#E74C3C"
-                                            ToolTip="写入 DT123=1，触发急停收口流程"/>
+                                            ToolTip="写入 DT123=1，触发急停收口流程" />
                                 </UniformGrid>
 
                             </Grid>
@@ -1084,13 +1231,14 @@
                     </Expander>
 
                     <!-- ═══════ 真实模式操作区：复位 ═══════ -->
-                    <Button Grid.Row="1" Content="复位"
+                    <Button Grid.Row="1"
+                            Content="复位"
                             Command="{Binding TriggerPlcResetCommand}"
                             Style="{StaticResource MainOperationButtonStyle}"
                             Background="#8E44AD"
                             BorderBrush="#6C3483"
                             ToolTip="执行设备复位"
-                            Visibility="{Binding IsRealModeResetVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            Visibility="{Binding IsRealModeResetVisible, Converter={StaticResource BoolToVisibilityConverter}}" />
                 </Grid>
             </ScrollViewer>
         </Grid>

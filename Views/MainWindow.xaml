@@ -4,37 +4,39 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:GMandE7BUSBPoorSolderingInspectionDevice.Views"
-        mc:Ignorable="d"
-        Title="GMandE7BUSBPoorSolderingInspectionDevice" Height="1000" Width="1300" MinWidth="800"  MinHeight="600" 
-        WindowStartupLocation="CenterScreen">
+        Title="GMandE7BUSBPoorSolderingInspectionDevice"
+        Width="1300"
+        Height="1000"
+        MinWidth="800"
+        MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        mc:Ignorable="d">
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- 标题栏 -->
-        <Border Grid.Row="0" Background="#2C3E50" Padding="10">
-            <TextBlock Text="GM和E78_USB焊接不良检查装置系统" 
-                       Foreground="White" 
-                       FontSize="18" 
-                       FontWeight="Bold"
-                       HorizontalAlignment="Center"/>
+        <Border Grid.Row="0" Padding="10" Background="#2C3E50">
+            <TextBlock HorizontalAlignment="Center"
+                       Text="GM5 和 E7B USB焊接不良检查装置系统"
+                       Foreground="White"
+                       FontSize="18"
+                       FontWeight="Bold" />
         </Border>
 
         <!-- 导航区域 - 这就是我们要注入内容的地方 -->
-        <ContentControl x:Name="MainRegion" 
-                        Grid.Row="1" 
-                        Margin="10"/>
+        <ContentControl x:Name="MainRegion" Grid.Row="1" Margin="10" />
 
         <!-- 状态栏 -->
-        <Border Grid.Row="2" Background="#ECF0F1" Padding="5">
-            <TextBlock x:Name="StatusText" 
-                       Text="就绪" 
+        <Border Grid.Row="2" Padding="5" Background="#ECF0F1">
+            <TextBlock x:Name="StatusText"
+                       Text="就绪"
                        Foreground="#7F8C8D"
-                       FontSize="12"/>
+                       FontSize="12" />
         </Border>
     </Grid>
 
