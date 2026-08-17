@@ -27,6 +27,22 @@ using System.Windows.Threading;
 namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 {
     /// <summary>
+    /// 程序编辑页导航参数，用于明确区分编辑已有程序和复制程序。
+    /// </summary>
+    public sealed class PlanEditNavigationParameter
+    {
+        public PlanEditNavigationParameter(PlanModel plan, bool isCopyMode)
+        {
+            Plan = plan ?? throw new ArgumentNullException(nameof(plan));
+            IsCopyMode = isCopyMode;
+        }
+
+        public PlanModel Plan { get; }
+
+        public bool IsCopyMode { get; }
+    }
+
+    /// <summary>
     /// 方案编辑/新增页面 ViewModel
     /// 管理检测方案的创建和编辑，包含检测项目列表的增删改和排序
     /// 集成扫描枪：扫码自动填充机种名称（MachineType）
@@ -46,12 +62,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 字段
 
         /// <summary>
-        /// 是否为编辑模式（true=编辑已有方案，false=新增方案）
+        /// 是否为编辑模式（true=编辑已有程序，false=新增或复制程序）
         /// </summary>
         private bool _isEditMode = false;
 
         /// <summary>
-        /// 编辑模式下的原始方案（用于处理机种变更时的文件移动）
+        /// 是否为复制模式。复制模式必须按新增语义保存，不能触发源程序文件移动。
+        /// </summary>
+        private bool _isCopyMode;
+
+        /// <summary>
+        /// 复制模式下的源程序身份，用于保存前防止覆盖源程序。
+        /// </summary>
+        private PlanModel? _copySourcePlan;
+
+        /// <summary>
+        /// 编辑模式下的原始程序（用于处理系列、机种或程序名称变更时的文件移动）
         /// </summary>
         private PlanModel? _originalPlan;
         private bool _scannerEventsSubscribed;
@@ -151,6 +177,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// </summary>
         [ObservableProperty]
         private DateTime _lastModifiedTime = DateTime.Now;
+
+        /// <summary>
+        /// 页面标题，根据新增、编辑、复制模式动态显示。
+        /// </summary>
+        [ObservableProperty]
+        private string _pageTitle = "新增程序";
 
         /// <summary>
         /// 机种下拉选项列表
@@ -390,8 +422,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 保存与返回命令
 
         /// <summary>
-        /// 保存方案
-        /// 校验必填项 → 构建PlanModel对象 → 调用存储服务保存 → 返回方案列表页
+        /// 保存程序
+        /// 校验必填项 → 构建PlanModel对象 → 调用存储服务保存 → 返回程序列表页
         /// </summary>
         [RelayCommand]
         private async Task SavePlanAsync()
@@ -411,14 +443,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 }
                 if (string.IsNullOrWhiteSpace(PlanName))
                 {
-                    await _notificationService.ShowWarningAsync("请输入方案名称！", "校验失败");
+                    await _notificationService.ShowWarningAsync("请输入程序名称！", "校验失败");
                     return;
                 }
 
                 var seriesError = NameValidationHelper.ValidateSeriesName(Series);
                 if (seriesError != null)
                 {
-                    _logger.LogWarning("[用户操作] 方案保存被拒绝：系列名称不合法 Series={Series} Error={Error}", Series, seriesError);
+                    _logger.LogWarning("[用户操作] 程序保存被拒绝：系列名称不合法 Series={Series} Error={Error}", Series, seriesError);
                     await _notificationService.ShowWarningAsync(seriesError, "校验失败");
                     return;
                 }
@@ -432,7 +464,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var machineTypeError = NameValidationHelper.ValidateMachineType(MachineType);
                 if (machineTypeError != null)
                 {
-                    _logger.LogWarning("[用户操作] 方案保存被拒绝：机种名称不合法 MachineType={MachineType} Error={Error}", MachineType, machineTypeError);
+                    _logger.LogWarning("[用户操作] 程序保存被拒绝：机种名称不合法 MachineType={MachineType} Error={Error}", MachineType, machineTypeError);
                     await _notificationService.ShowWarningAsync(machineTypeError, "校验失败");
                     return;
                 }
@@ -440,8 +472,8 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 var planNameError = NameValidationHelper.ValidatePlanName(PlanName);
                 if (planNameError != null)
                 {
-                    _logger.LogWarning("[用户操作] 方案保存被拒绝：方案名称不合法 PlanName={PlanName} Error={Error}", PlanName, planNameError);
-                    await _notificationService.ShowWarningAsync(planNameError, "校验失败");
+                    _logger.LogWarning("[用户操作] 程序保存被拒绝：程序名称不合法 PlanName={PlanName} Error={Error}", PlanName, planNameError);
+                    await _notificationService.ShowWarningAsync(ToProgramTerminology(planNameError), "校验失败");
                     return;
                 }
 
@@ -488,7 +520,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string errorMessage = "以下检测项目引脚有问题，请修正后再保存：\n\n"
                                         + string.Join("\n", pinErrors);
                     await _notificationService.ShowWarningAsync(errorMessage, "引脚校验失败");
-                    _logger.LogWarning("方案保存被拒绝：存在引脚配置错误，数量={Count}", pinErrors.Count);
+                    _logger.LogWarning("程序保存被拒绝：存在引脚配置错误，数量={Count}", pinErrors.Count);
                     return;
                 }
 
@@ -514,7 +546,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string errorMessage = "以下检测项目极性设置有误，请修正后再保存：\n\n"
                                         + string.Join("\n", polarityErrors);
                     await _notificationService.ShowWarningAsync(errorMessage, "极性校验失败");
-                    _logger.LogWarning("方案保存被拒绝：存在左右极性相同的检测项目，数量={Count}", polarityErrors.Count);
+                    _logger.LogWarning("程序保存被拒绝：存在左右极性相同的检测项目，数量={Count}", polarityErrors.Count);
                     return;
                 }
 
@@ -605,6 +637,22 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     }).ToList()
                 };
 
+                // 复制必须形成新的程序身份，工位变化不参与文件路径，不能因此绕过源程序覆盖保护。
+                if (_isCopyMode
+                    && _copySourcePlan != null
+                    && IsSamePlanIdentity(_copySourcePlan, plan))
+                {
+                    _logger.LogWarning(
+                        "[安全审计] 复制程序被拒绝覆盖源程序：{Series}/{MachineType}/{PlanName}",
+                        plan.Series,
+                        plan.MachineType,
+                        plan.PlanName);
+                    await _notificationService.ShowWarningAsync(
+                        "复制程序必须修改系列、机种或程序名称后再保存。",
+                        "复制程序校验失败");
+                    return;
+                }
+
                 bool allowDuplicatePlanName = false;
                 var sameNamePlans = await FindSamePlanNameConflictsAsync(plan);
                 if (sameNamePlans.Count > 0)
@@ -612,28 +660,28 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     string conflictDetails = string.Join(
                         "\n",
                         sameNamePlans.Select((existingPlan, index) =>
-                            $"{index + 1}. 系列“{existingPlan.Series}” / 机种“{existingPlan.MachineType}” / 方案“{existingPlan.PlanName}”"));
+                            $"{index + 1}. 系列“{existingPlan.Series}” / 机种“{existingPlan.MachineType}” / 程序“{existingPlan.PlanName}”"));
                     var targetConflict = sameNamePlans.FirstOrDefault(existingPlan =>
                         IsSamePlanIdentity(existingPlan, plan));
 
                     string conflictMessage = targetConflict != null
-                        ? $"方案名称“{plan.PlanName}”已存在以下方案：\n\n{conflictDetails}\n\n"
-                          + "当前保存目标与已有方案路径相同，继续保存将覆盖该方案。\n是否继续？"
-                        : $"方案名称“{plan.PlanName}”已存在以下方案：\n\n{conflictDetails}\n\n"
-                          + "确认后允许使用同名方案名称，是否继续？";
+                        ? $"程序名称“{plan.PlanName}”已存在以下程序：\n\n{conflictDetails}\n\n"
+                          + "当前保存目标与已有程序路径相同，继续保存将覆盖该程序。\n是否继续？"
+                        : $"程序名称“{plan.PlanName}”已存在以下程序：\n\n{conflictDetails}\n\n"
+                          + "确认后允许使用同名程序名称，是否继续？";
 
                     _logger.LogWarning(
-                        "[方案保存][同名提示] 目标={Series}/{MachineType}/{PlanName}, 冲突数量={Count}, 目标路径冲突={TargetConflict}",
+                        "[程序保存][同名提示] 目标={Series}/{MachineType}/{PlanName}, 冲突数量={Count}, 目标路径冲突={TargetConflict}",
                         plan.Series,
                         plan.MachineType,
                         plan.PlanName,
                         sameNamePlans.Count,
                         targetConflict != null);
 
-                    if (!await _notificationService.ConfirmAsync(conflictMessage, "方案名称重复确认"))
+                    if (!await _notificationService.ConfirmAsync(conflictMessage, "程序名称重复确认"))
                     {
                         _logger.LogWarning(
-                            "[方案保存][同名提示] 用户取消：目标={Series}/{MachineType}/{PlanName}",
+                            "[程序保存][同名提示] 用户取消：目标={Series}/{MachineType}/{PlanName}",
                             plan.Series,
                             plan.MachineType,
                             plan.PlanName);
@@ -642,7 +690,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
 
                     allowDuplicatePlanName = true;
                     _logger.LogWarning(
-                        "[方案保存][同名提示] 用户确认继续：目标={Series}/{MachineType}/{PlanName}",
+                        "[程序保存][同名提示] 用户确认继续：目标={Series}/{MachineType}/{PlanName}",
                         plan.Series,
                         plan.MachineType,
                         plan.PlanName);
@@ -656,26 +704,26 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                         var oldVersion = Math.Max(1, _originalPlan.Version);
                         var newVersion = oldVersion + 1;
                         var confirmed = await _notificationService.ConfirmAsync(
-                            $"当前方案内容已发生变化。\n\n保存后，方案版本将由 V{oldVersion} 更新为 V{newVersion}。\n后续检测将使用新的检测条件。\n历史测试记录不会被修改。\n\n是否继续保存？",
-                            "方案版本更新确认");
+                            $"当前程序内容已发生变化。\n\n保存后，程序版本将由 V{oldVersion} 更新为 V{newVersion}。\n后续检测将使用新的检测条件。\n历史测试记录不会被修改。\n\n是否继续保存？",
+                            "程序版本更新确认");
 
                         if (!confirmed)
                         {
-                            _logger.LogWarning("[方案版本] 用户取消版本更新保存：{MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
+                            _logger.LogWarning("[程序版本] 用户取消版本更新保存：{MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
                             return;
                         }
 
                         plan.Version = newVersion;
-                        _logger.LogWarning("[方案版本] 方案内容变化：V{OldVersion} -> V{NewVersion}", oldVersion, newVersion);
+                        _logger.LogWarning("[程序版本] 程序内容变化：V{OldVersion} -> V{NewVersion}", oldVersion, newVersion);
                     }
                     else
                     {
-                        _logger.LogWarning("[方案版本] 内容未变化，版本保持 V{Version}", plan.Version);
+                        _logger.LogWarning("[程序版本] 内容未变化，版本保持 V{Version}", plan.Version);
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("[方案版本] 新方案创建：Version=V1");
+                    _logger.LogWarning("[程序版本] 新程序创建：Version=V1");
                 }
 
                 // 同时传递原机种名和原方案名，确保方案名变更时也能正确删除旧文件
@@ -686,15 +734,15 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                     _originalPlan?.PlanName,
                     allowDuplicatePlanName);
 
-                _logger.LogInformation("方案保存成功: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
-                await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 保存成功！", "保存成功");
+                _logger.LogInformation("程序保存成功: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
+                await _notificationService.ShowInfoAsync($"程序 \"{plan.PlanName}\" 保存成功！", "保存成功");
 
-                // 返回方案设定页面
+                // 返回程序设定页面
                 await _navigationService.NavigateToAsync<PlanSettingView>();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "保存方案失败");
+                _logger.LogError(ex, "保存程序失败");
                 await _notificationService.ShowErrorAsync($"保存失败：{ex.Message}");
             }
         }
@@ -711,7 +759,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 if (HasUnsavedChanges())
                 {
                     var result = await _notificationService.ConfirmAsync(
-                        "当前方案有未保存的修改，确定要返回吗？\n未保存的修改将丢失！",
+                        "当前程序有未保存的修改，确定要返回吗？\n未保存的修改将丢失！",
                         "确认返回");
                     if (!result) return;
                 }
@@ -744,6 +792,14 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         /// </summary>
         private static string NormalizePinName(string? pinName)
             => pinName?.Trim().ToUpperInvariant() ?? string.Empty;
+
+        /// <summary>
+        /// 将旧校验器返回的内部方案术语转换为当前页面的客户术语。
+        /// </summary>
+        private static string ToProgramTerminology(string message)
+        {
+            return message.Replace("方案名称", "程序名称", StringComparison.Ordinal);
+        }
 
         /// <summary>
         /// 判断是否有未保存的修改
@@ -818,17 +874,69 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 && string.Equals(left.ModeValue, right.ModeValue, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// 将程序模型重新映射到编辑器项目，确保编辑或复制时不共享可修改的项目对象。
+        /// </summary>
+        private void LoadPlanToEditor(PlanModel sourcePlan)
+        {
+            Series = sourcePlan.Series;
+            MachineType = sourcePlan.MachineType;
+            PlanName = sourcePlan.PlanName;
+            Workstation = WorkstationConstants.IsValid(sourcePlan.Workstation)
+                ? sourcePlan.Workstation
+                : WorkstationConstants.Left;
+            CreatedTime = sourcePlan.CreatedTime;
+            LastModifiedTime = sourcePlan.LastModifiedTime;
+
+            Items.Clear();
+            foreach (var item in sourcePlan.Items ?? new List<PlanItem>())
+            {
+                var parts = item.ItemName.Split('-');
+                Items.Add(new PlanItemViewModel
+                {
+                    Index = item.Index,
+                    PinLeft = parts.Length > 0 ? parts[0] : string.Empty,
+                    PinRight = parts.Length > 1 ? parts[1] : string.Empty,
+                    // 旧程序没有极性字段时，默认按左正右负补齐，避免打开历史程序后逐项手工设置。
+                    PinLeftPolarity = PinPolarityConstants.Normalize(
+                        item.PinLeftPolarity, PinPolarityConstants.Positive),
+                    PinRightPolarity = PinPolarityConstants.Normalize(
+                        item.PinRightPolarity, PinPolarityConstants.Negative),
+                    CheckMode = item.CheckMode,
+                    LowerLimit = item.LowerLimit,
+                    UpperLimit = item.UpperLimit,
+                    ModeValue = item.ModeValue
+                });
+            }
+        }
+
+        /// <summary>
+        /// 生成可直接通过现有程序名称校验的复制名称。
+        /// 半角下划线被现有命名协议禁止，因此使用全角括号标识副本。
+        /// </summary>
+        private static string BuildCopyPlanName(string sourcePlanName)
+        {
+            const string copySuffix = "（副本）";
+            var trimmedSourceName = sourcePlanName.Trim();
+            var maxBaseLength = Math.Max(1, InputValidationHelper.MaxPlanNameLength - copySuffix.Length);
+
+            if (trimmedSourceName.Length > maxBaseLength)
+                trimmedSourceName = trimmedSourceName[..maxBaseLength];
+
+            return trimmedSourceName + copySuffix;
+        }
+
         #endregion
 
         #region INavigationAware 实现
 
         /// <summary>
         /// 页面导航进入时触发
-        /// 根据参数判断新增/编辑模式，加载已有方案数据
+        /// 根据参数判断新增、编辑或复制模式，加载已有程序数据
         /// </summary>
         public async Task OnNavigatedToAsync(object? parameter = null)
         {
-            _logger.LogDebug("进入方案编辑页面");
+            _logger.LogDebug("进入程序编辑页面");
 
             var allPlans = await _planStorageService.LoadAllPlansAsync();
             SeriesOptions.Clear();
@@ -846,51 +954,60 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             foreach (var machineType in machineTypes)
                 MachineTypeOptions.Add(machineType);
 
-            if (parameter is PlanModel existingPlan)
+            if (parameter is PlanEditNavigationParameter navigationParameter)
             {
-                // 编辑模式：加载已有方案数据
-                _isEditMode = true;
-                _originalPlan = existingPlan;
+                var existingPlan = navigationParameter.Plan;
+                LoadPlanToEditor(existingPlan);
 
-                Series = existingPlan.Series;
-                MachineType = existingPlan.MachineType;
-                PlanName = existingPlan.PlanName;
-                Workstation = WorkstationConstants.IsValid(existingPlan.Workstation)
-                    ? existingPlan.Workstation
-                    : WorkstationConstants.Left;
-                CreatedTime = existingPlan.CreatedTime;
-                LastModifiedTime = existingPlan.LastModifiedTime;
-
-                // 加载检测项目
-                Items.Clear();
-                foreach (var item in existingPlan.Items)
+                if (navigationParameter.IsCopyMode)
                 {
-                    var parts = item.ItemName.Split('-');
-                    Items.Add(new PlanItemViewModel
-                    {
-                        Index = item.Index,
-                        PinLeft = parts.Length > 0 ? parts[0] : string.Empty,
-                        PinRight = parts.Length > 1 ? parts[1] : string.Empty,
-                        // 旧方案没有极性字段时，默认按左正右负补齐，避免打开历史方案后需要逐项手工设置。
-                        PinLeftPolarity = PinPolarityConstants.Normalize(
-                            item.PinLeftPolarity, PinPolarityConstants.Positive),
-                        PinRightPolarity = PinPolarityConstants.Normalize(
-                            item.PinRightPolarity, PinPolarityConstants.Negative),
-                        CheckMode = item.CheckMode,  // 已是标准中文值
-                        LowerLimit = item.LowerLimit,
-                        UpperLimit = item.UpperLimit,
-                        ModeValue = item.ModeValue
-                    });
-                }
+                    // 复制模式按新增语义保存，源程序只保留身份用于防覆盖校验。
+                    _isEditMode = false;
+                    _isCopyMode = true;
+                    _originalPlan = null;
+                    _copySourcePlan = existingPlan;
+                    PageTitle = "复制程序";
+                    PlanName = BuildCopyPlanName(existingPlan.PlanName);
+                    CreatedTime = DateTime.Now;
+                    LastModifiedTime = DateTime.Now;
 
-                _logger.LogInformation("编辑模式，加载方案: {MachineType}/{PlanName}",
+                    _logger.LogInformation("复制模式，加载源程序: {MachineType}/{PlanName}",
+                        existingPlan.MachineType, existingPlan.PlanName);
+                }
+                else
+                {
+                    // 编辑模式保留原程序身份，供存储层执行原有重命名/移动逻辑。
+                    _isEditMode = true;
+                    _isCopyMode = false;
+                    _copySourcePlan = null;
+                    _originalPlan = existingPlan;
+                    PageTitle = "编辑程序";
+
+                    _logger.LogInformation("编辑模式，加载程序: {MachineType}/{PlanName}",
+                        existingPlan.MachineType, existingPlan.PlanName);
+                }
+            }
+            else if (parameter is PlanModel existingPlan)
+            {
+                // 兼容既有导航调用：PlanModel 参数仍表示编辑模式。
+                _isEditMode = true;
+                _isCopyMode = false;
+                _copySourcePlan = null;
+                _originalPlan = existingPlan;
+                PageTitle = "编辑程序";
+                LoadPlanToEditor(existingPlan);
+
+                _logger.LogInformation("编辑模式，加载程序: {MachineType}/{PlanName}",
                     existingPlan.MachineType, existingPlan.PlanName);
             }
             else
             {
-                // 新增模式：清空所有字段
+                // 新增模式：清空所有字段，并清除复制源身份。
                 _isEditMode = false;
+                _isCopyMode = false;
+                _copySourcePlan = null;
                 _originalPlan = null;
+                PageTitle = "新增程序";
 
                 MachineType = string.Empty;
                 Series = string.Empty;
@@ -900,7 +1017,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 LastModifiedTime = DateTime.Now;
                 Items.Clear();
 
-                _logger.LogInformation("新增模式");
+                _logger.LogInformation("新增程序模式");
             }
 
             // 页面级事件只在页面活跃期间订阅。

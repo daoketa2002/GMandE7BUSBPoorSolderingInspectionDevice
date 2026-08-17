@@ -415,7 +415,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
                     if (duplicate != null && !allowDuplicatePlanName)
                     {
                         throw new InvalidOperationException(
-                            $"方案身份重复：机种“{plan.MachineType}”下已存在方案“{plan.PlanName}”（系列：{duplicate.Series}）。");
+                            $"程序身份重复：机种“{plan.MachineType}”下已存在程序“{plan.PlanName}”（系列：{duplicate.Series}）。");
                     }
 
                     if (duplicate != null && allowDuplicatePlanName)
@@ -518,7 +518,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.Services
             if (string.IsNullOrWhiteSpace(machineType))
                 throw new ArgumentException("机种名称不能为空", nameof(machineType));
             if (string.IsNullOrWhiteSpace(planName))
-                throw new ArgumentException("方案名称不能为空", nameof(planName));
+                throw new ArgumentException("程序名称不能为空", nameof(planName));
 
             await Task.Run(() =>
             {

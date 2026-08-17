@@ -181,19 +181,19 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         private PlanModel? _selectedPlan;
 
         /// <summary>
-        /// 统计文本（如 "共 5 个方案"）
+        /// 统计文本（如 "共 5 个程序"）
         /// </summary>
         [ObservableProperty]
         private string _totalCountText = "共 0 个程序";
 
         /// <summary>
-        /// 是否有选中的方案行（用于控制编辑/删除按钮的可用状态）
+        /// 是否有选中的程序行（用于控制复制、编辑、删除按钮的可用状态）
         /// </summary>
         [ObservableProperty]
         private bool _hasSelection;
 
         /// <summary>
-        /// 选中方案变更时自动更新 HasSelection 状态
+        /// 选中程序变更时自动更新 HasSelection 状态
         /// </summary>
         partial void OnSelectedPlanChanged(PlanModel? value)
         {
@@ -274,7 +274,7 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 FilteredPlans.Add(plan);
             }
 
-            TotalCountText = $"共 {FilteredPlans.Count} 个方案";
+            TotalCountText = $"共 {FilteredPlans.Count} 个程序";
             _logger.LogDebug("检索完成: 系列={Series}, 机种={MachineType}, 方案名={PlanName}, 工位={Workstation}, 结果数={Count}",
                 SelectedSeries ?? "(全部)", machineType ?? "(全部)", planName ?? "(全部)",
                 SelectedWorkstation ?? "(全部)", FilteredPlans.Count);
@@ -285,25 +285,25 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 方案操作命令
 
         /// <summary>
-        /// 导航到新增方案页面
+        /// 导航到新增程序页面
         /// </summary>
         [RelayCommand]
         private async Task AddPlanAsync()
         {
             try
             {
-                _logger.LogInformation("用户点击新增方案");
+                _logger.LogInformation("用户点击新增程序");
                 await _navigationService.NavigateToAsync<PlanEditView>("Main", null);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "导航到方案编辑页面失败");
+                _logger.LogError(ex, "导航到程序编辑页面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
 
         /// <summary>
-        /// 导航到编辑方案页面（携带当前选中的方案数据）
+        /// 导航到编辑程序页面（携带当前选中的程序数据）
         /// </summary>
         [RelayCommand]
         private async Task EditPlanAsync()
@@ -312,27 +312,58 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 if (SelectedPlan == null)
                 {
-                    await _notificationService.ShowWarningAsync("请先选择要编辑的方案！", "未选择");
+                    await _notificationService.ShowWarningAsync("请先选择要编辑的程序！", "未选择");
                     return;
                 }
 
-                _logger.LogInformation("用户点击编辑方案: {Plan}", SelectedPlan.PlanName);
+                _logger.LogInformation("用户点击编辑程序: {Plan}", SelectedPlan.PlanName);
 
-                // 深拷贝方案对象，避免编辑过程中影响原数据
-                var planCopy = System.Text.Json.JsonSerializer.Deserialize<PlanModel>(
-                    System.Text.Json.JsonSerializer.Serialize(SelectedPlan));
+                // 深拷贝程序对象，避免编辑过程中影响列表中的原数据。
+                var planCopy = DeepClonePlan(SelectedPlan);
 
                 await _navigationService.NavigateToAsync<PlanEditView>("Main", planCopy);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "导航到方案编辑页面失败");
+                _logger.LogError(ex, "导航到程序编辑页面失败");
                 await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
             }
         }
 
         /// <summary>
-        /// 删除选中的方案（需用户确认）
+        /// 复制选中的程序，并以新增语义进入编辑页。
+        /// </summary>
+        [RelayCommand]
+        private async Task CopyPlanAsync()
+        {
+            try
+            {
+                if (SelectedPlan == null)
+                {
+                    await _notificationService.ShowWarningAsync("请先选择要复制的程序！", "未选择");
+                    return;
+                }
+
+                var sourcePlanCopy = DeepClonePlan(SelectedPlan);
+                _logger.LogWarning(
+                    "[用户操作] 用户点击复制程序: {Series}/{MachineType}/{PlanName}",
+                    sourcePlanCopy.Series,
+                    sourcePlanCopy.MachineType,
+                    sourcePlanCopy.PlanName);
+
+                await _navigationService.NavigateToAsync<PlanEditView>(
+                    "Main",
+                    new PlanEditNavigationParameter(sourcePlanCopy, isCopyMode: true));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "导航到程序复制页面失败");
+                await _notificationService.ShowErrorAsync($"导航失败：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 删除选中的程序（需用户确认）
         /// </summary>
         [RelayCommand]
         private async Task DeletePlanAsync()
@@ -341,13 +372,13 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
             {
                 if (SelectedPlan == null)
                 {
-                    await _notificationService.ShowWarningAsync("请先选择要删除的方案！", "未选择");
+                    await _notificationService.ShowWarningAsync("请先选择要删除的程序！", "未选择");
                     return;
                 }
 
                 var plan = SelectedPlan;
                 var confirmed = await _notificationService.ConfirmAsync(
-                    $"确定要删除方案 \"{plan.PlanName}\"（系列：{plan.Series}，机种：{plan.MachineType}）吗？\n\n此操作不可恢复！",
+                    $"确定要删除程序 \"{plan.PlanName}\"（系列：{plan.Series}，机种：{plan.MachineType}）吗？\n\n此操作不可恢复！",
                     "确认删除");
 
                 if (!confirmed) return;
@@ -355,12 +386,12 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
                 await _planStorageService.DeletePlanAsync(plan.Series, plan.MachineType, plan.PlanName);
                 await RefreshAllDataAsync();
 
-                _logger.LogInformation("方案已删除: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
-                await _notificationService.ShowInfoAsync($"方案 \"{plan.PlanName}\" 已删除", "删除成功");
+                _logger.LogInformation("程序已删除: {MachineType}/{PlanName}", plan.MachineType, plan.PlanName);
+                await _notificationService.ShowInfoAsync($"程序 \"{plan.PlanName}\" 已删除", "删除成功");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "删除方案失败");
+                _logger.LogError(ex, "删除程序失败");
                 await _notificationService.ShowErrorAsync($"删除失败：{ex.Message}");
             }
         }
@@ -482,7 +513,18 @@ namespace GMandE7BUSBPoorSolderingInspectionDevice.ViewModels
         #region 辅助方法
 
         /// <summary>
-        /// 刷新所有数据：方案列表、机种下拉选项、方案下拉选项
+        /// 通过 JSON 往返创建独立程序对象，避免编辑或复制时修改列表源对象。
+        /// </summary>
+        private static PlanModel DeepClonePlan(PlanModel sourcePlan)
+        {
+            var clone = System.Text.Json.JsonSerializer.Deserialize<PlanModel>(
+                System.Text.Json.JsonSerializer.Serialize(sourcePlan));
+
+            return clone ?? throw new InvalidOperationException("程序复制失败：无法创建独立数据副本。");
+        }
+
+        /// <summary>
+        /// 刷新所有数据：程序列表、机种下拉选项、程序下拉选项
         /// </summary>
         private async Task RefreshAllDataAsync()
         {

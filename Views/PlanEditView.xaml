@@ -106,7 +106,7 @@
                                FontSize="24"
                                Foreground="White" />
                     <TextBlock VerticalAlignment="Center"
-                               Text="编辑程序"
+                               Text="{Binding PageTitle}"
                                FontSize="24"
                                FontWeight="Bold"
                                Foreground="White" />
@@ -671,7 +671,7 @@
                         Margin="8,0"
                         Style="{StaticResource ActionButtonStyle}"
                         Background="#27AE60"
-                        Content="💾 保存方案"
+                        Content="💾 保存程序"
                         FontSize="17"
                         Command="{Binding SavePlanCommand}" />
                 <Button Width="160"

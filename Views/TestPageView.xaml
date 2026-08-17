@@ -358,7 +358,7 @@
                                         <DataTrigger Binding="{Binding IsSchemeNameInvalid}" Value="True">
                                             <Setter Property="BorderBrush" Value="#E74C3C" />
                                             <Setter Property="BorderThickness" Value="2" />
-                                            <Setter Property="ToolTip" Value="当前方案无效，请重新选择" />
+                                            <Setter Property="ToolTip" Value="当前程序无效，请重新选择" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
